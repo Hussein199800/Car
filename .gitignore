@@ -1,0 +1,7 @@
+node_modules/
+www/build/
+*.apk
+*.jks
+*.keystore
+keystore.properties
+tests/e2e/out/
