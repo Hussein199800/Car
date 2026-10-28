@@ -1,6 +1,6 @@
 {
   "name": "taqati-solar",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "description": "طاقتي - مراقبة منظومة الطاقة الشمسية (متوافق مع حسابات WatchPower)",
   "scripts": {
@@ -13,8 +13,10 @@
     "@capacitor/android": "^8.0.0",
     "@capacitor/app": "^8.0.0",
     "@capacitor/core": "^8.0.0",
+    "@capacitor/filesystem": "^8.1.5",
     "@capacitor/local-notifications": "^8.0.0",
     "@capacitor/preferences": "^8.0.0",
+    "@capacitor/share": "^8.0.3",
     "@capacitor/status-bar": "^8.0.0",
     "@fontsource/cairo": "^5.0.0",
     "chart.js": "^4.4.0"
