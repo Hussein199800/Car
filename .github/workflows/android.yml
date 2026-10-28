@@ -9,16 +9,18 @@ jobs:
   apk:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
-      - uses: android-actions/setup-android@v3
+      # Android SDK مثبّت مسبقاً على أجهزة GitHub، وGradle ينزّل ما ينقصه تلقائياً
+      - name: Check Android SDK
+        run: test -d "$ANDROID_HOME" && echo "ANDROID_HOME=$ANDROID_HOME"
       - run: npm ci
       - name: JavaScript unit tests
         run: npm test
@@ -51,7 +53,7 @@ jobs:
         working-directory: android
         run: chmod +x gradlew && ./gradlew assembleDebug --no-daemon && mv app/build/outputs/apk/debug/app-debug.apk ../taqati-debug.apk
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: taqati-apk
           path: taqati*.apk
