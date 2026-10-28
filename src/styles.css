@@ -151,13 +151,13 @@ bdi { unicode-bidi: isolate; }
 .dot.warn { background: var(--warn); }
 .dot.demo { background: #a78bfa; }
 #view { padding: 14px 14px calc(96px + var(--safe-bot)); max-width: 640px; margin: 0 auto; }
-.tabbar { position: fixed; bottom: 0; inset-inline: 0; z-index: 5; display: grid; grid-template-columns: repeat(4, minmax(0, 150px)); justify-content: center;
+.tabbar { position: fixed; bottom: 0; inset-inline: 0; z-index: 5; display: grid; grid-template-columns: repeat(5, minmax(0, 140px)); justify-content: center;
   padding: 6px 6px calc(6px + var(--safe-bot)); background: var(--tab); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border-top: 1px solid var(--line); }
 .tabbar button { position: relative; background: none; border: 0; padding: 6px 0; min-height: 56px; display: grid; justify-items: center; gap: 2px; color: var(--mute); font-size: 12.5px; font-weight: 600; cursor: pointer; }
-.tabbar button svg { width: 48px; height: 32px; padding: 4px 13px; border-radius: 12px; transition: all .25s; }
+.tabbar button svg { width: 44px; height: 32px; padding: 4px 11px; border-radius: 12px; transition: all .25s; }
 .tabbar button.on { color: var(--txt); font-weight: 800; }
 .tabbar button.on svg { color: #fff; background: linear-gradient(135deg, #818cf8, #4f46e5); box-shadow: 0 6px 16px #4f46e555; }
-.badge { position: absolute; top: 0; left: calc(50% - 30px); min-width: 18px; height: 18px; border-radius: 9px; background: var(--bad); color: #fff; font-size: 11px; font-style: normal; line-height: 18px; padding: 0 5px; }
+.badge { position: absolute; top: 0; left: calc(50% - 28px); min-width: 18px; height: 18px; border-radius: 9px; background: var(--bad); color: #fff; font-size: 11px; font-style: normal; line-height: 18px; padding: 0 5px; }
 
 /* ---------- شريط الحالة ---------- */
 .banner { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 18px; font-size: 13.5px; line-height: 1.7; border: 1px solid; }
@@ -455,3 +455,85 @@ button.banner { background-clip: padding-box; }
 .empty-ic { width: 54px; height: 54px; margin: 0 auto 10px; color: var(--bad); }
 .empty b { display: block; color: var(--txt); font-size: 17px; }
 .empty .btn { margin-top: 12px; }
+
+/* ---------- إعدادات الإنفرتر: الشرح والتحذير ---------- */
+.fh-t { display: grid; gap: 2px; min-width: 0; }
+.fh-t b { font-weight: 700; font-size: 15px; }
+.fh-t small { color: var(--mute); font-size: 12.5px; font-weight: 400; line-height: 1.6; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.field.open .fh-t small { display: none; }
+.risk, .act { font-style: normal; font-size: 11px; font-weight: 800; padding: 1px 8px; border-radius: 999px; vertical-align: middle; margin-inline-start: 4px; }
+.risk { background: #ef444420; color: var(--bad); }
+.act { background: #6366f120; color: #6366f1; }
+.f-desc { margin: 0 0 10px; padding: 10px 12px; border-radius: 14px; background: var(--soft); font-size: 13.5px; line-height: 1.9; }
+.f-risk { display: flex; gap: 8px; align-items: flex-start; margin: 0 0 10px; color: var(--bad); font-size: 13px; line-height: 1.7; }
+.f-risk svg { width: 18px; height: 18px; flex: none; margin-top: 3px; }
+.btn.danger.wide, .f-act { margin-top: 4px; }
+
+/* ---------- المزيد: بطاقة المطوّر وزر الخروج ---------- */
+.dev-top { position: relative; }
+.dev-top .dev-av { width: 48px; height: 48px; padding: 12px; }
+.dev-top b { font-size: 18px; }
+.dev-more { margin-inline-start: auto; width: 40px; height: 40px; padding: 9px; border-radius: 12px; border: 0; background: #ffffff2a; color: #fff; cursor: pointer; flex: none; }
+.logout-btn { margin-top: 22px !important; padding: 15px; font-size: 16px; background: #ef4444 !important; color: #fff !important; box-shadow: 0 8px 22px -8px #ef4444; }
+
+/* ---------- الحاسبة ---------- */
+.calc-hero b { margin-top: 2px; }
+.chips-sel { display: flex; flex-wrap: wrap; gap: 8px; }
+.chips-sel button { min-height: 40px; padding: 8px 14px; border-radius: 999px; border: 1.5px solid var(--line); background: var(--soft); font-weight: 700; font-size: 13.5px; cursor: pointer; }
+.chips-sel button.on { background: linear-gradient(135deg, #fbbf24, #f97316); border-color: transparent; color: #fff; }
+.big-in { display: flex; align-items: baseline; gap: 10px; margin-top: 14px; padding: 6px 14px; border-radius: 18px; background: var(--input); border: 1.5px solid var(--line); }
+.big-in:focus-within { border-color: #f97316; }
+.big-in input { flex: 1; min-width: 0; border: 0; background: none; outline: none; font-size: 34px; font-weight: 800; direction: ltr; text-align: start; padding: 4px 0; }
+.big-in span { color: var(--mute); font-size: 13px; white-space: nowrap; }
+.calc-in .link { margin-top: 6px; gap: 6px; }
+.calc-in .link svg { width: 18px; height: 18px; }
+.calc-res { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.res-main { border-radius: 22px; padding: 16px; color: #fff; background: linear-gradient(145deg, #6366f1, #4338ca); box-shadow: 0 12px 26px -12px #4338ca; display: grid; gap: 2px; }
+.res-main + .res-main { background: linear-gradient(145deg, #0ea5e9, #2563eb); box-shadow: 0 12px 26px -12px #2563eb; }
+.res-main small { opacity: .9; font-size: 12.5px; }
+.res-main b { font-size: 30px; font-weight: 800; line-height: 1.15; direction: ltr; text-align: start; }
+.res-main span { opacity: .9; font-size: 12.5px; }
+.bat-vs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.bat-v { border-radius: 18px; padding: 12px; text-align: center; background: var(--soft); border: 1.5px solid var(--line); display: grid; gap: 2px; }
+.bat-v small { color: var(--mute); font-size: 11.5px; }
+.bat-v b { font-size: 24px; font-weight: 800; }
+.bat-v span { color: var(--mute); font-size: 12px; }
+.bat-v.mine { border-color: #10b981; background: #10b9811a; }
+.bat-v.mine b { color: var(--bat); }
+.set-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.form > .set-row:last-child { border-bottom: 0; }
+.explain p { margin: 0 0 10px; line-height: 1.9; font-size: 14px; }
+.explain .rule { padding: 12px; border-radius: 14px; background: linear-gradient(135deg, #fbbf2422, #f9731622); margin: 0; }
+.qt .tr { grid-template-columns: 1.2fr 1.2fr 1fr 1fr 1fr; cursor: default; }
+.verdict { margin: 10px 0 0; padding: 10px 12px; border-radius: 14px; font-weight: 700; font-size: 14px; line-height: 1.7; }
+.verdict.ok { background: #10b9811c; color: var(--ok); }
+.verdict.warn { background: #f59e0b1c; color: var(--warn); }
+.verdict.bad { background: #ef44441c; color: var(--bad); }
+.appl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.appl-b { display: grid; justify-items: center; gap: 2px; padding: 12px 6px; border-radius: 18px; border: 1px solid var(--line); background: var(--card); box-shadow: var(--shadow); cursor: pointer; transition: transform .12s; }
+.appl-b:active { transform: scale(.95); }
+.appl-b .ae { font-size: 26px; line-height: 1.2; }
+.appl-b b { font-size: 12.5px; font-weight: 700; text-align: center; line-height: 1.4; }
+.appl-b small { color: var(--mute); font-size: 11.5px; }
+.lds { display: grid; gap: 10px; }
+.ld { padding: 12px; border-radius: 20px; border: 1px solid var(--line); background: var(--card); box-shadow: var(--shadow); }
+.ld-h { display: flex; align-items: center; gap: 8px; }
+.ld-h .ae { font-size: 22px; }
+.ld-h b { flex: 1; font-size: 15px; }
+.ld-x { width: 36px; height: 36px; border-radius: 12px; border: 0; background: #ef444418; color: var(--bad); font-size: 20px; cursor: pointer; }
+.ld-r { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+.ld-r label { display: grid; gap: 4px; color: var(--mute); font-size: 12px; }
+.ld-r .num-in input { width: 100%; }
+.ld-r .num-in { width: 100%; }
+.qty { display: flex; align-items: center; justify-content: space-between; border-radius: 12px; background: var(--input); border: 1px solid var(--line); }
+.qty button { width: 34px; height: 34px; border: 0; background: none; font-size: 18px; font-weight: 800; color: #f97316; cursor: pointer; }
+.qty b { color: var(--txt); font-size: 15px; }
+@media (min-width: 720px) {
+  .appl { grid-template-columns: repeat(6, 1fr); }
+  .lds { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 359px) {
+  .appl { grid-template-columns: repeat(2, 1fr); }
+  .res-main b { font-size: 24px; }
+  .bat-v b { font-size: 19px; }
+}

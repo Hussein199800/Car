@@ -38,7 +38,18 @@ const ERROR_AR = {
   ERR_TOKEN_EXPIRE: 'انتهت الجلسة',
   ERR_NO_AUTH: 'لا توجد صلاحية',
   ERR_DEV_OFFLINE: 'الجهاز غير متصل',
+  ERR_UNSUPPORTED: 'هذا الإعداد لا يدعم قراءة قيمته الحالية',
+  ERR_SYSTEM_EXCEPTION: 'لم يستطع خادم WatchPower قراءة هذه القيمة من الإنفرتر الآن',
+  ERR_DEVICE_RESPONSE_TIMEOUT: 'الإنفرتر لم يرد في الوقت المحدد، حاول بعد قليل',
+  ERR_FORMAT_ERROR: 'صيغة القيمة غير مقبولة',
+  ERR_NOT_FOUND_DEVICE: 'الجهاز غير موجود في الحساب',
 };
+
+// الخادم يضيف أحياناً تفاصيل بعد الرمز مثل «ERR_UNSUPPORTED(cmd is null!!)»
+export function errorAr(desc, code) {
+  const key = String(desc || '').match(/^ERR_[A-Z_]+/)?.[0];
+  return ERROR_AR[desc] || (key && ERROR_AR[key]) || desc || `خطأ ${code}`;
+}
 
 export class WatchPowerApi {
   constructor(session = {}) {
@@ -126,7 +137,9 @@ export class WatchPowerApi {
         await this.authenticate();
         return this.request(action, params, false);
       }
-      throw new ApiError(ERROR_AR[data.desc] || data.desc || `خطأ ${data.err}`, data.err);
+      const err = new ApiError(errorAr(data.desc, data.err), data.err);
+      err.desc = data.desc || '';
+      throw err;
     }
     return data;
   }
@@ -223,6 +236,13 @@ export class WatchPowerApi {
     const p = PROFILES[this.profile];
     const r = await this.request('queryDeviceCtrlValue', { ...this.devParams(dev), id, i18n: 'en_US', source: p.source });
     return r.dat || {};
+  }
+
+  // القيم الحالية لكل الإعدادات دفعة واحدة — مصدر احتياطي عندما تتعذّر قراءة إعداد بمفرده
+  async parameters(dev) {
+    const p = PROFILES[this.profile];
+    const r = await this.request('queryDeviceParsEs', { ...this.devParams(dev), i18n: 'en_US', source: p.source });
+    return r.dat?.parameter || [];
   }
 
   async setCtrl(dev, id, val) {

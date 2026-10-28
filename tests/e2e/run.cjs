@@ -185,10 +185,22 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       const page = await newPage(browser, {
         api: (a) => ({
           queryDeviceLastData: { err: 0, dat: points(Date.now() - 60000) },
-          queryDeviceCtrlField: { err: 0, dat: { field: [{ id: 'los_output_source_priority', name: 'Output Source Priority', item: [{ key: '0', val: 'Utility First' }, { key: '2', val: 'SBU Priority' }] }] } },
-          queryDeviceCtrlValue: { err: 0, dat: { val: '2' } },
+          queryDeviceCtrlField: { err: 0, dat: { field: [
+            { id: 'los_output_source_priority', name: 'Output Source Priority', item: [{ key: '0', val: 'Utility First' }, { key: '2', val: 'SBU Priority' }] },
+            { id: 'eq_time', name: 'Battery Equalization Time', unit: 'min', hint: '5~900min' },
+            { id: 'restore', name: 'Restore To Default', item: [{ key: '1', val: 'Execute' }] },
+          ] } },
+          queryDeviceParsEs: { err: 0, dat: { parameter: [] } },
           ctrlDevice: { err: 0, dat: {} },
         })[a],
+      });
+      await page.route(/dessmonitor/, async (route) => {
+        const u = new URL(route.request().url());
+        const a = u.searchParams.get('action');
+        if (a !== 'queryDeviceCtrlValue') return route.fallback();
+        page.calls.push({ action: a, params: Object.fromEntries(u.searchParams) });
+        const body = u.searchParams.get('id') === 'eq_time' ? { err: 1, desc: 'ERR_SYSTEM_EXCEPTION' } : { err: 0, dat: { val: '2' } };
+        await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify(body) });
       });
       await page.waitForSelector('.flow-card');
       await page.click('[data-tab=more]'); await page.click('[data-page=edit]');
@@ -201,6 +213,23 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.click('.modal [data-v="1"]'); await page.waitForTimeout(400);
       const ctrl = page.calls.find((c) => c.action === 'ctrlDevice');
       check('إرسال الإعداد بالمعرّف والقيمة الصحيحين', ctrl?.params.id === 'los_output_source_priority' && ctrl?.params.val === '0' && ctrl?.params.sn === DEVICE.sn);
+      const titles = await page.$$eval('.fh-t b', (e) => e.map((x) => x.textContent));
+      check('أسماء الإعدادات بالعربية مع شرح', titles.some((t) => t.includes('استعادة إعدادات المصنع')) && titles.some((t) => t.includes('مدة المعادلة')) && (await page.$$('.fh-t small')).length >= 3);
+      // قيمة تعذّرت قراءتها: يظهر الإعداد مع شرح بدل رسالة خطأ فقط
+      await page.click('.field[data-i="1"] .field-h');
+      await page.waitForSelector('.field[data-i="1"] .f-save');
+      const eqText = await text(page, '.field[data-i="1"] .field-b');
+      check('ERR_SYSTEM_EXCEPTION: الإعداد يبقى قابلاً للتعديل مع شرح عربي', eqText.includes('غير متاحة') && eqText.includes('لم يستطع خادم'));
+      await page.fill('.field[data-i="1"] .f-in', '2000'); await page.click('.field[data-i="1"] .f-save');
+      check('رفض قيمة خارج النطاق المسموح', !(await page.$('.modal')) && !page.calls.some((c) => c.action === 'ctrlDevice' && c.params.id === 'eq_time'));
+      // إعداد بخيار واحد = زر إجراء، لا يُقرأ ولا يظهر ERR_UNSUPPORTED
+      await page.click('.field[data-i="2"] .field-h');
+      await page.waitForSelector('.field[data-i="2"] .f-act');
+      check('استعادة المصنع زر إجراء دون قراءة قيمة', !page.calls.some((c) => c.action === 'queryDeviceCtrlValue' && c.params.id === 'restore'));
+      await page.click('.f-act'); await page.click('.modal [data-v="1"]'); await page.waitForTimeout(150);
+      check('إجراء حساس يطلب تأكيداً ثانياً', (await text(page, '.modal')).includes('تأكيد أخير'));
+      await page.click('.modal [data-v="0"]'); await page.waitForTimeout(200);
+      check('إلغاء التأكيد الثاني لا يرسل شيئاً', !page.calls.some((c) => c.action === 'ctrlDevice' && c.params.id === 'restore'));
       await page.context().close();
     }
 
@@ -211,6 +240,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       const PAGES = {
         home: [null, 'load', 'battery', 'solar', 'grid', 'device', 'all'],
         reports: [null, 'day', 'week', 'month', 'compare', 'export'],
+        calc: [null],
         alerts: [null, 'rules'],
         more: [null, 'edit', 'tips', 'tips/smart', 'tips/lithium', 'monitor', 'custom', 'account', 'about'],
       };
@@ -222,6 +252,19 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
           check(`صفحة ${tab}${pg ? '/' + pg : ''} تعمل بلا تمرير أفقي`, ok);
         }
       }
+      // الحاسبة
+      await page.evaluate(() => window.__nav('calc', null));
+      await page.fill('#calcInput', '1'); await page.waitForTimeout(150);
+      const res = await page.$$eval('.res-main b', (e) => e.map((x) => x.textContent));
+      const bat = await page.$$eval('.bat-v b', (e) => e.map((x) => x.textContent));
+      check('الحاسبة: 1 أمبير = 220 واط و5.1 أمبير من 48 فولت', res[0] === '220' && bat[2] === '5.1', `${res} | ${bat}`);
+      await page.click('[data-ctab=list]'); await page.click('[data-add=fridge]'); await page.click('[data-add=tv]'); await page.waitForTimeout(150);
+      check('الحاسبة: إضافة أجهزة وحساب الحمل', (await page.$$('.ld')).length === 2 && (await text(page, '.res-main b')) === '250');
+      check('الحاسبة: حكم على قدرة الإنفرتر', !!(await page.$('.verdict.ok')));
+      // المزيد: اسم المطوّر وزر الخروج
+      await page.evaluate(() => window.__nav('more', null));
+      check('اسم المطوّر ظاهر أعلى المزيد', (await text(page, '.dev-top')).includes('حسين محمد علي الطويل'));
+      check('زر تسجيل الخروج أحمر ومنفصل في آخر المزيد', await page.$eval('#logoutBtn', (b) => getComputedStyle(b).backgroundColor === 'rgb(239, 68, 68)' && b.previousElementSibling?.classList.contains('lcards')));
       // التصدير
       await page.evaluate(() => window.__nav('reports', 'export'));
       const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 8000 }).catch(() => null), page.click('[data-page="x-today"]')]);

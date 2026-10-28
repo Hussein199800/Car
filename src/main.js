@@ -16,13 +16,15 @@ import {
 import { demoPoints, demoHistory } from './demo.js';
 import { icons } from './icons.js';
 import { isNative, secure, migrateSession, monitor } from './native.js';
+import { settingInfo, optionAr, hintRange } from './settings-info.js';
+import { viewCalc, bindCalc, defaultsCalc } from './calc.js';
 import { TIP_SECTIONS, smartTips, tipOfDay } from './tips.js';
 import { makeLocalizer, INV_TERMS, GRID_TERMS } from './terms.js';
 
 Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, CategoryScale, Filler, Tooltip, Legend);
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '3.0.0';
+const VERSION = '3.1.0';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -62,6 +64,7 @@ const state = {
   rep: { dayDate: today(), day: null, week: null, month: null, weekOff: 0, monthOff: 0, cmp: 'week', cmpData: null },
   fields: null,
   fieldsError: null,
+  calc: { ...defaultsCalc(), ...store.get('calc', {}) },
 };
 
 let api = new WatchPowerApi(state.session || {});
@@ -222,10 +225,11 @@ function logout() {
 }
 
 // ================= الهيكل والتنقل =================
-// أربعة تبويبات فقط، والوظائف المتقاربة مجمّعة داخلها
+// خمسة تبويبات، والوظائف المتقاربة مجمّعة داخلها
 const TABS = [
   ['home', 'الرئيسية', icons.flash],
   ['reports', 'التقارير', icons.chart],
+  ['calc', 'الحاسبة', icons.calc],
   ['alerts', 'التنبيهات', icons.bell],
   ['more', 'المزيد', icons.gear],
 ];
@@ -326,12 +330,19 @@ function render() {
   renderHeader();
   const v = $('#view');
   if (!v) return;
-  const views = { home: viewHome, reports: viewReports, alerts: viewAlerts, more: viewMore };
+  const views = { home: viewHome, reports: viewReports, calc: () => viewCalc(calcHelpers()), alerts: viewAlerts, more: viewMore };
   v.innerHTML = L(`<div class="${state.animate ? 'page-anim' : ''}">${views[state.tab]()}</div>`);
   state.animate = false;
   AFTER[leaf() || state.tab]?.();
 }
 const AFTER = {};
+
+// الحاسبة في ملف مستقل، فنمرّر لها ما تحتاجه من أدوات الواجهة
+const calcHelpers = () => ({
+  state, esc, icons, fmt, $, toast, render, confirm: confirmDialog,
+  sysV: () => state.model?.ratedV || state.calc.sysV || nominalV(state.model),
+});
+AFTER.calc = () => bindCalc(calcHelpers());
 
 // ================= جلب البيانات =================
 // ===== فرق التوقيت بين الخادم والهاتف =====
@@ -1270,20 +1281,24 @@ function pageDevice(m) {
 }
 AFTER.device = () => bindGoto();
 
-const SETTING_AR = {
-  'output source priority': 'أولوية مصدر الخرج', 'charger source priority': 'أولوية مصدر الشحن', 'ac input range': 'نطاق جهد الدخل',
-  'battery type': 'نوع البطارية', 'max charging current': 'أقصى تيار شحن', 'max. charging current': 'أقصى تيار شحن',
-  'max utility charging current': 'أقصى تيار شحن من الكهرباء', 'max. utility charging current': 'أقصى تيار شحن من الكهرباء',
-  'max ac charging current': 'أقصى تيار شحن من الكهرباء', 'buzzer': 'صوت التنبيه', 'backlight': 'إضاءة الشاشة',
-  'overload restart': 'إعادة التشغيل بعد الحمل الزائد', 'over temperature restart': 'إعادة التشغيل بعد ارتفاع الحرارة',
-  'overload bypass': 'التمرير عند الحمل الزائد', 'lcd return to default display': 'عودة الشاشة للعرض الافتراضي',
-  'record fault code': 'تسجيل رموز الأعطال', 'output voltage': 'جهد الخرج', 'output frequency': 'تردد الخرج',
-  'bulk charging voltage': 'جهد الشحن السريع', 'floating charging voltage': 'جهد الشحن العائم',
-  'battery cut-off voltage': 'جهد فصل البطارية', 'low dc cut-off voltage': 'جهد فصل البطارية',
-  'back to grid voltage': 'جهد العودة للكهرباء', 'back to discharge voltage': 'جهد العودة للتفريغ',
-  'battery equalization': 'معادلة البطارية', 'beeps while primary source interrupt': 'صفارة عند انقطاع المصدر الرئيسي',
+// ===== إعدادات الإنفرتر =====
+// اسم عربي وشرح مبسّط لكل إعداد من settings-info.js، وما لا نعرفه يبقى باسمه الأصلي
+const trS = (s) => settingInfo(s)?.ar || trTitle(s);
+const unknownVal = (v) => v === null || v === undefined || /^\s*-*\s*$/.test(String(v));
+
+// تجميع الإعدادات في أقسام مفهومة بدل قائمة طويلة واحدة
+const SETTING_GROUPS = [
+  ['الأولويات', /priority|input range|solar balance|power balance|grid.?tie|feed|dual output/],
+  ['البطارية', /battery|bulk|float|charg|discharg|cut.?off|under voltage|soc|back to/],
+  ['معادلة البطارية', /equali/],
+  ['الحماية والتشغيل', /overload|temp|bypass|power saving|fault|output voltage|output frequency|parallel|pv ok/],
+  ['الشاشة والإضاءة والصوت', /led|lcd|backlight|buzzer|beep|silence|alarm|display/],
+];
+const groupOfSetting = (name) => {
+  const n = String(name).toLowerCase();
+  if (/restore|factory|default setting/.test(n)) return 'متقدم';
+  return (SETTING_GROUPS.find(([, re]) => re.test(n)) || ['متقدم'])[0];
 };
-const trS = (s) => SETTING_AR[String(s).trim().toLowerCase()] || trTitle(s);
 
 function pageEdit() {
   if (state.demo) return '<div class="empty">تعديل الإعدادات متاح بعد تسجيل الدخول بحسابك الحقيقي.</div>';
@@ -1293,64 +1308,121 @@ function pageEdit() {
   else if (!state.fields) body = '<div class="empty"><div class="spinner"></div>جارٍ تحميل قائمة الإعدادات…</div>';
   else if (!state.fields.length) body = '<div class="empty">هذا الجهاز لا يدعم تعديل الإعدادات عن بُعد.</div>';
   else {
-    body = `<ul class="fields card">${state.fields.map((f, i) => `
-        <li class="field" data-i="${i}">
-          <button class="field-h"><span>${esc(trS(f.name))}</span>${icons.chevL}</button>
+    const order = ['الأولويات', 'البطارية', 'الحماية والتشغيل', 'الشاشة والإضاءة والصوت', 'معادلة البطارية', 'متقدم'];
+    const groups = {};
+    state.fields.forEach((f, i) => (groups[groupOfSetting(f.name)] ||= []).push([f, i]));
+    body = order.filter((g) => groups[g]).map((g) => `
+      <h3 class="sec-h">${esc(g)}</h3>
+      <ul class="fields card">${groups[g].map(([f, i]) => {
+        const info = settingInfo(f.name);
+        const action = (f.item || []).length === 1;
+        return `<li class="field" data-i="${i}">
+          <button class="field-h"><span class="fh-t"><b>${esc(trS(f.name))}${info?.risk ? ' <i class="risk">حساس</i>' : ''}${action ? ' <i class="act">إجراء</i>' : ''}</b>
+            <small>${esc(info ? info.desc.split('\n')[0] : (trS(f.name) !== f.name ? f.name : ''))}</small></span>${icons.chevL}</button>
           <div class="field-b"></div>
-        </li>`).join('')}</ul>`;
+        </li>`;
+      }).join('')}</ul>`).join('');
   }
-  return `<div class="banner warn">${icons.warn}<span><b>تنبيه</b>تغيير هذه الإعدادات يؤثر على عمل الرافع مباشرة. غيّر فقط ما تعرف أثره.</span></div>${body}`;
+  return `<div class="banner warn">${icons.warn}<span><b>تنبيه</b>تغيير هذه الإعدادات يؤثر على عمل الرافع مباشرة. اقرأ شرح كل إعداد قبل تغييره، وصوّر الإعدادات الحالية قبل أي تعديل.</span></div>${body}`;
 }
 AFTER.edit = () => {
   const load = async () => {
-    try { state.fields = await api.ctrlFields(device()); state.fieldsError = null; } catch (e) { state.fieldsError = e.message; }
+    try {
+      state.fields = await api.ctrlFields(device());
+      state.fieldsError = null;
+      // مصدر احتياطي للقيم الحالية عندما ترفض بعض الأجهزة قراءة إعداد بمفرده
+      api.parameters(device()).then((list) => {
+        state.params = {};
+        list.forEach((p) => { if (p.par) state.params['id:' + p.par] = p.val; if (p.name) state.params['n:' + String(p.name).trim().toLowerCase()] = p.val; });
+      }).catch(() => { state.params = {}; });
+    } catch (e) { state.fieldsError = e.message; }
     if (state.page === 'edit') render();
   };
   const lf = $('#loadFields');
   if (lf) lf.onclick = () => { state.fieldsError = null; render(); load(); };
   if (!state.fields && !state.fieldsError && !state.demo && !state.model?.stale) load();
-  const list = $('.fields');
-  if (list) list.onclick = (e) => { const h = e.target.closest('.field-h'); if (h) openField(h.parentElement); };
+  document.querySelectorAll('.fields').forEach((list) => {
+    list.onclick = (e) => { const h = e.target.closest('.field-h'); if (h) openField(h.parentElement); };
+  });
 };
+
+async function readCurrent(f) {
+  try {
+    const v = (await api.ctrlValue(device(), f.id)).val;
+    if (!unknownVal(v)) return { val: v };
+  } catch (e) {
+    const fb = state.params?.['id:' + f.id] ?? state.params?.['n:' + String(f.name).trim().toLowerCase()];
+    if (!unknownVal(fb)) return { val: fb };
+    return { val: null, note: e.message };
+  }
+  const fb = state.params?.['id:' + f.id] ?? state.params?.['n:' + String(f.name).trim().toLowerCase()];
+  return { val: unknownVal(fb) ? null : fb };
+}
 
 async function openField(li) {
   const open = li.classList.toggle('open');
   if (!open) return;
   const f = state.fields[Number(li.dataset.i)];
+  const info = settingInfo(f.name);
+  const items = f.item || [];
   const body = li.querySelector('.field-b');
-  body.innerHTML = '<div class="spinner sm"></div>';
-  let cur = '';
-  try {
-    cur = (await api.ctrlValue(device(), f.id)).val ?? '';
-  } catch (e) {
-    body.innerHTML = `<div class="err">${esc(e.message)}</div>`;
+  const descHtml = info ? `<p class="f-desc">${esc(info.desc).replace(/\n/g, '<br>')}</p>` : '';
+  const riskHtml = info?.risk ? `<p class="f-risk">${icons.warn}<span>إعداد حساس: القيمة الخاطئة قد تؤثر على البطارية أو الأجهزة. تأكد من مواصفات جهازك قبل التغيير.</span></p>` : '';
+
+  // إعداد بخيار واحد = زر إجراء (مثل استعادة إعدادات المصنع)، لا قيمة له لتُقرأ
+  if (items.length === 1) {
+    const it = items[0];
+    body.innerHTML = `${descHtml}${riskHtml}<button class="btn ${info?.risk ? 'danger' : 'primary'} wide f-act">${esc(trS(f.name))} — ${esc(optionAr(it.val))}</button>`;
+    body.querySelector('.f-act').onclick = async () => {
+      if (!(await confirmDialog('تنفيذ إجراء', `سيتم تنفيذ <b>${esc(trS(f.name))}</b> على الرافع الآن.${info?.risk ? '<br><b>هذا الإجراء لا يمكن التراجع عنه.</b>' : ''} هل أنت متأكد؟`))) return;
+      if (info?.risk && !(await confirmDialog('تأكيد نهائي', 'تأكيد أخير: هل تريد فعلاً المتابعة؟'))) return;
+      await sendSetting(li, f, it.key, trS(f.name));
+    };
     return;
   }
-  const items = f.item || [];
-  const match = items.find((it) => String(it.key) === String(cur) || String(it.val) === String(cur));
+
+  body.innerHTML = `${descHtml}<div class="spinner sm"></div>`;
+  const cur = await readCurrent(f);
+  const match = cur.val === null ? null : items.find((it) => String(it.key) === String(cur.val) || String(it.val).toLowerCase() === String(cur.val).toLowerCase());
+  const curText = cur.val === null ? null : match ? optionAr(match.val) : `${cur.val} ${items.length ? '' : trUnit(f.unit || '')}`;
+  const range = hintRange(f.hint);
+  const curNum = Number(String(cur.val ?? '').replace(/[^0-9.\-]/g, ''));
+  // نثق بالنطاق فقط إذا كانت القيمة الحالية داخله، لأن الخادم يرسل أحياناً نطاقاً خاطئاً
+  const rangeOk = range && (cur.val === null || !Number.isFinite(curNum) || (curNum >= range[0] && curNum <= range[1]));
   const input = items.length
-    ? `<select class="f-in">${items.map((it) => `<option value="${esc(it.key)}" ${it === match ? 'selected' : ''}>${esc(trValue(it.val))}</option>`).join('')}</select>`
-    : `<span class="num-in"><input class="f-in" dir="ltr" inputmode="decimal" value="${esc(cur)}"><small>${esc(trUnit(f.unit || ''))}</small></span>`;
-  body.innerHTML = `
-    <div class="cur">القيمة الحالية: <b>${esc(match ? trValue(match.val) : cur || '—')} ${esc(!items.length ? trUnit(f.unit || '') : '')}</b></div>
-    ${f.hint ? `<p class="hint">النطاق المسموح: <bdi dir="ltr">${esc(f.hint)}</bdi></p>` : ''}
+    ? `<select class="f-in">${match ? '' : '<option value="" selected disabled>اختر القيمة الجديدة</option>'}${items.map((it) => `<option value="${esc(it.key)}" ${it === match ? 'selected' : ''}>${esc(optionAr(it.val))}</option>`).join('')}</select>`
+    : `<span class="num-in"><input class="f-in" dir="ltr" inputmode="decimal" value="${esc(cur.val ?? '')}" placeholder="${rangeOk ? esc(range.join(' – ')) : ''}"><small>${esc(trUnit(f.unit || ''))}</small></span>`;
+  body.innerHTML = `${descHtml}${riskHtml}
+    <div class="cur">القيمة الحالية: <b>${curText === null ? 'غير متاحة' : esc(curText)}</b></div>
+    ${cur.val === null ? `<p class="hint">${esc(cur.note || 'الإنفرتر لم يرسل القيمة الحالية لهذا الإعداد')}. يمكنك مع ذلك اختيار قيمة جديدة وحفظها.</p>` : ''}
+    ${rangeOk ? `<p class="hint">النطاق المسموح: <bdi dir="ltr">${range[0]} – ${range[1]} ${esc(trUnit(f.unit || ''))}</bdi></p>` : f.hint ? `<p class="hint">ملاحظة الجهاز: <bdi dir="ltr">${esc(f.hint)}</bdi></p>` : ''}
     <div class="f-row">${input}<button class="btn primary f-save">حفظ</button></div>`;
   body.querySelector('.f-save').onclick = async () => {
     const inp = body.querySelector('.f-in');
     const v = inp.value.trim();
-    if (!v) return;
-    const shown = items.length ? inp.options[inp.selectedIndex].text : `${v} ${trUnit(f.unit || '')}`;
-    if (!(await confirmDialog('تأكيد التغيير', `سيتم تغيير <b>${esc(trS(f.name))}</b> إلى <b>${esc(shown)}</b> على الرافع مباشرة. هل أنت متأكد؟`))) return;
-    try {
-      await api.setCtrl(device(), f.id, v);
-      toast('تم إرسال الإعداد إلى الرافع', 'ok');
-      addFault('info', 'تغيير إعداد', `${trS(f.name)} ← ${shown}`);
-      li.classList.remove('open');
-      setTimeout(() => openField(li), 1500);
-    } catch (e) {
-      toast(e.message, 'bad');
+    if (!v) { toast(items.length ? 'اختر قيمة أولاً' : 'أدخل قيمة أولاً', 'bad'); return; }
+    if (!items.length) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) { toast('أدخل رقماً صحيحاً', 'bad'); return; }
+      if (rangeOk && (n < range[0] || n > range[1])) { toast(`القيمة خارج النطاق المسموح (${range[0]} – ${range[1]})`, 'bad'); return; }
     }
+    if (match && String(match.key) === v) { toast('هذه هي القيمة الحالية نفسها', ''); return; }
+    const shown = items.length ? inp.options[inp.selectedIndex].text : `${v} ${trUnit(f.unit || '')}`;
+    if (!(await confirmDialog('تأكيد التغيير', `سيتم تغيير <b>${esc(trS(f.name))}</b>${curText ? ` من <b>${esc(curText)}</b>` : ''} إلى <b>${esc(shown)}</b> على الرافع مباشرة. هل أنت متأكد؟`))) return;
+    await sendSetting(li, f, v, shown);
   };
+}
+
+async function sendSetting(li, f, val, shown) {
+  try {
+    await api.setCtrl(device(), f.id, val);
+    toast('تم إرسال الإعداد إلى الرافع', 'ok');
+    addFault('info', 'تغيير إعداد', `${trS(f.name)} ← ${shown}`);
+    li.classList.remove('open');
+    setTimeout(() => openField(li), 1500);
+  } catch (e) {
+    toast(e.message, 'bad');
+  }
 }
 
 // ================= تبويب النصائح =================
@@ -1395,6 +1467,11 @@ function viewMore() {
   const themeName = { auto: 'تلقائي', dark: 'ليلي', light: 'نهاري' }[state.prefs.theme];
   const urgent = smartTips(state.model, state.prefs).filter((t) => t.level === 'bad' || t.level === 'warn').length;
   return `
+  <section class="dev-card dev-top">
+    <div class="dev-av">${icons.user}</div>
+    <div><small>تطبيق طاقتي · من تطوير</small><b>حسين محمد علي الطويل</b></div>
+    <button class="dev-more" data-page="about" aria-label="حول التطبيق">${icons.info}</button>
+  </section>
   ${listCards([
     { page: 'edit', title: 'إعدادات الرافع', sub: 'تغيير الأولويات وتيارات الشحن عن بُعد', icon: icons.wrench, color: 'c-pink' },
     { page: 'tips', title: 'النصائح', sub: 'نصائح لجهازك، واستخدام الرافع وبطاريات الليثيوم والسلامة', icon: icons.bulb, color: 'c-amber', badge: urgent ? `${urgent} مهم` : '' },
@@ -1403,8 +1480,14 @@ function viewMore() {
     { page: 'account', title: 'الحساب', sub: state.demo ? 'وضع تجريبي' : state.session?.usr || '', icon: icons.user, color: 'c-sky' },
     { page: 'about', title: 'حول التطبيق', sub: 'طاقتي · الإصدار ' + VERSION, icon: icons.info, color: 'c-slate' },
   ])}
-  <p class="foot">تطوير: حسين محمد علي الطويل</p>`;
+  <button class="btn danger wide logout-btn" id="logoutBtn">${icons.logout} ${state.demo ? 'الخروج من الوضع التجريبي' : 'تسجيل الخروج'}</button>
+  <p class="foot">طاقتي · الإصدار ${VERSION}</p>`;
 }
+AFTER.more = () => {
+  $('#logoutBtn').onclick = async () => {
+    if (await confirmDialog('تسجيل الخروج', state.demo ? 'هل تريد الخروج من الوضع التجريبي؟' : 'هل تريد تسجيل الخروج؟ ستبقى التقارير المحفوظة على الهاتف.')) logout();
+  };
+};
 
 function pageCustom() {
   return `<section class="card"><div class="card-h"><h2>المظهر</h2></div>${pageTheme()}</section>${pageTerms()}`;
@@ -1478,10 +1561,9 @@ function pageAccount() {
     ${state.devices.length > 1 ? `<label class="num-row"><span>الجهاز المعروض</span><select id="devSel">${state.devices.map((x) => `<option value="${esc(x.sn)}" ${x.sn === d?.sn ? 'selected' : ''}>${esc(x.alias)}</option>`).join('')}</select></label>` : ''}
     ${kv([['الحساب', val(state.demo ? 'وضع تجريبي' : state.session?.usr)], ['الجهاز', val(d?.alias)], ['عدد الأجهزة', val(String(state.devices.length))], ['الخادم', val(state.demo ? '—' : state.session?.profile === 'shine' ? 'ShineMonitor' : 'DessMonitor')]])}
   </section>
-  <button class="btn danger wide" id="logoutBtn">${icons.logout} ${state.demo ? 'الخروج من الوضع التجريبي' : 'تسجيل الخروج'}</button>`;
+  <p class="hint">لتسجيل الخروج ارجع إلى صفحة «المزيد» واضغط الزر الأحمر في آخرها.</p>`;
 }
 AFTER.account = () => {
-  $('#logoutBtn').onclick = async () => { if (await confirmDialog('تسجيل الخروج', 'هل تريد تسجيل الخروج؟ ستبقى التقارير المحفوظة على الهاتف.')) logout(); };
   const sel = $('#devSel');
   if (sel) sel.onchange = () => {
     state.devSn = sel.value; store.set('devSn', sel.value);
