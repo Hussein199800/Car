@@ -151,13 +151,13 @@ bdi { unicode-bidi: isolate; }
 .dot.warn { background: var(--warn); }
 .dot.demo { background: #a78bfa; }
 #view { padding: 14px 14px calc(96px + var(--safe-bot)); max-width: 640px; margin: 0 auto; }
-.tabbar { position: fixed; bottom: 0; inset-inline: 0; z-index: 5; display: grid; grid-template-columns: repeat(5, 1fr);
+.tabbar { position: fixed; bottom: 0; inset-inline: 0; z-index: 5; display: grid; grid-template-columns: repeat(6, 1fr);
   padding: 6px 6px calc(6px + var(--safe-bot)); background: var(--tab); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border-top: 1px solid var(--line); }
 .tabbar button { position: relative; background: none; border: 0; padding: 6px 0; display: grid; justify-items: center; gap: 2px; color: var(--mute); font-size: 11.5px; font-weight: 600; cursor: pointer; }
-.tabbar button svg { width: 40px; height: 30px; padding: 4px 10px; border-radius: 12px; transition: all .25s; }
+.tabbar button svg { width: 38px; height: 30px; padding: 4px 9px; border-radius: 12px; transition: all .25s; }
 .tabbar button.on { color: var(--txt); font-weight: 800; }
 .tabbar button.on svg { color: #fff; background: linear-gradient(135deg, #818cf8, #4f46e5); box-shadow: 0 6px 16px #4f46e555; }
-.badge { position: absolute; top: 0; left: calc(50% - 26px); min-width: 18px; height: 18px; border-radius: 9px; background: var(--bad); color: #fff; font-size: 11px; font-style: normal; line-height: 18px; padding: 0 5px; }
+.badge { position: absolute; top: 0; left: calc(50% - 24px); min-width: 18px; height: 18px; border-radius: 9px; background: var(--bad); color: #fff; font-size: 11px; font-style: normal; line-height: 18px; padding: 0 5px; }
 
 /* ---------- شريط الحالة ---------- */
 .banner { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 18px; font-size: 13.5px; line-height: 1.7; border: 1px solid; }
@@ -379,3 +379,16 @@ bdi { unicode-bidi: isolate; }
 @keyframes pageIn { from { opacity: 0; transform: translateY(10px); } }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } .flow.on { stroke-dasharray: none; } }
+
+/* ---------- النصائح ---------- */
+.tod { position: relative; overflow: hidden; border-radius: 24px; padding: 18px; color: #fff; background: linear-gradient(135deg, #f59e0b, #ea580c 55%, #db2777); box-shadow: 0 14px 30px -12px #ea580c; }
+.tod::before { content: ''; position: absolute; width: 180px; height: 180px; border-radius: 50%; background: #ffffff1f; top: -80px; inset-inline-end: -60px; }
+.tod-h { display: flex; align-items: center; gap: 8px; font-size: 12.5px; opacity: .95; margin-bottom: 6px; }
+.tod-h svg { width: 20px; height: 20px; }
+.tod b { font-size: 18px; font-weight: 800; }
+.tod p { margin: 6px 0 0; line-height: 1.9; font-size: 14px; }
+.tips { display: grid; gap: 12px; }
+.tip { display: flex; gap: 12px; padding: 14px; border-radius: 22px; background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow); }
+.tip-n { width: 34px; height: 34px; flex: none; border-radius: 12px; display: grid; place-items: center; font-weight: 800; color: #fff; background: linear-gradient(145deg, var(--g1), var(--g2)); }
+.tip h3 { margin: 4px 0 4px; font-size: 16px; font-weight: 800; }
+.tip p { margin: 0; color: var(--mute); font-size: 14px; line-height: 1.95; }

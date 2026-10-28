@@ -15,11 +15,12 @@ import {
 } from './data.js';
 import { demoPoints, demoHistory } from './demo.js';
 import { icons } from './icons.js';
+import { TIP_SECTIONS, smartTips, tipOfDay } from './tips.js';
 
 Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, CategoryScale, Filler, Tooltip, Legend);
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '2.0.0';
+const VERSION = '2.1.0';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -208,6 +209,7 @@ const TABS = [
   ['reports', 'التقارير', icons.chart],
   ['alerts', 'التنبيهات', icons.bell],
   ['inverter', 'الرافع', icons.inverter],
+  ['tips', 'نصائح', icons.bulb],
   ['more', 'المزيد', icons.gear],
 ];
 
@@ -297,6 +299,7 @@ const PAGE_TITLES = {
   day: 'التقرير اليومي', week: 'التقرير الأسبوعي', month: 'التقرير الشهري', compare: 'مقارنة الأداء', export: 'تصدير البيانات',
   log: 'سجل التنبيهات', faults: 'سجل الأعطال والانقطاعات', rules: 'شروط التنبيه',
   status: 'الحالة التشغيلية', info: 'معلومات الجهاز', rated: 'القيم المقنّنة', config: 'الإعدادات الحالية', edit: 'تعديل الإعدادات',
+  smart: 'نصائح لجهازك الآن', ...Object.fromEntries(TIP_SECTIONS.map((t) => [t.id, t.title])),
   theme: 'المظهر', batcfg: 'البطارية والحسابات', conn: 'الاتصال والتحديث', account: 'الجهاز والحساب', about: 'حول التطبيق',
 };
 
@@ -305,7 +308,7 @@ function render() {
   renderHeader();
   const v = $('#view');
   if (!v) return;
-  const views = { home: viewHome, reports: viewReports, alerts: viewAlerts, inverter: viewInverter, more: viewMore };
+  const views = { home: viewHome, reports: viewReports, alerts: viewAlerts, inverter: viewInverter, tips: viewTips, more: viewMore };
   v.innerHTML = `<div class="${state.animate ? 'page-anim' : ''}">${views[state.tab]()}</div>`;
   state.animate = false;
   AFTER[state.page || state.tab]?.();
@@ -352,7 +355,7 @@ async function refresh(manual = false) {
     state.loading = false;
     if (state.model) state.model = { ...state.model, age: state.model.ts ? Date.now() - state.model.ts : null };
     // نعيد الرسم فقط للصفحات التي تعرض القراءة الحية حتى لا تُفقد حالة الصفحات الأخرى
-    if (state.tab === 'home' || (state.tab === 'inverter' && ['status', 'info', 'rated', 'config', null].includes(state.page))) render();
+    if (state.tab === 'home' || (state.tab === 'tips' && ['smart', null].includes(state.page)) || (state.tab === 'inverter' && ['status', 'info', 'rated', 'config', null].includes(state.page))) render();
     else renderHeader();
   }
 }
@@ -1253,6 +1256,40 @@ async function openField(li) {
       toast(e.message, 'bad');
     }
   };
+}
+
+// ================= تبويب النصائح =================
+const LEVEL = { bad: ['bad', icons.warn], warn: ['warn', icons.warn], info: ['info', icons.info], ok: ['ok', icons.check] };
+
+function smartList(list) {
+  return `<ul class="alerts">${list.map((t) => `
+    <li class="alert ${LEVEL[t.level][0]}"><div class="a-ic">${LEVEL[t.level][1]}</div>
+      <div><b>${esc(t.title)}</b><p>${esc(t.body)}</p></div></li>`).join('')}</ul>`;
+}
+
+function viewTips() {
+  if (state.page === 'smart') {
+    const list = smartTips(state.model, state.prefs);
+    return `${state.demo ? banner() : ''}${list.length ? smartList(list) : '<div class="empty">لا توجد بيانات من الجهاز بعد.</div>'}
+      <p class="hint">هذه النصائح مبنية على قراءات جهازك وإعداداته الحالية وتتحدّث تلقائياً. هي إرشادات عامة، وتبقى مواصفات الشركة المصنعة لجهازك وبطاريتك هي المرجع.</p>`;
+  }
+  const sec = TIP_SECTIONS.find((x) => x.id === state.page);
+  if (sec) {
+    return `<section class="hero ${sec.color}"><span class="g-deco">${icons[sec.icon]}</span><div class="h-ic">${icons[sec.icon]}</div>
+        <b style="font-size:24px">${esc(sec.title)}</b><span>${esc(sec.sub)} · ${sec.tips.length} نصيحة</span></section>
+      <div class="tips">${sec.tips.map(([title, body], i) => `
+        <article class="tip ${sec.color}"><span class="tip-n">${i + 1}</span>
+          <div><h3>${esc(title)}</h3><p>${esc(body).replace(/\n/g, '<br>')}</p></div></article>`).join('')}</div>`;
+  }
+  const smart = smartTips(state.model, state.prefs);
+  const urgent = smart.filter((t) => t.level === 'bad' || t.level === 'warn').length;
+  const tod = tipOfDay();
+  return `
+  <section class="intro"><h2>نصائح وإرشادات</h2><p>لتستفيد من منظومتك بأمان وتطيل عمر الرافع والبطارية.</p></section>
+  <section class="tod"><div class="tod-h">${icons.star}<span>نصيحة اليوم · ${esc(tod.section)}</span></div>
+    <b>${esc(tod.title)}</b><p>${esc(tod.body).replace(/\n/g, '<br>')}</p></section>
+  ${listCards([{ page: 'smart', title: 'نصائح لجهازك الآن', sub: state.model ? `${smart.length} ملاحظة من قراءات جهازك وإعداداته` : 'تظهر بعد وصول بيانات الجهاز', icon: icons.bulb, color: urgent ? 'c-pink' : 'c-violet', badge: urgent ? `${urgent} مهم` : '' }])}
+  ${gridCards(TIP_SECTIONS.map((t) => ({ page: t.id, title: t.title, sub: t.sub, icon: icons[t.icon], color: t.color, value: '', badge: `${t.tips.length} نصيحة` })))}`;
 }
 
 // ================= تبويب المزيد =================
