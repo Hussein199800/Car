@@ -392,3 +392,9 @@ bdi { unicode-bidi: isolate; }
 .tip-n { width: 34px; height: 34px; flex: none; border-radius: 12px; display: grid; place-items: center; font-weight: 800; color: #fff; background: linear-gradient(145deg, var(--g1), var(--g2)); }
 .tip h3 { margin: 4px 0 4px; font-size: 16px; font-weight: 800; }
 .tip p { margin: 0; color: var(--mute); font-size: 14px; line-height: 1.95; }
+
+.term-opts { display: grid; gap: 8px; }
+.term-opt { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 16px; border: 2px solid var(--line); background: var(--soft); cursor: pointer; text-align: start; }
+.term-opt b { font-size: 16px; }
+.term-opt small { color: var(--mute); font-size: 12px; }
+.term-opt.on { border-color: #6366f1; background: #6366f114; }

@@ -21,11 +21,32 @@ jobs:
       - uses: android-actions/setup-android@v3
       - run: npm ci
       - run: npm run build && npx cap sync android
-      - name: Build APK
+
+      # نسخة موقّعة للنشر: تعمل فقط إذا أُضيف مفتاح التوقيع في أسرار المستودع
+      - name: Prepare signing key
+        id: sign
+        env:
+          KEYSTORE_B64: ${{ secrets.TAQATI_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/taqati.jks"
+            echo "path=$RUNNER_TEMP/taqati.jks" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build signed release APK
+        if: steps.sign.outputs.path != ''
         working-directory: android
-        run: chmod +x gradlew && ./gradlew assembleDebug --no-daemon
-      - run: mv android/app/build/outputs/apk/debug/app-debug.apk taqati.apk
+        env:
+          TAQATI_KEYSTORE: ${{ steps.sign.outputs.path }}
+          TAQATI_KEYSTORE_PASSWORD: ${{ secrets.TAQATI_KEYSTORE_PASSWORD }}
+          TAQATI_KEY_ALIAS: taqati
+        run: chmod +x gradlew && ./gradlew assembleRelease --no-daemon && mv app/build/outputs/apk/release/app-release.apk ../taqati.apk
+
+      - name: Build debug APK (no signing key)
+        if: steps.sign.outputs.path == ''
+        working-directory: android
+        run: chmod +x gradlew && ./gradlew assembleDebug --no-daemon && mv app/build/outputs/apk/debug/app-debug.apk ../taqati-debug.apk
+
       - uses: actions/upload-artifact@v4
         with:
           name: taqati-apk
-          path: taqati.apk
+          path: taqati*.apk

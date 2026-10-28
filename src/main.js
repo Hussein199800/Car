@@ -16,11 +16,12 @@ import {
 import { demoPoints, demoHistory } from './demo.js';
 import { icons } from './icons.js';
 import { TIP_SECTIONS, smartTips, tipOfDay } from './tips.js';
+import { makeLocalizer, INV_TERMS, GRID_TERMS } from './terms.js';
 
 Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, CategoryScale, Filler, Tooltip, Legend);
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '2.1.0';
+const VERSION = '2.2.0';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -35,6 +36,8 @@ const DEFAULT_PREFS = {
   alertGrid: true,
   alertFull: true,
   alertOffline: true,
+  invTerm: 'inverter',
+  gridTerm: 'grid',
 };
 
 const state = {
@@ -60,6 +63,7 @@ const state = {
 };
 
 let api = new WatchPowerApi(state.session || {});
+let L = makeLocalizer(state.prefs);
 let pollTimer = null;
 const charts = [];
 
@@ -74,7 +78,7 @@ const numAr = (n, d = 0) => (n === null || n === undefined || !Number.isFinite(n
 function toast(msg, kind = '') {
   const el = document.createElement('div');
   el.className = 'toast ' + kind;
-  el.textContent = msg;
+  el.textContent = L(msg);
   document.body.appendChild(el);
   requestAnimationFrame(() => el.classList.add('show'));
   setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, 3200);
@@ -84,8 +88,8 @@ function confirmDialog(title, body) {
   return new Promise((resolve) => {
     const el = document.createElement('div');
     el.className = 'modal';
-    el.innerHTML = `<div class="sheet"><h3>${esc(title)}</h3><p>${body}</p>
-      <div class="row-btns"><button class="btn ghost" data-v="0">إلغاء</button><button class="btn primary" data-v="1">تأكيد</button></div></div>`;
+    el.innerHTML = L(`<div class="sheet"><h3>${esc(title)}</h3><p>${body}</p>
+      <div class="row-btns"><button class="btn ghost" data-v="0">إلغاء</button><button class="btn primary" data-v="1">تأكيد</button></div></div>`);
     el.addEventListener('click', (e) => {
       const v = e.target.closest('[data-v]')?.dataset.v;
       if (v !== undefined || e.target === el) { el.remove(); resolve(v === '1'); }
@@ -157,6 +161,7 @@ function renderLogin(msg = '') {
       <button class="btn primary big" type="submit">تسجيل الدخول</button>
       <button class="btn ghost" type="button" id="demoBtn">تجربة التطبيق ببيانات تجريبية</button>
       <p class="hint">يُستخدم نفس حساب تطبيق WatchPower. لا تُحفظ كلمة المرور على الهاتف، بل بصمتها المشفّرة فقط.</p>
+      <p class="hint">«طاقتي» تطبيق مستقل، وغير تابع لشركة WatchPower أو الشركات المصنّعة للأجهزة.</p>
     </form>
     <p class="foot">تطوير: حسين محمد علي الطويل</p>
   </div>`;
@@ -218,7 +223,7 @@ function startApp() {
     <header class="topbar" id="topbar"></header>
     <main id="view"></main>
     <nav class="tabbar">${TABS.map(([id, label, ic]) => `
-      <button data-tab="${id}">${ic}<span>${label}</span>${id === 'alerts' ? '<i class="badge" id="alertBadge"></i>' : ''}</button>`).join('')}
+      <button data-tab="${id}">${ic}<span>${L(label)}</span>${id === 'alerts' ? '<i class="badge" id="alertBadge"></i>' : ''}</button>`).join('')}
     </nav>`;
   $('.tabbar').onclick = (e) => {
     const b = e.target.closest('[data-tab]');
@@ -263,14 +268,14 @@ function renderHeader() {
   if (!bar) return;
   const c = connState();
   const title = state.page ? PAGE_TITLES[state.page] || '' : null;
-  bar.innerHTML = state.page
+  bar.innerHTML = L(state.page
     ? `<button class="icon-btn" id="backBtn" aria-label="رجوع">${icons.arrowBack}</button>
        <div class="page-title">${esc(title)}</div>
        <span class="dot ${c.cls}" title="${esc(c.text)}"></span>`
     : `<div class="dev"><span class="dot ${c.cls}"></span><div>
          <div class="dev-name">${esc(device()?.alias || 'جهازي')}</div>
          <div class="dev-sub">${esc(c.text)}</div></div></div>
-       <button class="icon-btn ${state.loading ? 'spin' : ''}" id="refreshBtn" aria-label="تحديث">${icons.refresh}</button>`;
+       <button class="icon-btn ${state.loading ? 'spin' : ''}" id="refreshBtn" aria-label="تحديث">${icons.refresh}</button>`);
   const bb = $('#backBtn');
   if (bb) bb.onclick = back;
   const rb = $('#refreshBtn');
@@ -300,7 +305,7 @@ const PAGE_TITLES = {
   log: 'سجل التنبيهات', faults: 'سجل الأعطال والانقطاعات', rules: 'شروط التنبيه',
   status: 'الحالة التشغيلية', info: 'معلومات الجهاز', rated: 'القيم المقنّنة', config: 'الإعدادات الحالية', edit: 'تعديل الإعدادات',
   smart: 'نصائح لجهازك الآن', ...Object.fromEntries(TIP_SECTIONS.map((t) => [t.id, t.title])),
-  theme: 'المظهر', batcfg: 'البطارية والحسابات', conn: 'الاتصال والتحديث', account: 'الجهاز والحساب', about: 'حول التطبيق',
+  theme: 'المظهر', terms: 'المصطلحات', batcfg: 'البطارية والحسابات', conn: 'الاتصال والتحديث', account: 'الجهاز والحساب', about: 'حول التطبيق',
 };
 
 function render() {
@@ -309,17 +314,44 @@ function render() {
   const v = $('#view');
   if (!v) return;
   const views = { home: viewHome, reports: viewReports, alerts: viewAlerts, inverter: viewInverter, tips: viewTips, more: viewMore };
-  v.innerHTML = `<div class="${state.animate ? 'page-anim' : ''}">${views[state.tab]()}</div>`;
+  v.innerHTML = L(`<div class="${state.animate ? 'page-anim' : ''}">${views[state.tab]()}</div>`);
   state.animate = false;
   AFTER[state.page || state.tab]?.();
 }
 const AFTER = {};
 
 // ================= جلب البيانات =================
+// ===== فرق التوقيت بين الخادم والهاتف =====
+// بعض الخوادم ترسل وقت القراءة بتوقيت مختلف عن توقيت الهاتف. عندما نرى قراءة جديدة
+// تصل أثناء المتابعة نعرف أن عمرها الحقيقي دقائق قليلة، فنستنتج الفرق مقرّباً لربع ساعة.
+const Q = 15 * 60000;
+const tzOffset = () => store.get('tz.' + sn(), 0);
+function learnOffset(ts) {
+  if (!ts) return;
+  const key = 'tz.' + sn();
+  const prev = state.lastTs?.[sn()];
+  const raw = Date.now() - ts;
+  const guess = Math.round(raw / Q) * Q;
+  const adopt = (v) => { store.set(key, v); store.del('tzp.' + sn()); };
+  // قراءة من المستقبل مستحيلة، فهذا فرق توقيت مؤكد
+  if (raw < -Q) adopt(guess);
+  // قراءة أحدث وصلت للتو: عمرها الحقيقي صغير، والباقي فرق توقيت.
+  // قد ترفع وحدة الواي فاي قراءات مخزّنة متأخرة، لذا لا نعتمد فرقاً جديداً إلا إذا تكرّر مرتين
+  else if (prev && ts > prev) {
+    const v = Math.abs(guess) >= 2 * Q ? guess : 0;
+    const wholeHour = Math.abs(raw - Math.round(raw / 36e5) * 36e5) <= 7 * 60000;
+    if (v === tzOffset()) store.del('tzp.' + sn());
+    // الصفر يُعتمد فوراً، فأي فرق خاطئ يُصحَّح تلقائياً مع القراءة المنتظمة التالية
+    else if (v === 0 || (wholeHour && v % 36e5 === 0) || store.get('tzp.' + sn(), null) === v) adopt(v);
+    else store.set('tzp.' + sn(), v);
+  }
+  state.lastTs = { ...(state.lastTs || {}), [sn()]: ts };
+}
+
 function loadCache() {
   const c = store.get('last.' + sn(), null);
   if (c && !state.model) {
-    state.model = normalize(c.points, state.prefs.staleMin);
+    state.model = normalize(c.points, state.prefs.staleMin, tzOffset());
     state.fetchedAt = c.at;
     state.fromCache = true;
   }
@@ -333,8 +365,14 @@ async function refresh(manual = false) {
   try {
     const points = state.demo ? demoPoints() : await api.lastData(d);
     if (!points.length) throw new ApiError('الجهاز لم يرسل أي بيانات بعد');
-    state.model = normalize(points, state.prefs.staleMin);
+    let model = normalize(points, state.prefs.staleMin, tzOffset());
+    if (!state.demo) {
+      learnOffset(model.rawTs);
+      model = normalize(points, state.prefs.staleMin, tzOffset());
+    }
+    state.model = model;
     state.fetchedAt = Date.now();
+    state.fetchCount = (state.fetchCount || 0) + 1;
     state.fromCache = false;
     state.netError = null;
     state.fails = 0;
@@ -370,7 +408,7 @@ function stopPolling() { if (pollTimer) clearInterval(pollTimer); pollTimer = nu
 async function notify(title, body) {
   if (!state.prefs.notify || !Capacitor.isNativePlatform()) return;
   try {
-    await LocalNotifications.schedule({ notifications: [{ id: Math.floor(Date.now() % 2e9), title, body }] });
+    await LocalNotifications.schedule({ notifications: [{ id: Math.floor(Date.now() % 2e9), title: L(title), body: L(body) }] });
   } catch { /* تجاهل */ }
 }
 
@@ -399,13 +437,23 @@ function edge(key, active, onRaise, onClear) {
 function checkAlerts(m) {
   if (state.demo) return;
   const p = state.prefs;
-  edge('offline', m.stale, () => {
-    addFault('offline', 'انقطع اتصال الرافع', `آخر قراءة ${fmt.dateTime(m.ts)}`);
-    if (p.alertOffline) raise('الرافع غير متصل', `لم تصل قراءات جديدة منذ ${fmt.ago(m.age).replace('قبل ', '')}. قد يكون الرافع مطفأً أو مفصولاً.`, 'bad');
-  }, () => {
-    addFault('online', 'عاد اتصال الرافع', `قراءة جديدة ${fmt.dateTime(m.ts)}`);
-    if (p.alertOffline) raise('عاد اتصال الرافع', 'وصلت قراءات جديدة من الجهاز', 'ok');
-  });
+  // لا نُعلن الانقطاع من أول قراءة في الجلسة: قد يكون فرق توقيت لم يُكتشف بعد
+  const first = state.fetchCount <= 1 || store.get('tzp.' + sn(), null) !== null;
+  if (m.stale && state.flags.offline !== true) {
+    if (first) state.flags.offline = 'silent';
+    else {
+      state.flags.offline = true;
+      addFault('offline', 'انقطع اتصال الرافع', `آخر قراءة ${fmt.dateTime(m.ts)}`);
+      if (p.alertOffline) raise('الرافع غير متصل', `لم تصل قراءات جديدة منذ ${fmt.ago(m.age).replace('قبل ', '')}. قد يكون الرافع مطفأً أو مفصولاً.`, 'bad');
+    }
+  } else if (!m.stale && state.flags.offline) {
+    if (state.flags.offline === true) {
+      addFault('online', 'عاد اتصال الرافع', `قراءة جديدة ${fmt.dateTime(m.ts)}`);
+      if (p.alertOffline) raise('عاد اتصال الرافع', 'وصلت قراءات جديدة من الجهاز', 'ok');
+    }
+    state.flags.offline = false;
+  }
+  store.set('flags', state.flags);
   if (m.stale) return; // لا نبني تنبيهات على قيم قديمة
 
   const fault = m.fault || (/fault/i.test(m.mode || '') ? trValue(m.mode) : null);
@@ -443,11 +491,18 @@ function checkAlerts(m) {
 }
 
 // ================= حسابات البطارية =================
+// الجهد الاسمي من الجهاز نفسه، أو تقديره من جهد البطارية لأنظمة 12/24/48 فولت
+function nominalV(m) {
+  if (m?.ratedV) return m.ratedV;
+  if (m?.batV) return m.batV > 36 ? 48 : m.batV > 18 ? 24 : 12;
+  return 48;
+}
+
 function eta(m) {
   const p = state.prefs;
   if (!p.batteryAh) return { known: false, text: 'أدخل سعة البطارية لحساب المدة', sub: '' };
   if (m.stale || m.soc === null || m.batW === null) return { known: false, text: 'غير متاح حالياً', sub: '' };
-  const nominal = m.ratedV || 48;
+  const nominal = nominalV(m);
   const wh = p.batteryAh * nominal;
   if (m.batW < -10) {
     const usable = Math.max(0, (m.soc - p.cutoffSoc) / 100) * wh;
@@ -579,7 +634,7 @@ function pageBattery(m) {
     <div class="card-h"><h2>المدة المتوقعة</h2></div>
     <div class="big-line">${e.known ? esc(e.text) : `<button class="link" data-goto="more:batcfg">${esc(e.text)}</button>`}</div>
     ${e.sub ? `<p class="hint">${esc(e.sub)}</p>` : ''}
-    ${state.prefs.batteryAh ? `<p class="hint">مبنية على سعة ${state.prefs.batteryAh} أمبير ساعة وجهد ${m.ratedV || 48} فولت. التقدير تقريبي ويتغير مع الحمل.</p>` : ''}
+    ${state.prefs.batteryAh ? `<p class="hint">مبنية على سعة ${state.prefs.batteryAh} أمبير ساعة وجهد ${nominalV(m)} فولت. التقدير تقريبي ويتغير مع الحمل.</p>` : ''}
   </section>
   <div class="stats">
     ${stat('الجهد', numAr(m.batV, 1), 'فولت', 'c-green')}
@@ -981,8 +1036,8 @@ AFTER.export = () => {
       try {
         if (what === 'x-today') { const { samples } = await daySamples(today()); await exportSamples(today(), samples); }
         if (what === 'x-month') { const dates = Array.from({ length: 30 }, (_, i) => today(i - 29)); await exportSummaries('30days-' + today(), await loadSummaries(dates)); }
-        if (what === 'x-alerts') await shareFile(`taqati-alerts-${today()}.csv`, toCsv(['الوقت', 'التنبيه', 'التفاصيل'], state.alerts.map((a) => [fmt.dateTime(a.at), a.title, a.body])));
-        if (what === 'x-faults') await shareFile(`taqati-faults-${today()}.csv`, toCsv(['الوقت', 'الحدث', 'التفاصيل'], state.faults.map((a) => [fmt.dateTime(a.at), a.title, a.body])));
+        if (what === 'x-alerts') await shareFile_(`taqati-alerts-${today()}.csv`, toCsv(['الوقت', 'التنبيه', 'التفاصيل'], state.alerts.map((a) => [fmt.dateTime(a.at), a.title, a.body])));
+        if (what === 'x-faults') await shareFile_(`taqati-faults-${today()}.csv`, toCsv(['الوقت', 'الحدث', 'التفاصيل'], state.faults.map((a) => [fmt.dateTime(a.at), a.title, a.body])));
       } catch (err) {
         toast('تعذّر التصدير: ' + err.message, 'bad');
       }
@@ -991,16 +1046,19 @@ AFTER.export = () => {
   });
 };
 
+// كل الملفات المصدّرة تمر عبر المصطلحات التي اختارها المستخدم
+const shareFile_ = (name, text) => shareFile(name, L(text));
+
 async function exportSamples(date, samples) {
   if (!samples.length) { toast('لا توجد قراءات لهذا اليوم', 'bad'); return; }
-  await shareFile(`taqati-${date}.csv`, toCsv(
+  await shareFile_(`taqati-${date}.csv`, toCsv(
     ['الوقت', 'الوضع', 'الألواح (واط)', 'الحمل (واط)', 'البطارية (%)', 'جهد البطارية (فولت)', 'قدرة البطارية (واط)', 'جهد الكهرباء (فولت)'],
     samples.map((s) => [new Date(s.ts).toLocaleString('ar'), s.mode ? trValue(s.mode) : '', s.pvW, s.outW, s.soc, s.batV, s.batW, s.gridV]),
   ));
 }
 
 async function exportSummaries(name, sums) {
-  await shareFile(`taqati-${name}.csv`, toCsv(
+  await shareFile_(`taqati-${name}.csv`, toCsv(
     ['التاريخ', 'الإنتاج (ك.و.س)', 'الاستهلاك (ك.و.س)', 'أدنى شحن %', 'أعلى شحن %', 'ذروة الحمل (واط)', 'ساعات الكهرباء', 'ساعات البطارية', 'عدد القراءات', 'المصدر'],
     sums.map((s) => [s.date, s.pvKwh?.toFixed(2) ?? '', s.loadKwh?.toFixed(2) ?? '', s.socMin ?? '', s.socMax ?? '', s.peakW ?? '', s.gridH?.toFixed(1) ?? '', s.batH?.toFixed(1) ?? '', s.count, SRC[s.source] || '']),
   ));
@@ -1112,7 +1170,7 @@ function bindPrefs(root) {
         if (r.display !== 'granted') toast('لم يُسمح بالإشعارات من إعدادات الهاتف', 'bad');
       }
       if (k === 'pollSec') startPolling();
-      if (k === 'staleMin' && state.model) state.model = normalize(state.model.raw.map((r) => ({ title: r.title, val: r.val, unit: r.unit })), state.prefs.staleMin);
+      if (k === 'staleMin' && state.model) state.model = normalize(state.model.raw.map((r) => ({ title: r.title, val: r.val, unit: r.unit })), state.prefs.staleMin, tzOffset());
       if (k === 'theme') { applyTheme(); render(); }
       toast('تم الحفظ', 'ok');
     };
@@ -1294,12 +1352,13 @@ function viewTips() {
 
 // ================= تبويب المزيد =================
 function viewMore() {
-  const pages = { theme: pageTheme, batcfg: pageBatCfg, conn: pageConn, account: pageAccount, about: pageAbout };
+  const pages = { theme: pageTheme, terms: pageTerms, batcfg: pageBatCfg, conn: pageConn, account: pageAccount, about: pageAbout };
   if (state.page && pages[state.page]) return pages[state.page]();
   const themeName = { auto: 'تلقائي حسب الهاتف', dark: 'ليلي', light: 'نهاري' }[state.prefs.theme];
   return `
   ${listCards([
     { page: 'theme', title: 'المظهر', sub: themeName, icon: icons.moon, color: 'c-violet' },
+    { page: 'terms', title: 'المصطلحات', sub: `${INV_TERMS[state.prefs.invTerm]?.label} · ${GRID_TERMS[state.prefs.gridTerm]?.label}`, icon: icons.tag, color: 'c-slate' },
     { page: 'batcfg', title: 'البطارية والحسابات', sub: state.prefs.batteryAh ? `السعة ${state.prefs.batteryAh} أمبير ساعة` : 'أدخل سعة البطارية لحساب المدة المتبقية', icon: icons.battery, color: 'c-green' },
     { page: 'conn', title: 'الاتصال والتحديث', sub: `تحديث كل ${state.prefs.pollSec} ثانية`, icon: icons.wifi, color: 'c-sky' },
     { page: 'account', title: 'الجهاز والحساب', sub: state.demo ? 'وضع تجريبي' : state.session?.usr || '', icon: icons.user, color: 'c-amber' },
@@ -1319,13 +1378,37 @@ AFTER.theme = () => {
   });
 };
 
+// تُعرض الخيارات بأسمائها الحقيقية، فنرمّزها حتى لا يحوّلها محوّل المصطلحات
+function pageTerms() {
+  const opt = (k, v, label, sample) => `<button class="term-opt ${state.prefs[k] === v ? 'on' : ''}" data-term="${k}:${v}"><b data-raw="${encodeURIComponent(label)}"></b><small data-raw="${encodeURIComponent(sample)}"></small></button>`;
+  return `
+  <section class="card"><div class="card-h"><h2>اسم الجهاز</h2></div>
+    <div class="term-opts">${Object.entries(INV_TERMS).map(([v, t]) => opt('invTerm', v, t.label, `${t.label} غير متصل`)).join('')}</div></section>
+  <section class="card"><div class="card-h"><h2>اسم كهرباء الشبكة</h2></div>
+    <div class="term-opts">${Object.entries(GRID_TERMS).map(([v, t]) => opt('gridTerm', v, t.label, `انقطعت ${t.label}`)).join('')}</div></section>
+  <p class="hint">اختر التسمية المستخدمة في بلدك، وستتغير في كل التطبيق والإشعارات والتقارير.</p>`;
+}
+AFTER.terms = () => {
+  document.querySelectorAll('[data-raw]').forEach((el) => { el.textContent = decodeURIComponent(el.dataset.raw); });
+  document.querySelectorAll('[data-term]').forEach((b) => {
+    b.onclick = () => {
+      const [k, v] = b.dataset.term.split(':');
+      state.prefs[k] = v;
+      savePrefs();
+      L = makeLocalizer(state.prefs);
+      startApp();
+      navigate('more', 'terms');
+    };
+  });
+};
+
 function pageBatCfg() {
   const rated = state.model?.ratedV;
   return `<section class="card"><div class="form">
       ${numField('batteryAh', 'سعة البطارية', 'أمبير ساعة', 10, 5000, 'مثال: 200')}
       ${numField('cutoffSoc', 'أدنى نسبة مسموح التفريغ إليها', '%', 0, 60)}
     </div></section>
-    <p class="hint">تُستخدم السعة مع جهد البطارية المقنّن ${rated ? `(${rated} فولت من الرافع)` : '(48 فولت افتراضياً)'} لحساب المدة المتبقية للتفريغ أو الشحن. بدون السعة لا يعرض التطبيق أي تقدير حتى لا يكون مضلّلاً.</p>
+    <p class="hint">تُستخدم السعة مع جهد البطارية المقنّن ${rated ? `(${rated} فولت من الرافع)` : `(${nominalV(state.model)} فولت، مقدّر من جهد البطارية)`} لحساب المدة المتبقية للتفريغ أو الشحن. بدون السعة لا يعرض التطبيق أي تقدير حتى لا يكون مضلّلاً.</p>
     <p class="hint">إذا كانت لديك عدة بطاريات على التوازي فاجمع سعاتها (مثلاً بطاريتان 100 أمبير = 200).</p>`;
 }
 AFTER.batcfg = () => bindPrefs($('#view'));
@@ -1381,6 +1464,7 @@ function pageAbout() {
     </ul>
   </section>
   <section class="card"><div class="card-h"><h2>الخصوصية</h2></div>
+    <p class="hint">«طاقتي» تطبيق مستقل غير تابع لشركة WatchPower أو الشركات المصنّعة للأجهزة، ويعتمد على خدمة WatchPower السحابية، لذا قد يتأثر إذا غيّرت الشركة خدمتها.</p>
     <p class="hint">يتصل التطبيق مباشرة بخوادم WatchPower (DessMonitor) فقط. لا تُحفظ كلمة المرور، ولا تُرسل بياناتك إلى أي جهة أخرى. كل التقارير محفوظة على هاتفك.</p>
   </section>
   <p class="foot">صُنع بـ ${icons.heart} للطاقة النظيفة</p>`;

@@ -1,5 +1,11 @@
 apply plugin: 'com.android.application'
 
+// مفتاح التوقيع يُقرأ من android/keystore.properties أو من متغيرات البيئة، ولا يُرفع إلى المستودع أبداً
+def keystoreProps = new Properties()
+def keystoreFile = rootProject.file('keystore.properties')
+if (keystoreFile.exists()) keystoreFile.withInputStream { keystoreProps.load(it) }
+def signingValue = { String key, String env -> keystoreProps.getProperty(key) ?: System.getenv(env) }
+
 android {
     namespace = "com.taqati.solar"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +13,8 @@ android {
         applicationId "com.taqati.solar"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 3
-        versionName "2.1.0"
+        versionCode 4
+        versionName "2.2.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,8 +22,19 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (signingValue('storeFile', 'TAQATI_KEYSTORE')) {
+                storeFile file(signingValue('storeFile', 'TAQATI_KEYSTORE'))
+                storePassword signingValue('storePassword', 'TAQATI_KEYSTORE_PASSWORD')
+                keyAlias signingValue('keyAlias', 'TAQATI_KEY_ALIAS') ?: 'taqati'
+                keyPassword signingValue('keyPassword', 'TAQATI_KEY_PASSWORD') ?: signingValue('storePassword', 'TAQATI_KEYSTORE_PASSWORD')
+            }
+        }
+    }
     buildTypes {
         release {
+            if (signingValue('storeFile', 'TAQATI_KEYSTORE')) signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

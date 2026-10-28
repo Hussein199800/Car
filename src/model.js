@@ -64,6 +64,7 @@ export function extract(map) {
     temp: n(/temperature/),
     ratedW: n(/^ac output rating active power/),
     ratedV: n(/^battery rating voltage/),
+    gridRatedV: n(/^grid rating voltage/, /^ac output rating voltage/),
     fault: isEmptyVal(fault) || /^0+$/.test(String(fault)) ? null : String(fault),
     warning: isEmptyVal(warning) || /^0+$/.test(String(warning)) ? null : String(warning),
   };
@@ -88,17 +89,23 @@ export function groupOf(title) {
   return 'live';
 }
 
-export function normalize(points, staleMin = 15) {
+// offsetMs: فرق الساعة بين وقت الخادم وهاتف المستخدم (يُكتشف تلقائياً في main.js)
+export function normalize(points, staleMin = 15, offsetMs = 0) {
   const map = toMap(points);
   const x = extract(map);
+  // نحوّل وقت القراءة إلى توقيت الهاتف ليظهر صحيحاً للمستخدم
+  const rawTs = x.ts;
+  if (x.ts) x.ts += offsetMs;
   const age = x.ts ? Date.now() - x.ts : null;
   // الخادم يعيد آخر قراءة محفوظة حتى لو كان الإنفرتر مطفأً، لذا نحكم بالاتصال من عمر القراءة
   const stale = age !== null && age > staleMin * 60000;
   return {
     ...x,
+    rawTs,
     age,
     stale,
-    gridOn: x.gridV !== null && x.gridV >= 90,
+    // نعتبر الكهرباء موجودة إذا تجاوز جهدها 40% من الجهد المقنّن (يناسب شبكات 110 و230 فولت)
+    gridOn: x.gridV !== null && x.gridV >= 0.4 * (x.gridRatedV || 230),
     raw: points
       .filter((p) => String(p.title).toLowerCase() !== 'id')
       .map((p) => ({ title: p.title, ar: trTitle(p.title), val: p.val, valAr: trValue(p.val), unit: p.unit, group: groupOf(p.title) })),
