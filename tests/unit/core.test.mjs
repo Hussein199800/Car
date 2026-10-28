@@ -97,3 +97,61 @@ test('النصائح المخصّصة عامة وتتكيف مع جهد النظ
   assert.ok(smartTips(m24, {}).some((t) => /8 خلية/.test(t.body) && /26\\.8|26.8/.test(t.body)));
   assert.deepEqual(smartTips(normalize(device(99), 15), {}).map((t) => t.level), ['bad'], 'لا نصائح على قيم قديمة');
 });
+
+// ---------- حاسبة الأحمال وشرح الإعدادات (الإصدار 3.1) ----------
+import { convert, summarizeLoads, defaultsCalc, APPLIANCES } from '../../src/calc.js';
+import { settingInfo, optionAr, hintRange } from '../../src/settings-info.js';
+import { errorAr } from '../../src/api.js';
+
+test('المحوّل: 1 أمبير على 220 فولت = 220 واط و≈5.1 أمبير من بطارية 48', () => {
+  const c = { ...defaultsCalc(), mode: 'ac', input: 1, acV: 220, kind: 'res', eff: 90 };
+  const r = convert(c, 48);
+  assert.equal(r.watts, 220);
+  assert.equal(r.dc48.toFixed(2), '5.09');
+  assert.equal(r.dc24.toFixed(2), '10.19');
+  assert.equal(r.dc12.toFixed(2), '20.37');
+});
+
+test('المحوّل يعمل بالاتجاهين ويحترم معامل قدرة المحركات', () => {
+  const base = { ...defaultsCalc(), acV: 220, eff: 90 };
+  const fromDc = convert({ ...base, mode: 'dc', input: 10, kind: 'res' }, 48);
+  assert.equal(Math.round(fromDc.watts), 432);
+  const motor = convert({ ...base, mode: 'w', input: 880, kind: 'motor' }, 48);
+  assert.equal(motor.acA, 5, '880 واط محرك = 5 أمبير لأن معامل القدرة 0.8');
+});
+
+test('قائمة الأجهزة: الحمل والإقلاع والطاقة اليومية', () => {
+  const c = { ...defaultsCalc(), acV: 220, eff: 90, sunH: 5, backupH: 8 };
+  const fridge = { ...APPLIANCES.find((a) => a.id === 'fridge'), qty: 1, hours: 24 };
+  const tv = { ...APPLIANCES.find((a) => a.id === 'tv'), qty: 2, hours: 5 };
+  const s = summarizeLoads([fridge, tv], c, 48);
+  assert.equal(s.run, 350);
+  assert.equal(s.peak, 350 + 150 * 2, 'أكبر تيار إقلاع (ثلاجة ×3) يُضاف مرة واحدة');
+  assert.equal(s.whDay, 150 * 24 * 0.4 + 200 * 5);
+});
+
+test('شرح الإعدادات بالعربية لأسماء الأجهزة الحقيقية', () => {
+  for (const name of ['Output Source Priority', 'LED Status', 'LED Speed', 'Restore To Default', 'Over Temperature Auto Restart',
+    'Real-time Activate Battery Equalization', 'Battery Equalization Time Out', 'Equalization Period', 'Equalization Voltage',
+    'LCD Auto-return to Main Screen', 'Max AC Charging Current', 'Battery Re-Discharge Voltage']) {
+    const info = settingInfo(name);
+    assert.ok(info && /[؀-ۿ]/.test(info.ar) && info.desc.length > 20, name);
+  }
+  assert.equal(settingInfo('Real-time Activate Battery Equalization').ar, 'تشغيل المعادلة الآن');
+  assert.equal(settingInfo('Battery Equalization Time Out').ar, 'أقصى مدة للمعادلة');
+  assert.equal(settingInfo('Restore To Default').risk, 'high');
+  assert.equal(optionAr('Means Low'), 'منخفضة');
+  assert.equal(optionAr('SBU Priority'), 'ألواح ← بطارية ← كهرباء (SBU)');
+});
+
+test('نطاق الإعداد من ملاحظة الجهاز', () => {
+  assert.deepEqual(hintRange('48.0~58.4V'), [48, 58.4]);
+  assert.deepEqual(hintRange('0-900min'), [0, 900]);
+  assert.equal(hintRange('prefix 1~2V'), null);
+});
+
+test('أخطاء الخادم مترجمة حتى مع التفاصيل الإضافية', () => {
+  assert.equal(errorAr('ERR_UNSUPPORTED(cmd is null!!)', 9), 'هذا الإعداد لا يدعم قراءة قيمته الحالية');
+  assert.match(errorAr('ERR_SYSTEM_EXCEPTION', 1), /لم يستطع خادم/);
+  assert.equal(errorAr('', 7), 'خطأ 7');
+});
