@@ -24,7 +24,7 @@ export async function sha1(text) {
 }
 
 // مطابق لـ quote_plus في بايثون حتى يطابق التوقيع ما يُرسل حرفياً
-function quotePlus(value) {
+export function quotePlus(value) {
   return encodeURIComponent(String(value))
     .replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())
     .replace(/%20/g, '+');

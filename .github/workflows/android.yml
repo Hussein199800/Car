@@ -20,7 +20,12 @@ jobs:
           java-version: 21
       - uses: android-actions/setup-android@v3
       - run: npm ci
+      - name: JavaScript unit tests
+        run: npm test
       - run: npm run build && npx cap sync android
+      - name: Kotlin unit tests
+        working-directory: android
+        run: chmod +x gradlew && ./gradlew testReleaseUnitTest --no-daemon
 
       # نسخة موقّعة للنشر: تعمل فقط إذا أُضيف مفتاح التوقيع في أسرار المستودع
       - name: Prepare signing key

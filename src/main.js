@@ -15,13 +15,14 @@ import {
 } from './data.js';
 import { demoPoints, demoHistory } from './demo.js';
 import { icons } from './icons.js';
+import { isNative, secure, migrateSession, monitor } from './native.js';
 import { TIP_SECTIONS, smartTips, tipOfDay } from './tips.js';
 import { makeLocalizer, INV_TERMS, GRID_TERMS } from './terms.js';
 
 Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, CategoryScale, Filler, Tooltip, Legend);
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '2.2.0';
+const VERSION = '3.0.0';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -36,12 +37,13 @@ const DEFAULT_PREFS = {
   alertGrid: true,
   alertFull: true,
   alertOffline: true,
+  bgMonitor: true,
   invTerm: 'inverter',
   gridTerm: 'grid',
 };
 
 const state = {
-  session: store.get('session', null),
+  session: null, // تُحمّل من التخزين المشفّر في boot()
   demo: store.get('demo', false),
   devices: store.get('devices', []),
   devSn: store.get('devSn', null),
@@ -152,10 +154,11 @@ function renderLogin(msg = '') {
     </div>
     <form class="card login-card" id="loginForm" autocomplete="on">
       <label>اسم المستخدم في تطبيق WatchPower
-        <input name="usr" required autocomplete="username" dir="ltr" value="${esc(state.session?.usr || '')}">
+        <input name="usr" required autocomplete="username" autocapitalize="none" spellcheck="false" dir="ltr" value="${esc(store.get('lastUsr', ''))}">
       </label>
       <label>كلمة المرور
-        <input name="pwd" type="password" required autocomplete="current-password" dir="ltr">
+        <span class="pwd-wrap"><input name="pwd" type="password" required autocomplete="current-password" dir="ltr">
+        <button type="button" class="pwd-eye" id="pwdEye" aria-label="إظهار كلمة المرور">${icons.eye}</button></span>
       </label>
       ${msg ? `<div class="err">${esc(msg)}</div>` : ''}
       <button class="btn primary big" type="submit">تسجيل الدخول</button>
@@ -166,6 +169,13 @@ function renderLogin(msg = '') {
     <p class="foot">تطوير: حسين محمد علي الطويل</p>
   </div>`;
 
+  $('#pwdEye').onclick = () => {
+    const i = $('[name=pwd]');
+    const show = i.type === 'password';
+    i.type = show ? 'text' : 'password';
+    $('#pwdEye').setAttribute('aria-label', show ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور');
+    $('#pwdEye').classList.toggle('on', show);
+  };
   $('#demoBtn').onclick = () => {
     state.demo = true;
     store.set('demo', true);
@@ -183,7 +193,8 @@ function renderLogin(msg = '') {
     try {
       api = new WatchPowerApi();
       state.session = await api.login(f.get('usr'), f.get('pwd'));
-      store.set('session', state.session);
+      await secure.set('session', state.session);
+      store.set('lastUsr', state.session.usr);
       state.demo = false;
       store.set('demo', false);
       btn.textContent = 'جارٍ البحث عن الأجهزة…';
@@ -201,7 +212,9 @@ function renderLogin(msg = '') {
 
 function logout() {
   stopPolling();
-  ['session', 'devices', 'devSn', 'demo'].forEach(store.del);
+  ['devices', 'devSn', 'demo'].forEach(store.del);
+  secure.del('session');
+  monitor.configure({ enabled: false }).catch(() => {});
   Object.assign(state, { session: null, demo: false, devices: [], model: null, fields: null, tab: 'home', page: null });
   state.rep = { ...state.rep, day: null, week: null, month: null, cmpData: null };
   api = new WatchPowerApi();
@@ -209,14 +222,15 @@ function logout() {
 }
 
 // ================= الهيكل والتنقل =================
+// أربعة تبويبات فقط، والوظائف المتقاربة مجمّعة داخلها
 const TABS = [
   ['home', 'الرئيسية', icons.flash],
   ['reports', 'التقارير', icons.chart],
   ['alerts', 'التنبيهات', icons.bell],
-  ['inverter', 'الرافع', icons.inverter],
-  ['tips', 'نصائح', icons.bulb],
   ['more', 'المزيد', icons.gear],
 ];
+// الصفحة الحالية مسار مثل «tips/lithium»، والرجوع يحذف آخر جزء منه
+const leaf = () => (state.page ? state.page.split('/').pop() : null);
 
 function startApp() {
   document.getElementById('app').innerHTML = `
@@ -231,11 +245,11 @@ function startApp() {
   };
   $('#view').addEventListener('click', (e) => {
     const card = e.target.closest('[data-page]');
-    if (card) navigate(state.tab, card.dataset.page);
+    if (card) navigate(state.tab, card.dataset.page.includes(':') ? card.dataset.page.split(':')[1] : card.dataset.page);
   });
   loadCache();
   navigate(state.tab, state.page);
-  refresh();
+  takeOverFromBackground().then(() => { refresh(); syncMonitor(); });
   startPolling();
 }
 
@@ -249,7 +263,7 @@ function navigate(tab, page) {
 }
 
 function back() {
-  if (state.page) navigate(state.tab, null);
+  if (state.page) navigate(state.tab, state.page.includes('/') ? state.page.slice(0, state.page.lastIndexOf('/')) : null);
   else if (state.tab !== 'home') navigate('home', null);
   else CapApp.minimizeApp().catch(() => {});
 }
@@ -267,7 +281,7 @@ function renderHeader() {
   const bar = $('#topbar');
   if (!bar) return;
   const c = connState();
-  const title = state.page ? PAGE_TITLES[state.page] || '' : null;
+  const title = state.page ? PAGE_TITLES[leaf()] || '' : null;
   bar.innerHTML = L(state.page
     ? `<button class="icon-btn" id="backBtn" aria-label="رجوع">${icons.arrowBack}</button>
        <div class="page-title">${esc(title)}</div>
@@ -302,10 +316,9 @@ function banner() {
 const PAGE_TITLES = {
   load: 'الحمل', battery: 'البطارية', solar: 'الألواح الشمسية', grid: 'الكهرباء الوطنية', all: 'كل القراءات',
   day: 'التقرير اليومي', week: 'التقرير الأسبوعي', month: 'التقرير الشهري', compare: 'مقارنة الأداء', export: 'تصدير البيانات',
-  log: 'سجل التنبيهات', faults: 'سجل الأعطال والانقطاعات', rules: 'شروط التنبيه',
-  status: 'الحالة التشغيلية', info: 'معلومات الجهاز', rated: 'القيم المقنّنة', config: 'الإعدادات الحالية', edit: 'تعديل الإعدادات',
-  smart: 'نصائح لجهازك الآن', ...Object.fromEntries(TIP_SECTIONS.map((t) => [t.id, t.title])),
-  theme: 'المظهر', terms: 'المصطلحات', batcfg: 'البطارية والحسابات', conn: 'الاتصال والتحديث', account: 'الجهاز والحساب', about: 'حول التطبيق',
+  rules: 'شروط التنبيه', device: 'الرافع', edit: 'إعدادات الرافع',
+  tips: 'النصائح', smart: 'نصائح لجهازك الآن', ...Object.fromEntries(TIP_SECTIONS.map((t) => [t.id, t.title])),
+  custom: 'المظهر والمصطلحات', monitor: 'المراقبة والبطارية', account: 'الحساب', about: 'حول التطبيق',
 };
 
 function render() {
@@ -313,10 +326,10 @@ function render() {
   renderHeader();
   const v = $('#view');
   if (!v) return;
-  const views = { home: viewHome, reports: viewReports, alerts: viewAlerts, inverter: viewInverter, tips: viewTips, more: viewMore };
+  const views = { home: viewHome, reports: viewReports, alerts: viewAlerts, more: viewMore };
   v.innerHTML = L(`<div class="${state.animate ? 'page-anim' : ''}">${views[state.tab]()}</div>`);
   state.animate = false;
-  AFTER[state.page || state.tab]?.();
+  AFTER[leaf() || state.tab]?.();
 }
 const AFTER = {};
 
@@ -378,8 +391,11 @@ async function refresh(manual = false) {
     state.fails = 0;
     if (!state.demo) {
       store.set('last.' + d.sn, { points, at: state.fetchedAt });
-      state.session = api.session;
-      store.set('session', state.session);
+      // نحفظ الجلسة فقط إذا تجدّد الرمز حتى لا نكتب في التخزين المشفّر كل 30 ثانية
+      if (api.session.token !== state.session?.token) {
+        state.session = api.session;
+        secure.set('session', state.session).catch(() => {});
+      }
       recordSample(d.sn, state.model);
     }
     checkAlerts(state.model);
@@ -393,7 +409,7 @@ async function refresh(manual = false) {
     state.loading = false;
     if (state.model) state.model = { ...state.model, age: state.model.ts ? Date.now() - state.model.ts : null };
     // نعيد الرسم فقط للصفحات التي تعرض القراءة الحية حتى لا تُفقد حالة الصفحات الأخرى
-    if (state.tab === 'home' || (state.tab === 'tips' && ['smart', null].includes(state.page)) || (state.tab === 'inverter' && ['status', 'info', 'rated', 'config', null].includes(state.page))) render();
+    if (state.tab === 'home' || (state.tab === 'more' && ['tips', 'tips/smart'].includes(state.page))) render();
     else renderHeader();
   }
 }
@@ -403,6 +419,40 @@ function startPolling() {
   pollTimer = setInterval(() => refresh(), Math.max(10, state.prefs.pollSec) * 1000);
 }
 function stopPolling() { if (pollTimer) clearInterval(pollTimer); pollTimer = null; }
+
+// ================= المراقبة في الخلفية (تطبيق الهاتف فقط) =================
+// التطبيق المفتوح يراقب بنفسه كل بضع ثوانٍ. عند إغلاقه نسلّم حالة التنبيهات للفحص الأصلي (Kotlin)
+// ليكمل من حيث توقفنا دون تكرار، وعند العودة نستلم ما حدث في غيابنا.
+function monitorConfig() {
+  const d = device();
+  const p = state.prefs;
+  return {
+    enabled: !!(p.bgMonitor && state.session && d && !state.demo),
+    sn: d?.sn || '', device: d ? { pn: d.pn, sn: d.sn, devcode: String(d.devcode), devaddr: String(d.devaddr ?? 1) } : null,
+    staleMin: p.staleMin, tzOffsetMs: tzOffset(), lowSoc: p.lowSoc, overloadPct: p.overloadPct,
+    alertGrid: p.alertGrid, alertOffline: p.alertOffline, alertFull: p.alertFull, notify: p.notify,
+    invLabel: INV_TERMS[p.invTerm]?.label, gridLabel: GRID_TERMS[p.gridTerm]?.label,
+  };
+}
+const syncMonitor = () => (isNative ? monitor.configure(monitorConfig(), state.flags).catch(() => {}) : Promise.resolve());
+
+async function takeOverFromBackground() {
+  if (!isNative || state.demo) return;
+  try {
+    const r = await monitor.takeOver();
+    (r.alerts || []).forEach((a) => state.alerts.unshift({ ...a, read: false }));
+    (r.faults || []).forEach((f) => state.faults.unshift(f));
+    state.alerts = state.alerts.slice(0, 200);
+    state.faults = state.faults.slice(0, 300);
+    if (r.flags && Object.keys(r.flags).length) state.flags = { ...state.flags, ...r.flags };
+    store.set('alerts', state.alerts);
+    store.set('faults', state.faults);
+    store.set('flags', state.flags);
+    // قد يكون الفحص في الخلفية جدّد رمز الدخول
+    const s = await secure.get('session');
+    if (s) { state.session = s; api = new WatchPowerApi(s); }
+  } catch { /* تجاهل */ }
+}
 
 // ================= التنبيهات والأعطال =================
 async function notify(title, body) {
@@ -519,8 +569,12 @@ const batState = (m) => (m.stale ? 'لا توجد قراءة حيّة' : m.batW 
 // ================= الرئيسية =================
 function viewHome() {
   const m = state.model;
-  if (!m) return `<div class="empty"><div class="spinner"></div>جارٍ جلب بيانات الرافع…${state.netError ? `<div class="err" style="margin-top:12px">${esc(state.netError)}</div>` : ''}</div>`;
-  const pages = { load: pageLoad, battery: pageBattery, solar: pageSolar, grid: pageGrid, all: pageAll };
+  if (!m) {
+    return state.netError
+      ? `<div class="empty">${icons.offline.replace('<svg', '<svg class="empty-ic"')}<b>تعذّر جلب بيانات الرافع</b><p>${esc(state.netError)}</p><button class="btn primary" id="retryBtn">إعادة المحاولة</button></div>`
+      : '<div class="empty"><div class="spinner"></div>جارٍ جلب بيانات الرافع…</div>';
+  }
+  const pages = { load: pageLoad, battery: pageBattery, solar: pageSolar, grid: pageGrid, all: pageAll, device: pageDevice };
   if (state.page && pages[state.page]) return banner() + pages[state.page](m);
 
   const isBat = /battery/i.test(m.mode || '') || (m.batW ?? 0) < -10;
@@ -535,6 +589,8 @@ function viewHome() {
 
   return `
   ${banner()}
+  ${urgentTip(m)}
+  <div class="home-grid"><div class="col-a">
   <div class="mode-pill ${modeCls}">${esc(modeText)}</div>
   <section class="card flow-card ${live ? '' : 'stale'}">
     <svg viewBox="0 0 360 380" class="flow-svg">
@@ -559,11 +615,12 @@ function viewHome() {
     </div>
     <div class="bat-info">
       <div class="bat-state ${live && m.batW > 10 ? 'chg' : live && m.batW < -10 ? 'dis' : ''}">${esc(batState(m))}</div>
-      <div class="bat-eta">${e.known ? esc(e.text) : `<button class="link" data-goto="more:batcfg">${esc(e.text)}</button>`}</div>
+      <div class="bat-eta">${e.known ? esc(e.text) : `<button class="link" data-goto="more:monitor">${esc(e.text)}</button>`}</div>
       <div class="bat-sub"><bdi>${fmt.v(m.batV)}</bdi>${e.sub ? ' · ' + esc(e.sub) : ''}</div>
     </div>
   </section>
 
+  </div><div class="col-b">
   <h3 class="sec-h">التفاصيل</h3>
   ${gridCards([
     { page: 'load', title: 'الحمل', icon: icons.home, color: 'c-sky', value: fmt.w(m.outW), sub: m.loadPct !== null ? `${m.loadPct}% من قدرة الرافع` : 'استهلاك المنزل' },
@@ -571,9 +628,24 @@ function viewHome() {
     { page: 'solar', title: 'الألواح الشمسية', icon: icons.panel, color: 'c-amber', value: fmt.w(m.pvW), sub: m.todayWh !== null ? `إنتاج اليوم ${fmt.kwh(m.todayWh / 1000)} ك.و.س` : 'الإنتاج الحالي' },
     { page: 'grid', title: 'الكهرباء الوطنية', icon: icons.grid, color: 'c-violet', value: m.gridV === null ? '—' : m.gridOn ? `${numAr(m.gridV, 1)} فولت` : 'مقطوعة', sub: m.gridOn ? (isLine ? 'تغذّي الحمل الآن' : 'متوفرة كاحتياط') : 'لا يوجد تيار' },
   ].map((c) => (live ? c : { ...c, sub: 'آخر قيمة مسجّلة' })), live ? '' : 'stale')}
-  ${listCards([{ page: 'all', title: 'كل القراءات', sub: `${m.raw.filter((r) => r.group === 'live').length} قراءة حيّة مترجمة`, icon: icons.list, color: 'c-slate' }])}`;
+  ${listCards([
+    { page: 'device', title: 'الرافع', sub: m.stale ? 'غير متصل' : `${m.fault ? 'يوجد عطل' : 'يعمل'} · الحالة والمعلومات والإعدادات الحالية`, icon: icons.inverter, color: m.stale ? 'c-slate' : m.fault ? 'c-pink' : 'c-sky' },
+    { page: 'all', title: 'كل القراءات', sub: `${m.raw.filter((r) => r.group === 'live').length} قراءة حيّة مترجمة`, icon: icons.list, color: 'c-slate' },
+  ])}
+  </div></div>`;
 }
-AFTER.home = () => bindGoto();
+
+// ملاحظة عاجلة واحدة من النصائح المخصّصة تظهر في الرئيسية حتى لا تفوت المستخدم
+function urgentTip(m) {
+  if (!m || m.stale || state.demo) return '';
+  const t = smartTips(m, state.prefs).find((x) => x.level === 'bad' || x.level === 'warn');
+  return t ? `<button class="banner warn tip-banner" data-goto="more:tips/smart">${icons.bulb}<span><b>${esc(t.title)}</b>${esc(t.body)}</span></button>` : '';
+}
+AFTER.home = () => {
+  bindGoto();
+  const r = $('#retryBtn');
+  if (r) r.onclick = () => { r.disabled = true; r.textContent = 'جارٍ المحاولة…'; refresh(true); };
+};
 
 function bindGoto() {
   document.querySelectorAll('[data-goto]').forEach((b) => {
@@ -632,7 +704,7 @@ function pageBattery(m) {
   ${hero(icons.battery, 'c-green', 'نسبة الشحن', m.soc !== null ? m.soc + '%' : '—', batState(m))}
   <section class="card">
     <div class="card-h"><h2>المدة المتوقعة</h2></div>
-    <div class="big-line">${e.known ? esc(e.text) : `<button class="link" data-goto="more:batcfg">${esc(e.text)}</button>`}</div>
+    <div class="big-line">${e.known ? esc(e.text) : `<button class="link" data-goto="more:monitor">${esc(e.text)}</button>`}</div>
     ${e.sub ? `<p class="hint">${esc(e.sub)}</p>` : ''}
     ${state.prefs.batteryAh ? `<p class="hint">مبنية على سعة ${state.prefs.batteryAh} أمبير ساعة وجهد ${nominalV(m)} فولت. التقدير تقريبي ويتغير مع الحمل.</p>` : ''}
   </section>
@@ -1064,20 +1136,37 @@ async function exportSummaries(name, sums) {
   ));
 }
 
-// ================= تبويب التنبيهات =================
+// ================= تبويب التنبيهات: سجل التنبيهات وسجل الأعطال في صفحة واحدة =================
 function viewAlerts() {
-  const pages = { log: pageLog, faults: pageFaults, rules: pageRules };
-  if (state.page && pages[state.page]) return pages[state.page]();
+  if (state.page === 'rules') return pageRules();
+  const seg = state.alertSeg || 'alerts';
   const unread = state.alerts.filter((a) => !a.read).length;
-  const last = state.alerts[0];
-  return `
-  <section class="intro"><h2>التنبيهات</h2><p>يراقب التطبيق الرافع ويخبرك فور حدوث أي تغيير مهم.</p></section>
-  ${gridCards([
-    { page: 'log', title: 'سجل التنبيهات', icon: icons.bell, color: 'c-sky', value: String(state.alerts.length), sub: last ? `آخرها: ${last.title}` : 'لا توجد تنبيهات بعد', badge: unread ? `${unread} جديد` : '' },
-    { page: 'faults', title: 'الأعطال والانقطاعات', icon: icons.warn, color: 'c-pink', value: String(state.faults.length), sub: state.faults[0] ? state.faults[0].title : 'لم تُسجّل أحداث' },
-    { page: 'rules', title: 'شروط التنبيه', icon: icons.sliders, color: 'c-violet', value: '', sub: `البطارية ${state.prefs.lowSoc}% · الحمل ${state.prefs.overloadPct}%` },
-  ])}`;
+  const list = seg === 'alerts' ? state.alerts : state.faults;
+  const counts = state.faults.reduce((o, f) => ((o[f.kind] = (o[f.kind] || 0) + 1), o), {});
+  const html = `
+  ${listCards([{ page: 'rules', title: 'شروط التنبيه', sub: `البطارية ${state.prefs.lowSoc}% · الحمل ${state.prefs.overloadPct}% · ${state.prefs.bgMonitor && Capacitor.isNativePlatform() ? 'المراقبة في الخلفية مفعّلة' : 'المراقبة في الخلفية متوقفة'}`, icon: icons.sliders, color: 'c-violet' }])}
+  <div class="seg"><button data-seg="alerts" class="${seg === 'alerts' ? 'on' : ''}">التنبيهات${unread ? ` (${unread})` : ''}</button><button data-seg="faults" class="${seg === 'faults' ? 'on' : ''}">الأعطال والانقطاعات</button></div>
+  ${seg === 'faults' && state.faults.length ? `<div class="chips">
+    <span class="chip">أعطال الإنفرتر: <b>${counts.fault || 0}</b></span><span class="chip">انقطاع الرافع: <b>${counts.offline || 0}</b></span>
+    <span class="chip">انقطاع الكهرباء: <b>${counts.grid || 0}</b></span><span class="chip">تعذّر الاتصال: <b>${counts.comm || 0}</b></span></div>` : ''}
+  ${list.length ? '<div class="row-end"><button class="link" id="clearList">مسح السجل</button></div>' : ''}
+  ${eventList(list, seg === 'alerts'
+    ? 'لا توجد تنبيهات بعد. ستظهر هنا عند انقطاع الكهرباء أو انخفاض البطارية أو انقطاع الرافع.'
+    : 'لم يُسجّل أي عطل أو انقطاع حتى الآن.')}`;
+  if (seg === 'alerts' && unread) { state.alerts.forEach((a) => { a.read = true; }); store.set('alerts', state.alerts); }
+  return html;
 }
+AFTER.alerts = () => {
+  document.querySelectorAll('[data-seg]').forEach((b) => { b.onclick = () => { state.alertSeg = b.dataset.seg; render(); }; });
+  const c = $('#clearList');
+  if (c) c.onclick = async () => {
+    const faults = (state.alertSeg || 'alerts') === 'faults';
+    if (!(await confirmDialog('مسح السجل', faults ? 'هل تريد حذف سجل الأعطال والانقطاعات؟' : 'هل تريد حذف كل التنبيهات؟'))) return;
+    if (faults) { state.faults = []; store.set('faults', []); } else { state.alerts = []; store.set('alerts', []); }
+    render();
+  };
+  setTimeout(renderHeader, 0);
+};
 
 const KIND_IC = { bad: icons.warn, warn: icons.warn, ok: icons.check, info: icons.info, fault: icons.warn, offline: icons.offline, online: icons.check, grid: icons.grid, comm: icons.offline };
 const KIND_CLS = { fault: 'bad', offline: 'bad', comm: 'warn', grid: 'warn', online: 'ok', warn: 'warn' };
@@ -1091,34 +1180,6 @@ function eventList(list, empty) {
     </li>`).join('')}</ul>`;
 }
 
-function pageLog() {
-  const html = `<div class="row-end">${state.alerts.length ? '<button class="link" id="clearList">مسح السجل</button>' : ''}</div>${eventList(state.alerts, 'لا توجد تنبيهات بعد. ستظهر هنا عند انقطاع الكهرباء أو انخفاض البطارية أو انقطاع الرافع.')}`;
-  state.alerts.forEach((a) => { a.read = true; });
-  store.set('alerts', state.alerts);
-  return html;
-}
-AFTER.log = () => {
-  const c = $('#clearList');
-  if (c) c.onclick = async () => { if (await confirmDialog('مسح السجل', 'هل تريد حذف كل التنبيهات؟')) { state.alerts = []; store.set('alerts', []); render(); } };
-};
-
-function pageFaults() {
-  const counts = state.faults.reduce((o, f) => ((o[f.kind] = (o[f.kind] || 0) + 1), o), {});
-  return `
-  <div class="stats">
-    ${stat('أعطال الإنفرتر', String(counts.fault || 0), 'حدث', 'c-pink')}
-    ${stat('انقطاع الرافع', String(counts.offline || 0), 'مرة', 'c-slate')}
-    ${stat('انقطاع الكهرباء', String(counts.grid || 0), 'مرة', 'c-violet')}
-    ${stat('تعذّر الاتصال', String(counts.comm || 0), 'مرة', 'c-amber')}
-  </div>
-  <div class="row-end">${state.faults.length ? '<button class="link" id="clearList">مسح السجل</button>' : ''}</div>
-  ${eventList(state.faults, 'لم يُسجّل أي عطل أو انقطاع حتى الآن.')}`;
-}
-AFTER.faults = () => {
-  const c = $('#clearList');
-  if (c) c.onclick = async () => { if (await confirmDialog('مسح السجل', 'هل تريد حذف سجل الأعطال؟')) { state.faults = []; store.set('faults', []); render(); } };
-};
-
 function toggle(key, label, sub = '') {
   return `<label class="sw-row"><span>${esc(label)}${sub ? `<small>${esc(sub)}</small>` : ''}</span><input type="checkbox" class="sw" data-pref="${key}" ${state.prefs[key] ? 'checked' : ''}></label>`;
 }
@@ -1130,6 +1191,7 @@ function pageRules() {
   return `
   <section class="card"><div class="form">
     ${toggle('notify', 'إشعارات على الهاتف', 'تظهر في شريط الإشعارات')}
+    ${isNative ? toggle('bgMonitor', 'المراقبة والتطبيق مغلق', 'فحص كل 15 دقيقة تقريباً حتى بعد إغلاق التطبيق') : ''}
     ${numField('lowSoc', 'انخفاض البطارية إلى', '%', 5, 90)}
     ${numField('overloadPct', 'تجاوز الحمل نسبة', '%', 30, 120)}
     ${toggle('alertOffline', 'انقطاع اتصال الرافع وعودته')}
@@ -1137,8 +1199,12 @@ function pageRules() {
     ${toggle('alertFull', 'اكتمال شحن البطارية')}
   </div></section>
   <button class="btn ghost wide" id="testNotif">${icons.bell} إرسال إشعار تجريبي</button>
-  <p class="hint">التنبيهات تعمل ما دام التطبيق مفتوحاً أو في الخلفية، ويُفحص الرافع كل ${state.prefs.pollSec} ثانية. إذا أُغلق التطبيق تماماً أو أوقفه نظام توفير البطارية فلن تصل التنبيهات حتى تفتحه.</p>
-  <p class="hint">أعطال الإنفرتر تُسجّل دائماً في سجل الأعطال، وتصل كإشعار عند تفعيل الإشعارات.</p>`;
+  <p class="hint">والتطبيق مفتوح يُفحص الرافع كل ${state.prefs.pollSec} ثانية. ${isNative
+    ? (state.prefs.bgMonitor
+      ? 'وبعد إغلاقه يتولى نظام أندرويد الفحص كل 15 دقيقة تقريباً (أقل مدة يسمح بها النظام)، وقد يتأخر الفحص عند تفعيل توفير البطارية الشديد. لأفضل نتيجة اجعل «طاقتي» غير مقيّد في إعدادات البطارية بالهاتف.'
+      : 'المراقبة بعد الإغلاق متوقفة، فلن تصل التنبيهات حتى تفتح التطبيق.')
+    : 'المراقبة بعد إغلاق التطبيق متاحة في تطبيق الهاتف فقط.'}</p>
+  <p class="hint">الأعطال والانقطاعات تُسجّل دائماً في «الأعطال والانقطاعات» حتى لو أوقفت إشعارها.</p>`;
 }
 AFTER.rules = () => {
   bindPrefs($('#view'));
@@ -1170,6 +1236,7 @@ function bindPrefs(root) {
         if (r.display !== 'granted') toast('لم يُسمح بالإشعارات من إعدادات الهاتف', 'bad');
       }
       if (k === 'pollSec') startPolling();
+      syncMonitor();
       if (k === 'staleMin' && state.model) state.model = normalize(state.model.raw.map((r) => ({ title: r.title, val: r.val, unit: r.unit })), state.prefs.staleMin, tzOffset());
       if (k === 'theme') { applyTheme(); render(); }
       toast('تم الحفظ', 'ok');
@@ -1177,30 +1244,15 @@ function bindPrefs(root) {
   });
 }
 
-// ================= تبويب الرافع =================
-function viewInverter() {
-  const m = state.model;
-  const pages = { status: pageStatus, info: pageInfo, rated: () => pageGroup('rated'), config: () => pageGroup('config'), edit: pageEdit };
-  if (state.page && pages[state.page]) return (state.page === 'edit' ? '' : banner()) + pages[state.page](m);
-  const fault = m?.fault;
+// ================= صفحة الرافع (الحالة + المعلومات + القيم المقنّنة + الإعدادات الحالية) =================
+function pageDevice(m) {
+  const d = device();
+  const group = (g) => m.raw.filter((r) => r.group === g);
+  const rows = (list) => list.map((r) => [r.ar, isEmptyVal(r.val) ? val(null) : val(r.valAr, trUnit(r.unit))]);
+  const product = group('product').filter((r) => !/^timestamp$/i.test(r.title));
+  const section = (title, body, open = false) => `<details class="card fold" ${open ? 'open' : ''}><summary><h2>${esc(title)}</h2>${icons.chevL}</summary>${body}</details>`;
   return `
-  <section class="intro"><h2>${esc(device()?.alias || 'الرافع')}</h2><p>معلومات الإنفرتر وإعداداته.</p></section>
-  ${gridCards([
-    { page: 'status', title: 'الحالة التشغيلية', icon: icons.gauge, color: m?.stale ? 'c-slate' : fault ? 'c-pink' : 'c-green', value: !m ? '—' : m.stale ? 'غير متصل' : fault ? 'عطل' : 'يعمل', sub: m?.mode ? trValue(m.mode) : '' },
-    { page: 'info', title: 'معلومات الجهاز', icon: icons.tag, color: 'c-sky', value: '', sub: 'الرقم التسلسلي والإصدارات' },
-    { page: 'rated', title: 'القيم المقنّنة', icon: icons.bolt, color: 'c-amber', value: m?.ratedW ? `${m.ratedW} واط` : '', sub: 'قدرة وجهد الرافع الاسمية' },
-    { page: 'config', title: 'الإعدادات الحالية', icon: icons.list, color: 'c-violet', value: '', sub: 'الأولويات والبطارية (للعرض)' },
-  ])}
-  ${listCards([{ page: 'edit', title: 'تعديل إعدادات الرافع', sub: 'تغيير الأولويات وتيارات الشحن عن بُعد', icon: icons.wrench, color: 'c-pink' }])}`;
-}
-
-function needModel(m) {
-  return m ? '' : '<div class="empty">لا توجد بيانات بعد.</div>';
-}
-
-function pageStatus(m) {
-  if (!m) return needModel(m);
-  return `<section class="card">${kv([
+  ${section('الحالة التشغيلية', kv([
     ['الاتصال', m.stale ? '<span class="tag bad">غير متصل</span>' : state.demo ? '<span class="tag">تجريبي</span>' : '<span class="tag ok">متصل</span>'],
     ['آخر قراءة', val(m.ts ? fmt.dateTime(m.ts) : null)],
     ['وضع التشغيل', val(m.mode ? trValue(m.mode) : null)],
@@ -1209,29 +1261,14 @@ function pageStatus(m) {
     m.warning ? ['تحذير', `<span class="tag warn">${esc(m.warning)}</span>`] : null,
     ['جهد الناقل الداخلي', val(m.busV === null ? null : numAr(m.busV), 'فولت')],
     m.temp !== null ? ['الحرارة', val(numAr(m.temp), 'م°')] : null,
-  ])}</section>
-  <p class="hint">يُعتبر الرافع غير متصل إذا لم تصل منه قراءة جديدة منذ أكثر من ${state.prefs.staleMin} دقيقة (يمكن تغييرها من «المزيد ← الاتصال والتحديث»).</p>`;
+  ]), true)}
+  ${section('معلومات الجهاز', kv([['اسم الجهاز', val(d?.alias)], ['الرقم التسلسلي للجهاز', val(d?.sn)], ['رقم وحدة الواي فاي', val(d?.pn)], ...rows(product)]))}
+  ${group('rated').length ? section('القيم المقنّنة', kv(rows(group('rated')))) : ''}
+  ${group('config').length ? section('الإعدادات الحالية', kv(rows(group('config'))) + '<p class="hint">للعرض فقط. لتغييرها: «المزيد ← إعدادات الرافع».</p>') : ''}
+  <button class="btn ghost wide" data-goto="more:edit">${icons.wrench} تعديل إعدادات الرافع</button>
+  <p class="hint">يُعتبر الرافع غير متصل إذا لم تصل منه قراءة جديدة منذ أكثر من ${state.prefs.staleMin} دقيقة.</p>`;
 }
-
-function pageInfo(m) {
-  const d = device();
-  const product = m ? m.raw.filter((r) => r.group === 'product' && !/^timestamp$/i.test(r.title)) : [];
-  return `<section class="card">${kv([
-    ['اسم الجهاز', val(d?.alias)],
-    ['الرقم التسلسلي للجهاز', val(d?.sn)],
-    ['رقم وحدة الواي فاي', val(d?.pn)],
-    ...product.map((r) => [r.ar, val(r.valAr, trUnit(r.unit))]),
-  ])}</section>`;
-}
-
-function pageGroup(group) {
-  const m = state.model;
-  if (!m) return needModel(m);
-  const rows = m.raw.filter((r) => r.group === group);
-  if (!rows.length) return '<div class="empty">الجهاز لا يرسل هذه المعلومات.</div>';
-  return `<section class="card">${kv(rows.map((r) => [r.ar, isEmptyVal(r.val) ? val(null) : val(r.valAr, trUnit(r.unit))]))}</section>
-    ${group === 'config' ? '<p class="hint">هذه القيم للعرض كما يرسلها الرافع. لتغييرها استخدم «تعديل إعدادات الرافع».</p>' : ''}`;
-}
+AFTER.device = () => bindGoto();
 
 const SETTING_AR = {
   'output source priority': 'أولوية مصدر الخرج', 'charger source priority': 'أولوية مصدر الشحن', 'ac input range': 'نطاق جهد الدخل',
@@ -1326,12 +1363,12 @@ function smartList(list) {
 }
 
 function viewTips() {
-  if (state.page === 'smart') {
+  if (state.page === 'tips/smart') {
     const list = smartTips(state.model, state.prefs);
     return `${state.demo ? banner() : ''}${list.length ? smartList(list) : '<div class="empty">لا توجد بيانات من الجهاز بعد.</div>'}
       <p class="hint">هذه النصائح مبنية على قراءات جهازك وإعداداته الحالية وتتحدّث تلقائياً. هي إرشادات عامة، وتبقى مواصفات الشركة المصنعة لجهازك وبطاريتك هي المرجع.</p>`;
   }
-  const sec = TIP_SECTIONS.find((x) => x.id === state.page);
+  const sec = TIP_SECTIONS.find((x) => 'tips/' + x.id === state.page);
   if (sec) {
     return `<section class="hero ${sec.color}"><span class="g-deco">${icons[sec.icon]}</span><div class="h-ic">${icons[sec.icon]}</div>
         <b style="font-size:24px">${esc(sec.title)}</b><span>${esc(sec.sub)} · ${sec.tips.length} نصيحة</span></section>
@@ -1346,26 +1383,39 @@ function viewTips() {
   <section class="intro"><h2>نصائح وإرشادات</h2><p>لتستفيد من منظومتك بأمان وتطيل عمر الرافع والبطارية.</p></section>
   <section class="tod"><div class="tod-h">${icons.star}<span>نصيحة اليوم · ${esc(tod.section)}</span></div>
     <b>${esc(tod.title)}</b><p>${esc(tod.body).replace(/\n/g, '<br>')}</p></section>
-  ${listCards([{ page: 'smart', title: 'نصائح لجهازك الآن', sub: state.model ? `${smart.length} ملاحظة من قراءات جهازك وإعداداته` : 'تظهر بعد وصول بيانات الجهاز', icon: icons.bulb, color: urgent ? 'c-pink' : 'c-violet', badge: urgent ? `${urgent} مهم` : '' }])}
-  ${gridCards(TIP_SECTIONS.map((t) => ({ page: t.id, title: t.title, sub: t.sub, icon: icons[t.icon], color: t.color, value: '', badge: `${t.tips.length} نصيحة` })))}`;
+  ${listCards([{ page: 'tips/smart', title: 'نصائح لجهازك الآن', sub: state.model ? `${smart.length} ملاحظة من قراءات جهازك وإعداداته` : 'تظهر بعد وصول بيانات الجهاز', icon: icons.bulb, color: urgent ? 'c-pink' : 'c-violet', badge: urgent ? `${urgent} مهم` : '' }])}
+  ${gridCards(TIP_SECTIONS.map((t) => ({ page: 'tips/' + t.id, title: t.title, sub: t.sub, icon: icons[t.icon], color: t.color, value: '', badge: `${t.tips.length} نصيحة` })))}`;
 }
 
 // ================= تبويب المزيد =================
 function viewMore() {
-  const pages = { theme: pageTheme, terms: pageTerms, batcfg: pageBatCfg, conn: pageConn, account: pageAccount, about: pageAbout };
+  if (state.page?.startsWith('tips')) return viewTips();
+  const pages = { edit: pageEdit, custom: pageCustom, monitor: pageMonitor, account: pageAccount, about: pageAbout };
   if (state.page && pages[state.page]) return pages[state.page]();
-  const themeName = { auto: 'تلقائي حسب الهاتف', dark: 'ليلي', light: 'نهاري' }[state.prefs.theme];
+  const themeName = { auto: 'تلقائي', dark: 'ليلي', light: 'نهاري' }[state.prefs.theme];
+  const urgent = smartTips(state.model, state.prefs).filter((t) => t.level === 'bad' || t.level === 'warn').length;
   return `
   ${listCards([
-    { page: 'theme', title: 'المظهر', sub: themeName, icon: icons.moon, color: 'c-violet' },
-    { page: 'terms', title: 'المصطلحات', sub: `${INV_TERMS[state.prefs.invTerm]?.label} · ${GRID_TERMS[state.prefs.gridTerm]?.label}`, icon: icons.tag, color: 'c-slate' },
-    { page: 'batcfg', title: 'البطارية والحسابات', sub: state.prefs.batteryAh ? `السعة ${state.prefs.batteryAh} أمبير ساعة` : 'أدخل سعة البطارية لحساب المدة المتبقية', icon: icons.battery, color: 'c-green' },
-    { page: 'conn', title: 'الاتصال والتحديث', sub: `تحديث كل ${state.prefs.pollSec} ثانية`, icon: icons.wifi, color: 'c-sky' },
-    { page: 'account', title: 'الجهاز والحساب', sub: state.demo ? 'وضع تجريبي' : state.session?.usr || '', icon: icons.user, color: 'c-amber' },
-    { page: 'about', title: 'حول التطبيق', sub: 'طاقتي · الإصدار ' + VERSION, icon: icons.info, color: 'c-pink' },
+    { page: 'edit', title: 'إعدادات الرافع', sub: 'تغيير الأولويات وتيارات الشحن عن بُعد', icon: icons.wrench, color: 'c-pink' },
+    { page: 'tips', title: 'النصائح', sub: 'نصائح لجهازك، واستخدام الرافع وبطاريات الليثيوم والسلامة', icon: icons.bulb, color: 'c-amber', badge: urgent ? `${urgent} مهم` : '' },
+    { page: 'monitor', title: 'المراقبة والبطارية', sub: `${state.prefs.batteryAh ? `البطارية ${state.prefs.batteryAh} أمبير ساعة` : 'أدخل سعة البطارية'} · تحديث كل ${state.prefs.pollSec} ثانية`, icon: icons.gauge, color: 'c-green' },
+    { page: 'custom', title: 'المظهر والمصطلحات', sub: `${themeName} · ${INV_TERMS[state.prefs.invTerm]?.label} · ${GRID_TERMS[state.prefs.gridTerm]?.label}`, icon: icons.moon, color: 'c-violet' },
+    { page: 'account', title: 'الحساب', sub: state.demo ? 'وضع تجريبي' : state.session?.usr || '', icon: icons.user, color: 'c-sky' },
+    { page: 'about', title: 'حول التطبيق', sub: 'طاقتي · الإصدار ' + VERSION, icon: icons.info, color: 'c-slate' },
   ])}
   <p class="foot">تطوير: حسين محمد علي الطويل</p>`;
 }
+
+function pageCustom() {
+  return `<section class="card"><div class="card-h"><h2>المظهر</h2></div>${pageTheme()}</section>${pageTerms()}`;
+}
+AFTER.custom = () => { AFTER.theme(); AFTER.terms(); };
+
+function pageMonitor() {
+  return `<section class="card"><div class="card-h"><h2>البطارية</h2></div>${pageBatCfg()}</section>
+    <section class="card"><div class="card-h"><h2>الاتصال والتحديث</h2></div>${pageConn()}</section>`;
+}
+AFTER.monitor = () => bindPrefs($('#view'));
 
 function pageTheme() {
   const opt = (v, label, ic) => `<button class="theme-opt ${state.prefs.theme === v ? 'on' : ''}" data-theme="${v}">${ic}<b>${label}</b></button>`;
@@ -1396,32 +1446,31 @@ AFTER.terms = () => {
       state.prefs[k] = v;
       savePrefs();
       L = makeLocalizer(state.prefs);
+      state.tab = 'more';
+      state.page = 'custom';
       startApp();
-      navigate('more', 'terms');
     };
   });
 };
 
 function pageBatCfg() {
   const rated = state.model?.ratedV;
-  return `<section class="card"><div class="form">
+  return `<div class="form">
       ${numField('batteryAh', 'سعة البطارية', 'أمبير ساعة', 10, 5000, 'مثال: 200')}
       ${numField('cutoffSoc', 'أدنى نسبة مسموح التفريغ إليها', '%', 0, 60)}
-    </div></section>
+    </div>
     <p class="hint">تُستخدم السعة مع جهد البطارية المقنّن ${rated ? `(${rated} فولت من الرافع)` : `(${nominalV(state.model)} فولت، مقدّر من جهد البطارية)`} لحساب المدة المتبقية للتفريغ أو الشحن. بدون السعة لا يعرض التطبيق أي تقدير حتى لا يكون مضلّلاً.</p>
     <p class="hint">إذا كانت لديك عدة بطاريات على التوازي فاجمع سعاتها (مثلاً بطاريتان 100 أمبير = 200).</p>`;
 }
-AFTER.batcfg = () => bindPrefs($('#view'));
 
 function pageConn() {
-  return `<section class="card"><div class="form">
+  return `<div class="form">
       ${numField('pollSec', 'تحديث البيانات كل', 'ثانية', 10, 600)}
       ${numField('staleMin', 'اعتبار الرافع غير متصل بعد', 'دقيقة', 5, 180)}
-    </div></section>
+    </div>
     <p class="hint">يرسل الرافع قراءة جديدة إلى الخادم كل بضع دقائق. إذا مرّت المدة أعلاه دون قراءة جديدة يُعرض الرافع «غير متصل» وتتوقف الحسابات المبنية على القيم الحية.</p>
     <p class="hint">آخر بيانات تُحفظ على الهاتف وتظهر حتى بدون إنترنت، مع توضيح وقتها.</p>`;
 }
-AFTER.conn = () => bindPrefs($('#view'));
 
 function pageAccount() {
   const d = device();
@@ -1475,12 +1524,29 @@ async function boot() {
   applyTheme();
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { if (state.prefs.theme === 'auto') { applyTheme(); if (state.session || state.demo) render(); } });
   if (Capacitor.isNativePlatform()) {
-    CapApp.addListener('resume', () => { if (state.session || state.demo) refresh(); });
+    CapApp.addListener('resume', async () => {
+      if (!state.session && !state.demo) return;
+      await takeOverFromBackground();
+      renderHeader();
+      refresh();
+      startPolling();
+    });
+    // في الخلفية نوقف المراقبة من الواجهة ونسلّمها للفحص الأصلي حتى لا تتكرر التنبيهات
+    CapApp.addListener('pause', () => {
+      stopPolling();
+      if (state.session && !state.demo) syncMonitor();
+    });
     CapApp.addListener('backButton', back);
     if (state.prefs.notify) LocalNotifications.requestPermissions().catch(() => {});
   }
+  await migrateSession();
+  state.session = await secure.get('session').catch(() => null);
+  api = new WatchPowerApi(state.session || {});
   if (state.demo || (state.session?.token && state.devices.length)) startApp();
   else renderLogin();
 }
+
+// للاختبارات الآلية في المتصفح فقط
+if (!isNative) window.__nav = navigate;
 
 boot();
