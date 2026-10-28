@@ -1,0 +1,10 @@
+{
+  "appId": "com.taqati.solar",
+  "appName": "طاقتي",
+  "webDir": "www",
+  "android": { "backgroundColor": "#070d1d" },
+  "plugins": {
+    "CapacitorHttp": { "enabled": true },
+    "LocalNotifications": { "iconColor": "#fbbf24" }
+  }
+}

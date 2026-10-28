@@ -1,0 +1,27 @@
+{
+  "name": "taqati-solar",
+  "version": "1.0.0",
+  "private": true,
+  "description": "طاقتي - مراقبة منظومة الطاقة الشمسية (متوافق مع حسابات WatchPower)",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "sync": "npm run build && npx cap sync android",
+    "serve": "npm run build && npx http-server www -p 8080 -c-1",
+    "apk": "npm run sync && cd android && ./gradlew assembleDebug"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.0.0",
+    "@capacitor/app": "^8.0.0",
+    "@capacitor/core": "^8.0.0",
+    "@capacitor/local-notifications": "^8.0.0",
+    "@capacitor/preferences": "^8.0.0",
+    "@capacitor/status-bar": "^8.0.0",
+    "@fontsource/cairo": "^5.0.0",
+    "chart.js": "^4.4.0"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^8.0.0",
+    "esbuild": "^0.25.12"
+  }
+}
