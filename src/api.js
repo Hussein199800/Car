@@ -67,11 +67,16 @@ export class WatchPowerApi {
   }
 
   async login(usr, password) {
+    return this.loginWithHash(usr, await sha1(password));
+  }
+
+  // الدخول ببصمة كلمة المرور (من النسخة الاحتياطية) دون معرفة كلمة المرور نفسها
+  async loginWithHash(usr, pwdHash, preferred = 'dess') {
     this.usr = usr.trim();
-    this.pwdHash = await sha1(password);
+    this.pwdHash = pwdHash;
     let lastErr;
     // بعض الحسابات تعمل على خادم DessMonitor وأخرى على ShineMonitor
-    for (const profile of ['dess', 'shine']) {
+    for (const profile of preferred === 'shine' ? ['shine', 'dess'] : ['dess', 'shine']) {
       this.profile = profile;
       try {
         await this.authenticate();

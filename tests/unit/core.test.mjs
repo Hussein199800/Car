@@ -237,3 +237,71 @@ test('طلبات متزامنة بعد انتهاء الرمز تسجّل الد
   await api.authenticate();
   assert.equal(logins, 2, 'بعد انتهاء المحاولة يمكن تسجيل الدخول من جديد');
 });
+
+// ---------- الإصدار 3.4: النسخة الاحتياطية والتحديثات ----------
+import { encryptBackup, decryptBackup, makePayload, cleanPrefs, cleanCalc, BackupError } from '../../src/backup.js';
+import { isNewer, parseVer, fetchLatest } from '../../src/update.js';
+import { readFileSync } from 'node:fs';
+
+const SESSION = { usr: 'tester', pwdHash: 'e5e9fa1ba31ecd1ae84f75caaa474f3a663f05f4', profile: 'shine', token: 'T', secret: 'S' };
+
+test('النسخة الاحتياطية تُشفَّر وتُستعاد بالرمز الصحيح فقط', async () => {
+  const text = await encryptBackup(makePayload({ session: SESSION, prefs: { batteryAh: 200 }, calc: { list: [] }, devSn: 'SN1' }), 'abc123');
+  assert.ok(!text.includes('tester') && !text.includes(SESSION.pwdHash), 'لا يظهر الحساب أو البصمة في الملف');
+  assert.ok(!text.includes('"T"') && !JSON.parse(text).data.includes('secret'));
+  const b = await decryptBackup(text, 'abc123');
+  assert.equal(b.account.usr, 'tester');
+  assert.equal(b.account.pwdHash, SESSION.pwdHash);
+  assert.equal(b.account.profile, 'shine');
+  assert.equal(b.account.token, undefined, 'رمز الجلسة المؤقت لا يُحفظ');
+  assert.equal(b.prefs.batteryAh, 200);
+  await assert.rejects(decryptBackup(text, 'abc124'), (e) => e instanceof BackupError && /الرمز غير صحيح/.test(e.message));
+  const f = JSON.parse(text); f.data = f.data.slice(0, -4) + (f.data.endsWith('AAAA') ? 'BBBB' : 'AAAA');
+  await assert.rejects(decryptBackup(JSON.stringify(f), 'abc123'), BackupError, 'أي تعديل في الملف يُرفض');
+  await assert.rejects(decryptBackup('{"x":1}', 'abc123'), /ليس نسخة احتياطية/);
+  await assert.rejects(encryptBackup({}, '123'), /6 أحرف/);
+});
+
+test('الاستعادة لا تقبل إلا إعدادات معروفة ضمن حدودها', () => {
+  const defs = { pollSec: 30, batteryAh: null, theme: 'auto', notify: true };
+  const p = cleanPrefs(defs, { pollSec: 0, batteryAh: 99999, theme: 'dark', notify: 'yes', evil: '<script>' });
+  assert.deepEqual(p, { pollSec: 10, batteryAh: 5000, theme: 'dark' });
+  const c = cleanCalc({ mode: 'ac', eff: 90, list: [] }, { mode: 'hack', eff: 500, list: [{ e: '<img src=x onerror=alert(1)>', name: 'x'.repeat(200), w: -5, qty: 3.6, hours: 99 }, null, 'bad'] });
+  assert.equal(c.mode, undefined);
+  assert.equal(c.eff, 99);
+  assert.equal(c.list.length, 1);
+  assert.equal(c.list[0].e.length <= 8, true);
+  assert.equal(c.list[0].name.length, 60);
+  assert.deepEqual([c.list[0].w, c.list[0].qty, c.list[0].hours], [1, 4, 24]);
+});
+
+test('مقارنة الإصدارات', () => {
+  assert.deepEqual(parseVer('v3.4.0'), [3, 4, 0]);
+  assert.equal(isNewer('v3.10.0', '3.9.9'), true);
+  assert.equal(isNewer('3.4.0', '3.4.0'), false);
+  assert.equal(isNewer('3.3.9', '3.4.0'), false);
+  assert.equal(isNewer('garbage', '3.4.0'), false);
+});
+
+test('قراءة آخر إصدار من GitHub واختيار ملف APK من المستودع نفسه فقط', async () => {
+  const ok = (body, status = 200) => async () => ({ status, ok: status < 300, json: async () => body });
+  const rel = { tag_name: 'v3.5.0', body: 'ملاحظات', published_at: '2026-11-01T10:00:00Z', assets: [
+    { name: 'taqati-debug.apk', browser_download_url: 'https://github.com/Hussein199800/Car/releases/download/v3.5.0/taqati-debug.apk' },
+    { name: 'taqati-3.5.0.apk', size: 4800000, browser_download_url: 'https://github.com/Hussein199800/Car/releases/download/v3.5.0/taqati-3.5.0.apk' },
+  ] };
+  const r = await fetchLatest(ok(rel));
+  assert.equal(r.version, '3.5.0');
+  assert.match(r.url, /taqati-3\.5\.0\.apk$/);
+  assert.equal(await fetchLatest(ok({}, 404)), null, 'لا يوجد إصدار منشور بعد');
+  assert.equal(await fetchLatest(ok({ ...rel, assets: [{ name: 'x.apk', browser_download_url: 'https://evil.example/x.apk' }] })), null);
+  await assert.rejects(fetchLatest(ok({}, 403)), /مشغول/);
+  await assert.rejects(fetchLatest(async () => { throw new Error('net'); }), /تحقق من الإنترنت/);
+});
+
+test('رقم الإصدار موحّد في package.json والتطبيق وأندرويد (وإلا يظهر تحديث وهمي)', () => {
+  const ver = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url))).version;
+  const main = readFileSync(new URL('../../src/main.js', import.meta.url), 'utf8').match(/const VERSION = '([\d.]+)'/)[1];
+  const gradle = readFileSync(new URL('../../android/app/build.gradle', import.meta.url), 'utf8').match(/versionName "([\d.]+)"/)[1];
+  assert.equal(main, ver);
+  assert.equal(gradle, ver);
+});
