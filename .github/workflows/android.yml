@@ -3,7 +3,6 @@ name: بناء تطبيق أندرويد
 on:
   push:
     branches: ['**']
-    paths-ignore: ['sakina/**', '.github/workflows/sakina-android.yml']
   workflow_dispatch:
 
 jobs:
