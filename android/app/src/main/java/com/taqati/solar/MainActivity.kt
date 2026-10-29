@@ -7,6 +7,7 @@ class MainActivity : BridgeActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         registerPlugin(SecureStorePlugin::class.java)
         registerPlugin(MonitorPlugin::class.java)
+        registerPlugin(DeviceToolsPlugin::class.java)
         super.onCreate(savedInstanceState)
     }
 

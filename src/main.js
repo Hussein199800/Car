@@ -15,7 +15,7 @@ import {
 } from './data.js';
 import { demoPoints, demoHistory } from './demo.js';
 import { icons } from './icons.js';
-import { isNative, secure, migrateSession, monitor } from './native.js';
+import { isNative, secure, migrateSession, monitor, deviceTools, APPS } from './native.js';
 import { settingInfo, optionAr, hintRange } from './settings-info.js';
 import { viewCalc, bindCalc, defaultsCalc } from './calc.js';
 import { TIP_SECTIONS, smartTips, tipOfDay } from './tips.js';
@@ -24,7 +24,7 @@ import { makeLocalizer, INV_TERMS, GRID_TERMS } from './terms.js';
 Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, CategoryScale, Filler, Tooltip, Legend);
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '3.1.0';
+const VERSION = '3.2.0';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -169,9 +169,14 @@ function renderLogin(msg = '') {
       <p class="hint">يُستخدم نفس حساب تطبيق WatchPower. لا تُحفظ كلمة المرور على الهاتف، بل بصمتها المشفّرة فقط.</p>
       <p class="hint">«طاقتي» تطبيق مستقل، وغير تابع لشركة WatchPower أو الشركات المصنّعة للأجهزة.</p>
     </form>
+    <div class="login-links">
+      <button class="btn ghost" type="button" data-guide="register">${icons.user} إنشاء حساب جديد</button>
+      <button class="btn ghost" type="button" data-guide="wifi">${icons.wifi} إعداد وحدة الواي فاي</button>
+    </div>
     <p class="foot">تطوير: حسين محمد علي الطويل</p>
   </div>`;
 
+  document.querySelectorAll('[data-guide]').forEach((b) => { b.onclick = () => renderGuideStandalone(b.dataset.guide); });
   $('#pwdEye').onclick = () => {
     const i = $('[name=pwd]');
     const show = i.type === 'password';
@@ -320,7 +325,7 @@ function banner() {
 const PAGE_TITLES = {
   load: 'الحمل', battery: 'البطارية', solar: 'الألواح الشمسية', grid: 'الكهرباء الوطنية', all: 'كل القراءات',
   day: 'التقرير اليومي', week: 'التقرير الأسبوعي', month: 'التقرير الشهري', compare: 'مقارنة الأداء', export: 'تصدير البيانات',
-  rules: 'شروط التنبيه', device: 'الرافع', edit: 'إعدادات الرافع',
+  rules: 'شروط التنبيه', device: 'الرافع', edit: 'إعدادات الرافع', setup: 'ربط الجهاز والحساب',
   tips: 'النصائح', smart: 'نصائح لجهازك الآن', ...Object.fromEntries(TIP_SECTIONS.map((t) => [t.id, t.title])),
   custom: 'المظهر والمصطلحات', monitor: 'المراقبة والبطارية', account: 'الحساب', about: 'حول التطبيق',
 };
@@ -578,6 +583,27 @@ function eta(m) {
 const batState = (m) => (m.stale ? 'لا توجد قراءة حيّة' : m.batW > 10 ? `تشحن بقدرة ${fmt.w(m.batW)}` : m.batW < -10 ? `تُفرّغ بقدرة ${fmt.w(-m.batW)}` : 'في وضع الراحة');
 
 // ================= الرئيسية =================
+// خط تدفق بأسهم تتحرك باتجاه الطاقة الفعلي، وسرعتها تزيد مع القدرة.
+// reverse يعني أن الطاقة تسير عكس اتجاه رسم الخط (مثل خروجها من البطارية عند التفريغ).
+function flowLine(id, d, on, watts, reverse) {
+  const track = `<path class="wire" d="${d}"/>`;
+  if (!on) return track;
+  const dur = Math.max(0.7, 2.6 - Math.log10(Math.abs(watts || 50) + 1) * 0.5).toFixed(2);
+  const keys = reverse ? 'keyPoints="1;0" keyTimes="0;1" calcMode="linear" rotate="auto-reverse"' : 'rotate="auto"';
+  const arrows = [0, 1, 2].map((i) => `
+    <path class="arrow a-${id}" d="M-4.5 -5 L1.5 0 L-4.5 5">
+      <animateMotion dur="${dur}s" begin="${(-i * dur / 3).toFixed(2)}s" repeatCount="indefinite" ${keys}><mpath href="#fp-${id}"/></animateMotion>
+    </path>`).join('');
+  return `${track}<path id="fp-${id}" class="flow-line f-${id}" d="${d}"/>${arrows}`;
+}
+
+// اتجاه البطارية مكتوباً تحت النسبة حتى يكون واضحاً بلا حاجة لمتابعة الحركة
+function batTag(m, live) {
+  if (!live || m.batW === null) return '<small>البطارية</small>';
+  if (m.batW > 10) return `<small class="bt chg">↓ تشحن ${fmt.wShort(m.batW)}</small>`;
+  if (m.batW < -10) return `<small class="bt dis">↑ تُفرّغ ${fmt.wShort(-m.batW)}</small>`;
+  return '<small>مستقرة</small>';
+}
 function viewHome() {
   const m = state.model;
   if (!m) {
@@ -591,7 +617,6 @@ function viewHome() {
   const isBat = /battery/i.test(m.mode || '') || (m.batW ?? 0) < -10;
   const isLine = /line|bypass/i.test(m.mode || '');
   const live = !m.stale;
-  const flow = (on, w) => (live && on ? `on" style="animation-duration:${Math.max(0.35, 2.4 - Math.log10(Math.abs(w || 50) + 1) * 0.55)}s` : '');
   const modeText = m.stale ? 'غير متصل' : m.mode ? trValue(m.mode) : isLine ? 'وضع الكهرباء الوطنية' : isBat ? 'وضع البطارية' : '—';
   const modeCls = m.stale ? 'm-off' : /fault/i.test(m.mode || '') ? 'm-fault' : isBat ? 'm-bat' : isLine ? 'm-line' : '';
   const soc = Math.max(0, Math.min(100, m.soc ?? 0));
@@ -604,19 +629,20 @@ function viewHome() {
   <div class="home-grid"><div class="col-a">
   <div class="mode-pill ${modeCls}">${esc(modeText)}</div>
   <section class="card flow-card ${live ? '' : 'stale'}">
-    <svg viewBox="0 0 360 380" class="flow-svg">
+    <svg viewBox="0 0 360 380" class="flow-svg" aria-hidden="true">
       <circle cx="180" cy="190" r="85" class="glow"/>
-      <path class="wire" d="M180 124 L180 154"/><path class="flow f-solar ${flow((m.pvW ?? 0) > 5, m.pvW)}" d="M180 124 L180 154"/>
-      <path class="wire" d="M78 190 L144 190"/><path class="flow f-grid ${flow(isLine && m.gridOn, 300)}" d="M78 190 L144 190"/>
-      <path class="wire" d="M216 190 L282 190"/><path class="flow f-load ${flow((m.outW ?? 0) > 5, m.outW)}" d="M216 190 L282 190"/>
-      <path class="wire" d="M180 226 L180 264"/><path class="flow f-bat ${flow(Math.abs(m.batW ?? 0) > 10, m.batW)} ${(m.batW ?? 0) < 0 ? 'rev' : ''}" d="M180 226 L180 264"/>
+      ${flowLine('solar', 'M180 124 L180 154', live && (m.pvW ?? 0) > 5, m.pvW, false)}
+      ${flowLine('grid', 'M78 190 L144 190', live && isLine && m.gridOn, 300, false)}
+      ${flowLine('load', 'M216 190 L282 190', live && (m.outW ?? 0) > 5, m.outW, false)}
+      ${flowLine('bat', 'M180 226 L180 264', live && Math.abs(m.batW ?? 0) > 10, m.batW, (m.batW ?? 0) < 0)}
     </svg>
-    <div class="node n-solar ${(m.pvW ?? 0) > 5 && live ? '' : 'dim'}"><b><bdi>${fmt.wShort(m.pvW)}</bdi></b><small>الألواح</small><div class="ic">${icons.panel}</div></div>
-    <div class="node n-grid ${m.gridOn && live ? '' : 'dim'}"><div class="ic">${icons.grid}</div><b><bdi>${m.gridOn ? numAr(m.gridV) + 'V' : 'مقطوعة'}</bdi></b><small>الوطنية</small></div>
-    <div class="node n-load ${(m.outW ?? 0) > 5 && live ? '' : 'dim'}"><div class="ic">${icons.home}</div><b><bdi>${fmt.wShort(m.outW)}</bdi></b><small>الحمل</small></div>
-    <div class="node n-bat ${live ? '' : 'dim'}"><div class="ic">${icons.battery}</div><b><bdi>${m.soc ?? '—'}%</bdi></b><small>البطارية</small></div>
-    <div class="node n-inv"><div class="ic">${icons.inverter}</div></div>
+    <button class="node n-solar ${(m.pvW ?? 0) > 5 && live ? '' : 'dim'}" data-page="solar" aria-label="تفاصيل الألواح"><b><bdi>${fmt.wShort(m.pvW)}</bdi></b><small>الألواح</small><span class="ic">${icons.panel}</span></button>
+    <button class="node n-grid ${m.gridOn && live ? '' : 'dim'}" data-page="grid" aria-label="تفاصيل الكهرباء الوطنية"><span class="ic">${icons.grid}</span><b><bdi>${m.gridOn ? numAr(m.gridV) + 'V' : 'مقطوعة'}</bdi></b><small>${live && isLine && m.gridOn ? 'تغذّي البيت' : 'الوطنية'}</small></button>
+    <button class="node n-load ${(m.outW ?? 0) > 5 && live ? '' : 'dim'}" data-page="load" aria-label="تفاصيل الحمل"><span class="ic">${icons.home}</span><b><bdi>${fmt.wShort(m.outW)}</bdi></b><small>الحمل</small></button>
+    <button class="node n-bat ${live ? '' : 'dim'}" data-page="battery" aria-label="تفاصيل البطارية"><span class="ic">${icons.battery}</span><b><bdi>${m.soc ?? '—'}%</bdi></b>${batTag(m, live)}</button>
+    <button class="node n-inv" data-page="device" aria-label="تفاصيل الرافع"><span class="ic">${icons.inverter}</span></button>
   </section>
+  <p class="flow-hint">اضغط على أي عنصر في المخطط لعرض تفاصيله</p>
 
   <section class="card battery-card ${live ? '' : 'stale'}">
     <div class="ring">
@@ -1459,10 +1485,84 @@ function viewTips() {
   ${gridCards(TIP_SECTIONS.map((t) => ({ page: 'tips/' + t.id, title: t.title, sub: t.sub, icon: icons[t.icon], color: t.color, value: '', badge: `${t.tips.length} نصيحة` })))}`;
 }
 
+// ================= ربط الجهاز والحساب =================
+// التسجيل وإعداد وحدة الواي فاي يتمّان ببروتوكول خاص بالشركة المصنّعة غير منشور،
+// فلا نقلّده بأزرار وهمية: نشرح الخطوات، ونفتح إعدادات الهاتف والتطبيق الرسمي مباشرة،
+// ثم نتحقق هنا فعلياً من وصول القراءات بعد الربط.
+function setupGuide(loggedIn) {
+  const pn = loggedIn ? device()?.pn : '';
+  const m = state.model;
+  const status = !loggedIn || state.demo ? '' : !m
+    ? '<p class="hint">لا توجد قراءات بعد.</p>'
+    : m.stale
+      ? `<div class="verdict bad">لم تصل قراءة جديدة منذ ${esc(fmt.ago(m.age).replace('قبل ', ''))}. إذا أنهيت الخطوات فانتظر 3–5 دقائق ثم اضغط «تحقّق الآن».</div>`
+      : `<div class="verdict ok">✓ الوحدة متصلة وترسل القراءات — آخر قراءة ${esc(fmt.ago(m.age))}</div>`;
+  const step = (n, title, body, btn = '') => `<li class="gstep"><span class="gn">${n}</span><div><b>${title}</b><p>${body}</p>${btn}</div></li>`;
+  return `
+  <section class="hero c-sky"><span class="g-deco">${icons.wifi}</span><div class="h-ic">${icons.wifi}</div>
+    <b style="font-size:22px">ربط الجهاز والحساب</b><span>إنشاء حساب وربط وحدة الواي فاي بشبكة البيت</span></section>
+  <div class="banner demo">${icons.info}<span><b>لماذا عبر تطبيق WatchPower؟</b>التسجيل وبرمجة وحدة الواي فاي يتمّان بنظام خاص بالشركة المصنّعة غير منشور. لذلك يرشدك «طاقتي» خطوة بخطوة ويفتح لك الشاشات المطلوبة، وبعد الربط يعمل بنفس الحساب.</span></div>
+
+  <details class="card fold" ${loggedIn ? '' : state.guideOpen === 'register' ? 'open' : ''}><summary><h2>${icons.user} إنشاء حساب جديد</h2>${icons.chevL}</summary>
+    <ol class="gsteps">
+      ${step(1, 'جهّز رقم الوحدة (PN)', 'تجده على ملصق وحدة الواي فاي المركّبة في الإنفرتر، ويبدأ عادة بحرف W ويتكوّن من 14 خانة.')}
+      ${step(2, 'سجّل من التطبيق الرسمي', 'في شاشة الدخول اضغط «Register» وأدخل اسم المستخدم وكلمة المرور ورقم PN.', `<button class="btn primary" data-open-app="wifi">${icons.user} فتح WatchPower للتسجيل</button>`)}
+      ${step(3, 'ادخل بنفس الحساب هنا', 'ارجع إلى «طاقتي» وسجّل الدخول بنفس اسم المستخدم وكلمة المرور.')}
+    </ol>
+    <p class="hint">كل وحدة واي فاي تُسجَّل بحساب واحد فقط. إذا ظهر أن الرقم مسجّل مسبقاً فيجب حذفه من الحساب القديم أولاً، أو التواصل مع البائع.</p>
+  </details>
+
+  <details class="card fold" ${loggedIn || state.guideOpen === 'wifi' ? 'open' : ''}><summary><h2>${icons.wifi} ربط الوحدة بشبكة البيت (Wi-Fi Config)</h2>${icons.chevL}</summary>
+    <ol class="gsteps">
+      ${step(1, 'شغّل الإنفرتر وقرّب الهاتف منه', 'تحتاج الوحدة بضع دقائق بعد التشغيل حتى تظهر شبكتها.')}
+      ${step(2, 'اتصل بشبكة الوحدة', `من إعدادات الواي فاي اختر الشبكة التي اسمها نفس رقم الوحدة${pn ? ` (<bdi dir="ltr">${esc(pn)}</bdi>)` : ''}. كلمة المرور الافتراضية غالباً <bdi dir="ltr">12345678</bdi> وقد تختلف حسب الطراز، فراجع الملصق.`,
+        isNative ? `<button class="btn ghost" data-open="wifi-settings">${icons.wifi} فتح إعدادات الواي فاي</button>` : '')}
+      ${step(3, 'أدخل شبكة بيتك في WatchPower', 'افتح WatchPower، واضغط «Wi-Fi Config» في شاشة الدخول، ثم اختر شبكة بيتك واكتب كلمة مرورها. أغلب هذه الوحدات تعمل على شبكات 2.4 GHz فقط.', `<button class="btn primary" data-open-app="wifi">${icons.wifi} فتح WatchPower</button>`)}
+      ${step(4, 'أعد هاتفك لشبكة البيت وانتظر', 'تحتاج الوحدة 3–5 دقائق لتتصل بالإنترنت وترسل أول قراءة.')}
+      ${loggedIn ? step(5, 'تحقّق من الربط', 'يتأكد «طاقتي» من وصول قراءات جديدة من جهازك.', `${status}<button class="btn ghost" id="checkLink">${icons.refresh} تحقّق الآن</button>`) : ''}
+    </ol>
+  </details>
+
+  <details class="card fold"><summary><h2>${icons.bolt} أجهزة البلوتوث (BLE network)</h2>${icons.chevL}</summary>
+    <p class="f-desc">بعض الإنفرترات تأتي بوحدة بلوتوث بدل الواي فاي. هذه الوحدات تتصل بالهاتف القريب فقط ولا ترسل بياناتها إلى الإنترنت، لذلك تُدار من تطبيق «WatchPower BLE» ولا يستطيع «طاقتي» قراءتها عن بُعد.</p>
+    <div class="row-btns">
+      ${isNative ? `<button class="btn ghost" data-open="bt-settings">${icons.bolt} إعدادات البلوتوث</button>` : ''}
+      <button class="btn primary" data-open-app="ble">فتح WatchPower BLE</button>
+    </div>
+  </details>`;
+}
+
+async function bindGuide() {
+  document.querySelectorAll('[data-open-app]').forEach((b) => {
+    b.onclick = async () => {
+      const r = await deviceTools.openApp(APPS[b.dataset.openApp]).catch(() => 'none');
+      if (r === 'store' || r === 'web') toast('التطبيق غير مثبت، فُتحت صفحته في المتجر');
+      if (r === 'none') toast('تعذّر فتح التطبيق أو المتجر', 'bad');
+    };
+  });
+  const ws = $('[data-open="wifi-settings"]');
+  if (ws) ws.onclick = async () => { if (!(await deviceTools.openWifiSettings().catch(() => false))) toast('افتح إعدادات الواي فاي من الهاتف يدوياً', 'bad'); };
+  const bt = $('[data-open="bt-settings"]');
+  if (bt) bt.onclick = async () => { if (!(await deviceTools.openBluetoothSettings().catch(() => false))) toast('افتح إعدادات البلوتوث من الهاتف يدوياً', 'bad'); };
+  const ck = $('#checkLink');
+  if (ck) ck.onclick = async () => { ck.disabled = true; await refresh(true); if (state.page === 'setup') render(); };
+}
+AFTER.setup = bindGuide;
+
+// نفس الدليل من شاشة الدخول قبل تسجيل الدخول
+function renderGuideStandalone(which) {
+  state.guideOpen = which;
+  document.getElementById('app').innerHTML = `
+    <header class="topbar"><button class="icon-btn" id="guideBack" aria-label="رجوع">${icons.arrowBack}</button><div class="page-title">ربط الجهاز والحساب</div><span></span></header>
+    <main id="view"><div class="page-anim">${L(setupGuide(false))}</div></main>`;
+  $('#guideBack').onclick = () => renderLogin();
+  bindGuide();
+}
+
 // ================= تبويب المزيد =================
 function viewMore() {
   if (state.page?.startsWith('tips')) return viewTips();
-  const pages = { edit: pageEdit, custom: pageCustom, monitor: pageMonitor, account: pageAccount, about: pageAbout };
+  const pages = { setup: () => setupGuide(true), edit: pageEdit, custom: pageCustom, monitor: pageMonitor, account: pageAccount, about: pageAbout };
   if (state.page && pages[state.page]) return pages[state.page]();
   const themeName = { auto: 'تلقائي', dark: 'ليلي', light: 'نهاري' }[state.prefs.theme];
   const urgent = smartTips(state.model, state.prefs).filter((t) => t.level === 'bad' || t.level === 'warn').length;
@@ -1474,6 +1574,7 @@ function viewMore() {
   </section>
   ${listCards([
     { page: 'edit', title: 'إعدادات الرافع', sub: 'تغيير الأولويات وتيارات الشحن عن بُعد', icon: icons.wrench, color: 'c-pink' },
+    { page: 'setup', title: 'ربط الجهاز والحساب', sub: 'إنشاء حساب، إعداد الواي فاي (Wi-Fi Config)، البلوتوث', icon: icons.wifi, color: 'c-sky' },
     { page: 'tips', title: 'النصائح', sub: 'نصائح لجهازك، واستخدام الرافع وبطاريات الليثيوم والسلامة', icon: icons.bulb, color: 'c-amber', badge: urgent ? `${urgent} مهم` : '' },
     { page: 'monitor', title: 'المراقبة والبطارية', sub: `${state.prefs.batteryAh ? `البطارية ${state.prefs.batteryAh} أمبير ساعة` : 'أدخل سعة البطارية'} · تحديث كل ${state.prefs.pollSec} ثانية`, icon: icons.gauge, color: 'c-green' },
     { page: 'custom', title: 'المظهر والمصطلحات', sub: `${themeName} · ${INV_TERMS[state.prefs.invTerm]?.label} · ${GRID_TERMS[state.prefs.gridTerm]?.label}`, icon: icons.moon, color: 'c-violet' },

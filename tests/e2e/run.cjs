@@ -100,6 +100,13 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
           queryDeviceLastData: { err: 0, dat: points(Date.now() - 60000) },
         })[a],
       });
+      check('روابط إنشاء حساب وإعداد الواي فاي في شاشة الدخول', (await page.$$('[data-guide]')).length === 2);
+      await page.click('[data-guide=wifi]');
+      check('دليل الواي فاي يفتح قبل الدخول', (await text(page, '#view')).includes('Wi-Fi Config') && (await text(page, '#view')).includes('12345678'));
+      const [popup] = await Promise.all([page.waitForEvent('popup', { timeout: 3000 }).catch(() => null), page.click('.fold[open] [data-open-app=wifi]')]);
+      check('زر WatchPower يفتح صفحة التطبيق الحقيقي', !!popup && popup.url().includes('wifiapp.volfw.watchpower'));
+      if (popup) await popup.close();
+      await page.click('#guideBack');
       await page.fill('[name=usr]', 'tester');
       await page.fill('[name=pwd]', 'secret');
       await page.click('#pwdEye');
@@ -131,7 +138,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.waitForSelector('.banner.off');
       check('يظهر «غير متصل» للقراءة القديمة', (await text(page, '.banner.off')).includes('غير متصل'));
       check('بطاقات التفاصيل رمادية', !!(await page.$('.gcards.stale')));
-      check('لا حركة تدفق مع قراءة قديمة', !(await page.$('.flow.on')));
+      check('لا حركة تدفق مع قراءة قديمة', !(await page.$('.flow-line')) && !(await page.$('.arrow')));
       await page.screenshot({ path: path.join(OUT, 'stale-dark.png'), fullPage: true });
       check('بلا أخطاء JavaScript (انقطاع)', page.errors.length === 0, page.errors.join(' | '));
       await page.context().close();
@@ -142,8 +149,30 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       const page = await newPage(browser, { api: lastData(2) });
       await page.waitForSelector('.flow-card');
       check('النقطة خضراء والقراءة حديثة', !!(await page.$('.dev .dot.on')) && !(await page.$('.banner.off')));
-      check('حركة تدفق البطارية والحمل', (await page.$$('.flow.on')).length >= 2);
+      check('حركة تدفق البطارية والحمل', (await page.$$('.flow-line')).length >= 2);
+      // البيانات الحقيقية: تفريغ 36 أمبير → الأسهم تخرج من البطارية (عكس اتجاه الخط)
+      const batAnim = await page.$eval('.a-bat animateMotion', (a) => ({ rot: a.getAttribute('rotate'), keys: a.getAttribute('keyPoints') }));
+      check('التفريغ: أسهم خارجة من البطارية', batAnim.rot === 'auto-reverse' && batAnim.keys === '1;0');
+      check('التفريغ مكتوب تحت البطارية', (await text(page, '.n-bat .bt')).includes('تُفرّغ'));
+      const loadAnim = await page.$eval('.a-load animateMotion', (a) => a.getAttribute('rotate'));
+      check('الحمل: أسهم داخلة إلى البيت', loadAnim === 'auto');
+      await page.click('.n-load'); await page.waitForTimeout(250);
+      check('الضغط على البيت يفتح تفاصيل الحمل', (await text(page, '.page-title')) === 'الحمل');
+      await page.click('#backBtn'); await page.click('.n-inv'); await page.waitForTimeout(250);
+      check('الضغط على الإنفرتر يفتح صفحته', (await text(page, '.page-title')).length > 0 && !!(await page.$('.fold')));
+      await page.click('#backBtn'); await page.click('.n-solar'); await page.waitForTimeout(250);
+      check('الضغط على الألواح يفتح تفاصيلها', (await text(page, '.page-title')) === 'الألواح الشمسية');
+      await page.click('#backBtn');
       check('ملاحظة عاجلة من النصائح لا تظهر بلا داعٍ', !(await page.$('.tip-banner')));
+      await page.context().close();
+    }
+
+    // 4ب) شحن: الأسهم تدخل البطارية
+    {
+      const page = await newPage(browser, { api: lastData(2, { 'Battery Charging Current': '12', 'Battery Discharge Current': '0', 'PV1 Charging Power': '900' }) });
+      await page.waitForSelector('.flow-card');
+      const a = await page.$eval('.a-bat animateMotion', (x) => x.getAttribute('rotate'));
+      check('الشحن: أسهم داخلة إلى البطارية', a === 'auto' && (await text(page, '.n-bat .bt')).includes('تشحن'));
       await page.context().close();
     }
 
@@ -242,7 +271,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
         reports: [null, 'day', 'week', 'month', 'compare', 'export'],
         calc: [null],
         alerts: [null, 'rules'],
-        more: [null, 'edit', 'tips', 'tips/smart', 'tips/lithium', 'monitor', 'custom', 'account', 'about'],
+        more: [null, 'setup', 'edit', 'tips', 'tips/smart', 'tips/lithium', 'monitor', 'custom', 'account', 'about'],
       };
       for (const [tab, pages] of Object.entries(PAGES)) {
         for (const pg of pages) {

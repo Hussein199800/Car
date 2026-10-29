@@ -8,7 +8,8 @@ export const icons = {
   grid: s('<path d="M12 2 7 22M12 2l5 20M8.5 9h7M7.6 13h8.8M6.5 17.5h11M9 5.5h6"/>'),
   home: s('<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/><path d="M10 20v-5h4v5"/>'),
   battery: s('<rect x="6" y="4" width="12" height="17" rx="2.2"/><path d="M10 2h4"/><path d="m12.8 8.5-2.6 4h3.6l-2.6 4"/>'),
-  inverter: s('<rect x="4" y="3" width="16" height="18" rx="2.5"/><path d="M8 8.5c1.2-1.6 2.8-1.6 4 0s2.8 1.6 4 0"/><path d="M8 15h8M8 18h5"/>'),
+  // إنفرتر: صندوق بشاشة، ورمز التيار المتردد (موجة) والمستمر (=) — ما يحوّله الجهاز
+  inverter: s('<rect x="3.5" y="2.5" width="17" height="19" rx="2.5"/><rect x="6.5" y="5.5" width="11" height="4.5" rx="1"/><path d="M6.5 15.2c.9-1.6 1.9-1.6 2.8 0s1.9 1.6 2.8 0"/><path d="M14.2 14h3.3M14.2 16.4h3.3"/><path d="M7 19h.01M17 19h.01"/>'),
   bolt: s('<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>'),
   chart: s('<path d="M3 3v18h18"/><path d="m7 15 4-5 3 3 5-7"/>'),
   bell: s('<path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15z"/><path d="M10 21a2 2 0 0 0 4 0"/>'),
