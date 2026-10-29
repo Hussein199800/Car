@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- أيقونة الإشعارات: هلال ونجمة بلون واحد -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#FFFFFFFF" android:pathData="M15.2,4.2A8.6,8.6 0,1 0,19.9 15.6A6.9,6.9 0,1 1,15.2 4.2z"/>
+    <path android:fillColor="#FFFFFFFF" android:pathData="M15.6,6.6l0.9,2.1 2.3,0.2 -1.8,1.5 0.6,2.2 -2,-1.2 -2,1.2 0.6,-2.2 -1.8,-1.5 2.3,-0.2z"/>
+</vector>

@@ -1,0 +1,58 @@
+name: بناء تطبيق سكينة (أندرويد)
+
+on:
+  push:
+    branches: ['**']
+    paths: ['sakina/**', '.github/workflows/sakina-android.yml']
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: sakina
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: sakina/package-lock.json
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - name: اختبارات الوحدة (المواقيت، القبلة، الهجري، المحتوى)
+        run: npm test
+      - run: npm run build && npx cap sync android
+
+      # نسخة موقّعة للنشر: تعمل فقط إذا أُضيف مفتاح التوقيع في أسرار المستودع
+      - name: Prepare signing key
+        id: sign
+        env:
+          KEYSTORE_B64: ${{ secrets.SAKINA_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/sakina.jks"
+            echo "path=$RUNNER_TEMP/sakina.jks" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build signed release APK
+        if: steps.sign.outputs.path != ''
+        working-directory: sakina/android
+        env:
+          SAKINA_KEYSTORE: ${{ steps.sign.outputs.path }}
+          SAKINA_KEYSTORE_PASSWORD: ${{ secrets.SAKINA_KEYSTORE_PASSWORD }}
+          SAKINA_KEY_ALIAS: sakina
+        run: chmod +x gradlew && ./gradlew assembleRelease --no-daemon && mv app/build/outputs/apk/release/app-release.apk ../sakina.apk
+      - name: Build debug APK (no signing key)
+        if: steps.sign.outputs.path == ''
+        working-directory: sakina/android
+        run: chmod +x gradlew && ./gradlew assembleDebug --no-daemon && mv app/build/outputs/apk/debug/app-debug.apk ../sakina-debug.apk
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: sakina-apk
+          path: sakina/sakina*.apk

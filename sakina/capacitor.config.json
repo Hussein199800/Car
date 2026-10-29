@@ -1,0 +1,10 @@
+{
+  "appId": "com.altaweel.sakina",
+  "appName": "سكينة",
+  "webDir": "www",
+  "android": { "backgroundColor": "#F5F7F5" },
+  "plugins": {
+    "LocalNotifications": { "smallIcon": "ic_stat_sakina", "iconColor": "#1F5E43" },
+    "StatusBar": { "overlaysWebView": false, "backgroundColor": "#F5F7F5", "style": "LIGHT" }
+  }
+}
