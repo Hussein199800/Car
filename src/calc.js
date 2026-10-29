@@ -150,7 +150,7 @@ function viewList(h, c, sysV) {
   const catalog = `<div class="appl">${APPLIANCES.map((a) => `<button class="appl-b" data-add="${a.id}"><span class="ae">${a.e}</span><b>${esc(a.name)}</b><small>${a.w} واط</small></button>`).join('')}</div>`;
   const rows = c.list.length ? c.list.map((it, i) => `
     <div class="ld" data-i="${i}">
-      <div class="ld-h"><span class="ae">${it.e}</span><b>${esc(it.name)}</b><button class="ld-x" data-del="${i}" aria-label="حذف">×</button></div>
+      <div class="ld-h"><span class="ae">${esc(it.e)}</span><b>${esc(it.name)}</b><button class="ld-x" data-del="${i}" aria-label="حذف">×</button></div>
       <div class="ld-r">
         <label>القدرة<span class="num-in"><input type="number" min="1" data-f="w" value="${it.w}"><small>واط</small></span></label>
         <label>العدد<span class="qty"><button data-q="-1">−</button><b>${it.qty}</b><button data-q="1">+</button></span></label>

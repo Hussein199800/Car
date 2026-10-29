@@ -8,6 +8,9 @@ on:
 jobs:
   apk:
     runs-on: ubuntu-latest
+    # لنشر الإصدار في صفحة الإصدارات ليصل التحديث للمستخدمين من داخل التطبيق
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -57,3 +60,17 @@ jobs:
         with:
           name: taqati-apk
           path: taqati*.apk
+
+      # عند الدمج في main: نشر الإصدار الموقّع مرة واحدة لكل رقم إصدار، فيظهر في «التحقق من التحديثات»
+      - name: Publish release
+        if: steps.sign.outputs.path != '' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          if gh release view "v$VER" >/dev/null 2>&1; then
+            echo "الإصدار v$VER منشور مسبقاً"
+          else
+            cp taqati.apk "taqati-$VER.apk"
+            gh release create "v$VER" "taqati-$VER.apk" --title "طاقتي $VER" --notes-file release-notes.md --target "$GITHUB_SHA"
+          fi

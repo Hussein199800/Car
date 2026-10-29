@@ -564,3 +564,17 @@ button.node:focus-visible .ic { outline: 3px solid #6366f1; outline-offset: 3px;
 .gstep p { margin: 2px 0 8px; color: var(--mute); font-size: 13.5px; line-height: 1.8; }
 .gstep .btn { margin-top: 2px; }
 .gstep .verdict { margin: 0 0 8px; }
+
+/* ---------- النسخة الاحتياطية والتحديثات ---------- */
+.bk-form { display: grid; gap: 12px; }
+.bk-form label { display: grid; gap: 6px; font-size: 14px; color: var(--mute); }
+.bk-form input[type=password] { background: var(--input); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; font-size: 16px; outline: none; }
+.bk-form input[type=password]:focus { border-color: var(--pri); }
+.file-in { position: relative; display: flex !important; align-items: center; justify-content: center; min-height: 52px; border: 1.5px dashed var(--line); border-radius: 14px; background: var(--soft); color: var(--txt); font-weight: 700; cursor: pointer; text-align: center; padding: 10px; overflow-wrap: anywhere; }
+.file-in input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.login-links .wide { grid-column: 1 / -1; }
+.upd-notes { background: var(--soft); border-radius: 12px; padding: 12px; font-size: 14px; line-height: 1.9; max-height: 260px; overflow: auto; overflow-wrap: anywhere; margin-bottom: 8px; }
+.card-h h2 > svg { display: inline-block; width: 20px; height: 20px; vertical-align: -4px; margin-inline-end: 4px; color: var(--pri); }
+.upd-ok { width: 56px; height: 56px; margin: 4px auto 8px; border-radius: 50%; display: grid; place-items: center; background: #10b98122; color: var(--ok); }
+.upd-ok svg { width: 30px; height: 30px; }
+#updGo { margin-top: 10px; }

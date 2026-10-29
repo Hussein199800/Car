@@ -41,6 +41,9 @@ function points(ts, extra = {}) {
   return Object.entries(P).map(([title, val]) => ({ title, val, unit: '' }));
 }
 
+const VER = require('../../package.json').version;
+const relOf = (v, notes = '') => ({ tag_name: 'v' + v, body: notes, published_at: '2026-11-01T10:00:00Z', assets: [
+  { name: `taqati-${v}.apk`, size: 4800000, browser_download_url: `https://github.com/Hussein199800/Car/releases/download/v${v}/taqati-${v}.apk` }] });
 const DEVICE = { pn: 'W0072122216413', sn: '55355535553555', devcode: 2451, devaddr: 1, devalias: 'Master 7KW', status: 0 };
 const SESSION = { profile: 'dess', usr: 'tester', pwdHash: 'x', token: 'tok', secret: 'sec', expire: Date.now() + 36e5 };
 
@@ -51,7 +54,7 @@ function check(name, cond, info = '') {
   if (!cond) failures++;
 }
 
-async function newPage(browser, { viewport = { width: 390, height: 844 }, scheme = 'light', api, loggedIn = true, prefs, storage = {} } = {}) {
+async function newPage(browser, { viewport = { width: 390, height: 844 }, scheme = 'light', api, loggedIn = true, prefs, storage = {}, release = relOf(VER) } = {}) {
   const ctx = await browser.newContext({ viewport, deviceScaleFactor: 1, colorScheme: scheme, acceptDownloads: true });
   const page = await ctx.newPage();
   page.errors = [];
@@ -65,6 +68,12 @@ async function newPage(browser, { viewport = { width: 390, height: 844 }, scheme
     const r = api ? await api(action, u.searchParams, page.calls.filter((c) => c.action === action).length) : null;
     if (r === 'abort') return route.abort('internetdisconnected');
     await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify(r || { err: 0, dat: {} }) });
+  });
+  // خادم التحديثات الوهمي: افتراضياً آخر إصدار هو المثبّت نفسه
+  page.ghCalls = 0;
+  await page.route(/api\.github\.com/, async (route) => {
+    page.ghCalls++;
+    await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify(release) });
   });
   await page.addInitScript(({ loggedIn, SESSION, DEVICE, prefs, storage }) => {
     if (sessionStorage.getItem('seeded')) return;
@@ -277,7 +286,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
         reports: [null, 'day', 'week', 'month', 'compare', 'export'],
         calc: [null],
         alerts: [null, 'rules'],
-        more: [null, 'setup', 'edit', 'tips', 'tips/smart', 'tips/lithium', 'monitor', 'custom', 'account', 'about'],
+        more: [null, 'setup', 'edit', 'tips', 'tips/smart', 'tips/lithium', 'monitor', 'custom', 'account', 'backup', 'update', 'about'],
       };
       for (const [tab, pages] of Object.entries(PAGES)) {
         for (const pg of pages) {
@@ -316,6 +325,81 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.evaluate(() => window.__nav('home', null));
       check('تغيير المصطلح يظهر في الواجهة', (await text(page, '#view')).includes('العاكس'));
       check('بلا أخطاء JavaScript أو مخالفات CSP (تجريبي)', page.errors.length === 0, page.errors.join(' | '));
+      await page.context().close();
+    }
+
+    // 11) التحقق من التحديثات
+    {
+      const page = await newPage(browser, { api: lastData(2), release: relOf('9.9.0', 'ميزة رائعة\nإصلاحات') });
+      await page.waitForSelector('.flow-card');
+      await page.waitForSelector('.toast', { timeout: 5000 }).catch(() => null);
+      check('إشعار مرة واحدة عند توفر إصدار جديد', (await text(page, '.toast')).includes('9.9.0'));
+      check('التحقق التلقائي يطلب GitHub مرة واحدة', page.ghCalls === 1, String(page.ghCalls));
+      await page.click('[data-tab=more]');
+      check('شارة «جديد» على بطاقة التحديثات', (await text(page, '[data-page=update]')).includes('جديد'));
+      await page.click('[data-page=update]');
+      const u = await text(page, '#view');
+      check('صفحة التحديث تعرض الإصدار والملاحظات وحجم الملف', u.includes('9.9.0') && u.includes('ميزة رائعة') && u.includes('4.6 ميغابايت') && u.includes(VER));
+      const [pop] = await Promise.all([page.waitForEvent('popup', { timeout: 3000 }).catch(() => null), page.click('#updGo')]);
+      check('زر التحديث يفتح ملف APK من صفحة إصدارات المستودع', !!pop && pop.url().includes('/Hussein199800/Car/releases/download/v9.9.0/'));
+      if (pop) await pop.close();
+      check('بلا أخطاء JavaScript (التحديثات)', page.errors.length === 0, page.errors.join(' | '));
+      await page.context().close();
+    }
+    {
+      const page = await newPage(browser, { api: lastData(2), storage: { updateAt: Date.now() - 60000 } });
+      await page.waitForSelector('.flow-card'); await page.waitForTimeout(300);
+      check('لا يُعاد التحقق التلقائي قبل 12 ساعة', page.ghCalls === 0);
+      await page.evaluate(() => window.__nav('more', 'update'));
+      await page.click('#updCheck'); await page.waitForTimeout(400);
+      check('التحقق اليدوي: «تطبيقك محدّث» عندما لا يوجد أحدث', page.ghCalls === 1 && (await text(page, '#view')).includes('تطبيقك محدّث'));
+      await page.context().close();
+    }
+
+    // 12) النسخة الاحتياطية: إنشاء ثم استعادة بعد «إعادة التثبيت»
+    {
+      const HASH = 'e5e9fa1ba31ecd1ae84f75caaa474f3a663f05f4';
+      const page = await newPage(browser, { api: lastData(2), prefs: { batteryAh: 321, invTerm: 'akis' }, storage: { session: { ...SESSION, pwdHash: HASH } } });
+      await page.waitForSelector('.flow-card');
+      await page.evaluate(() => window.__nav('more', 'backup'));
+      await page.fill('#bkCode', 'abc123'); await page.fill('#bkCode2', 'abc999'); await page.click('#bkMake');
+      check('رفض رمزين غير متطابقين', (await text(page, '.toast')).includes('غير متطابقين'));
+      await page.fill('#bkCode2', 'abc123');
+      const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 15000 }).catch(() => null), page.click('#bkMake')]);
+      const file = dl ? path.join(OUT, 'backup.json') : null;
+      if (dl) await dl.saveAs(file);
+      const body = file ? fs.readFileSync(file, 'utf8') : '';
+      check('ملف النسخة الاحتياطية مشفّر بلا اسم مستخدم أو بصمة', body.includes('taqati-backup') && !body.includes('tester') && !body.includes(HASH) && /taqati-backup-\d{4}-\d\d-\d\d\.json/.test(dl?.suggestedFilename() || ''));
+      await page.context().close();
+
+      const fresh = await newPage(browser, {
+        loggedIn: false,
+        api: (a) => ({
+          authSource: { err: 0, dat: { token: 'T', secret: 'S', expire: 7200 } },
+          queryPlants: { err: 0, dat: { plant: [{ pid: 7 }] } },
+          webQueryDeviceEs: { err: 0, dat: { device: [DEVICE] } },
+          queryDeviceLastData: { err: 0, dat: points(Date.now() - 60000) },
+        })[a],
+      });
+      await fresh.click('#restoreBtn');
+      if (file) await fresh.setInputFiles('#bkFile', file);
+      await fresh.fill('#bkCodeIn', 'wrong1'); await fresh.click('#bkRestore');
+      await fresh.waitForSelector('#bkErr:not([hidden])', { timeout: 15000 }).catch(() => null);
+      check('رمز خاطئ: رسالة واضحة ولا اتصال بالخادم', (await text(fresh, '#bkErr')).includes('الرمز غير صحيح') && !fresh.calls.some((c) => c.action === 'authSource'));
+      await fresh.fill('#bkCodeIn', 'abc123'); await fresh.click('#bkRestore');
+      await fresh.waitForSelector('.flow-card', { timeout: 15000 }).catch(() => null);
+      const auth = fresh.calls.find((c) => c.action === 'authSource');
+      check('الاستعادة تدخل الحساب مباشرة دون كلمة المرور', !!(await fresh.$('.flow-card')) && auth?.params.usr === 'tester');
+      const restored = await fresh.evaluate(() => JSON.parse(localStorage.getItem('taqati.prefs') || '{}'));
+      check('الاستعادة تعيد الإعدادات (سعة البطارية والمصطلحات)', restored.batteryAh === 321 && restored.invTerm === 'akis' && (await text(fresh, '#view')).includes('العاكس'));
+      check('بلا أخطاء JavaScript (النسخة الاحتياطية)', fresh.errors.length === 0, fresh.errors.join(' | '));
+      await fresh.context().close();
+    }
+    {
+      // زر الرجوع في شاشة الاستعادة يعيد لشاشة الدخول
+      const page = await newPage(browser, { loggedIn: false });
+      await page.click('#restoreBtn'); await page.click('#restoreBack');
+      check('الرجوع من شاشة الاستعادة إلى الدخول', !!(await page.$('#loginForm')));
       await page.context().close();
     }
 

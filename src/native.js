@@ -7,6 +7,7 @@ export const isNative = Capacitor.isNativePlatform();
 const SecureStore = isNative ? registerPlugin('SecureStore') : null;
 const Monitor = isNative ? registerPlugin('Monitor') : null;
 const DeviceTools = isNative ? registerPlugin('DeviceTools') : null;
+const Updater = isNative ? registerPlugin('Updater') : null;
 
 export const secure = {
   async get(key) {
@@ -60,5 +61,22 @@ export const deviceTools = {
   async openBluetoothSettings() {
     if (!isNative) return false;
     return (await DeviceTools.openBluetoothSettings()).opened;
+  },
+};
+
+// تنزيل التحديث وتثبيته؛ في المتصفح نفتح رابط الملف فقط
+export const updater = {
+  async download(url, onProgress) {
+    if (!isNative) { window.open(url, '_blank', 'noopener'); return { web: true }; }
+    const h = await Updater.addListener('progress', (e) => onProgress?.(e.pct));
+    try { return await Updater.download({ url }); } finally { h.remove(); }
+  },
+  async install() {
+    if (!isNative) return { status: 'web' };
+    return Updater.install();
+  },
+  async ready() {
+    if (!isNative) return false;
+    return (await Updater.status()).ready;
   },
 };

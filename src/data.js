@@ -113,13 +113,13 @@ export function toCsv(header, rows) {
   return '﻿' + [header, ...rows].map((r) => r.map(q).join(',')).join('\r\n');
 }
 
-export async function shareFile(name, text) {
+export async function shareFile(name, text, { mime = 'text/csv;charset=utf-8', dialog = 'مشاركة التقرير' } = {}) {
   if (Capacitor.isNativePlatform()) {
     const res = await Filesystem.writeFile({ path: name, data: text, directory: Directory.Cache, encoding: Encoding.UTF8 });
-    await Share.share({ title: name, url: res.uri, dialogTitle: 'مشاركة التقرير' });
+    await Share.share({ title: name, url: res.uri, dialogTitle: dialog });
     return;
   }
-  const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
+  const url = URL.createObjectURL(new Blob([text], { type: mime }));
   const a = Object.assign(document.createElement('a'), { href: url, download: name });
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 2000);

@@ -8,6 +8,7 @@ class MainActivity : BridgeActivity() {
         registerPlugin(SecureStorePlugin::class.java)
         registerPlugin(MonitorPlugin::class.java)
         registerPlugin(DeviceToolsPlugin::class.java)
+        registerPlugin(UpdaterPlugin::class.java)
         super.onCreate(savedInstanceState)
     }
 

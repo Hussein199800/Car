@@ -15,7 +15,9 @@ import {
 } from './data.js';
 import { demoPoints, demoHistory } from './demo.js';
 import { icons } from './icons.js';
-import { isNative, secure, migrateSession, monitor, deviceTools, APPS } from './native.js';
+import { isNative, secure, migrateSession, monitor, deviceTools, APPS, updater } from './native.js';
+import { encryptBackup, decryptBackup, makePayload, cleanPrefs, cleanCalc, backupName, BackupError, MIN_CODE } from './backup.js';
+import { fetchLatest, isNewer } from './update.js';
 import { settingInfo, optionAr, hintRange } from './settings-info.js';
 import { viewCalc, bindCalc, defaultsCalc } from './calc.js';
 import { TIP_SECTIONS, smartTips, tipOfDay } from './tips.js';
@@ -24,7 +26,7 @@ import { makeLocalizer, INV_TERMS, GRID_TERMS } from './terms.js';
 Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, CategoryScale, Filler, Tooltip, Legend);
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '3.3.0';
+const VERSION = '3.4.0';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -173,11 +175,13 @@ function renderLogin(msg = '') {
     <div class="login-links">
       <button class="btn ghost" type="button" data-guide="register">${icons.user} إنشاء حساب جديد</button>
       <button class="btn ghost" type="button" data-guide="wifi">${icons.wifi} إعداد وحدة الواي فاي</button>
+      <button class="btn ghost wide" type="button" id="restoreBtn">${icons.shield} استعادة حسابي من نسخة احتياطية</button>
     </div>
     <p class="foot">تطوير: حسين محمد علي الطويل</p>
   </div>`;
 
   document.querySelectorAll('[data-guide]').forEach((b) => { b.onclick = () => renderGuideStandalone(b.dataset.guide); });
+  $('#restoreBtn').onclick = renderRestoreStandalone;
   $('#pwdEye').onclick = () => {
     const i = $('[name=pwd]');
     const show = i.type === 'password';
@@ -201,22 +205,27 @@ function renderLogin(msg = '') {
     btn.textContent = 'جارٍ الدخول…';
     try {
       api = new WatchPowerApi();
-      state.session = await api.login(f.get('usr'), f.get('pwd'));
-      await secure.set('session', state.session);
-      store.set('lastUsr', state.session.usr);
-      state.demo = false;
-      store.set('demo', false);
-      btn.textContent = 'جارٍ البحث عن الأجهزة…';
-      state.devices = await api.listDevices();
-      store.set('devices', state.devices);
-      if (!state.devices.length) throw new ApiError('لم يُعثر على أي جهاز في هذا الحساب');
-      state.devSn = state.devices[0].sn;
-      store.set('devSn', state.devSn);
-      startApp();
+      await finishLogin(await api.login(f.get('usr'), f.get('pwd')), null, (t) => { btn.textContent = t; });
     } catch (err) {
       renderLogin(err.message || 'حدث خطأ غير متوقع');
     }
   };
+}
+
+// بعد نجاح الدخول (بكلمة المرور أو من النسخة الاحتياطية): حفظ الجلسة واكتشاف الأجهزة
+async function finishLogin(session, preferredSn, status) {
+  state.session = session;
+  await secure.set('session', state.session);
+  store.set('lastUsr', state.session.usr);
+  state.demo = false;
+  store.set('demo', false);
+  status?.('جارٍ البحث عن الأجهزة…');
+  state.devices = await api.listDevices();
+  store.set('devices', state.devices);
+  if (!state.devices.length) throw new ApiError('لم يُعثر على أي جهاز في هذا الحساب');
+  state.devSn = state.devices.some((d) => d.sn === preferredSn) ? preferredSn : state.devices[0].sn;
+  store.set('devSn', state.devSn);
+  startApp();
 }
 
 // حالة التنبيهات تخص جهازاً بعينه: تُصفّر عند تبديل الجهاز أو الخروج حتى لا تنتقل
@@ -271,6 +280,7 @@ function startApp() {
   navigate(state.tab, state.page);
   takeOverFromBackground().then(() => { refresh(); syncMonitor(); });
   startPolling();
+  autoCheckUpdate();
 }
 
 function navigate(tab, page) {
@@ -285,7 +295,7 @@ function navigate(tab, page) {
 function back() {
   // قبل تسجيل الدخول: زر الرجوع في دليل الربط يعيد لشاشة الدخول بدل إغلاق التطبيق
   if (!state.session && !state.demo) {
-    if (state.screen === 'guide') renderLogin();
+    if (state.screen === 'guide' || state.screen === 'restore') renderLogin();
     else CapApp.minimizeApp().catch(() => {});
     return;
   }
@@ -342,7 +352,7 @@ function banner() {
 const PAGE_TITLES = {
   load: 'الحمل', battery: 'البطارية', solar: 'الألواح الشمسية', grid: 'الكهرباء الوطنية', all: 'كل القراءات',
   day: 'التقرير اليومي', week: 'التقرير الأسبوعي', month: 'التقرير الشهري', compare: 'مقارنة الأداء', export: 'تصدير البيانات',
-  rules: 'شروط التنبيه', device: 'الرافع', edit: 'إعدادات الرافع', setup: 'ربط الجهاز والحساب',
+  rules: 'شروط التنبيه', device: 'الرافع', update: 'التحديثات', backup: 'النسخة الاحتياطية', edit: 'إعدادات الرافع', setup: 'ربط الجهاز والحساب',
   tips: 'النصائح', smart: 'نصائح لجهازك الآن', ...Object.fromEntries(TIP_SECTIONS.map((t) => [t.id, t.title])),
   custom: 'المظهر والمصطلحات', monitor: 'المراقبة والبطارية', account: 'الحساب', about: 'حول التطبيق',
 };
@@ -1589,7 +1599,7 @@ function renderGuideStandalone(which) {
 // ================= تبويب المزيد =================
 function viewMore() {
   if (state.page?.startsWith('tips')) return viewTips();
-  const pages = { setup: () => setupGuide(true), edit: pageEdit, custom: pageCustom, monitor: pageMonitor, account: pageAccount, about: pageAbout };
+  const pages = { setup: () => setupGuide(true), edit: pageEdit, custom: pageCustom, monitor: pageMonitor, account: pageAccount, about: pageAbout, update: pageUpdate, backup: pageBackup };
   if (state.page && pages[state.page]) return pages[state.page]();
   const themeName = { auto: 'تلقائي', dark: 'ليلي', light: 'نهاري' }[state.prefs.theme];
   const urgent = smartTips(state.model, state.prefs).filter((t) => t.level === 'bad' || t.level === 'warn').length;
@@ -1606,6 +1616,8 @@ function viewMore() {
     { page: 'monitor', title: 'المراقبة والبطارية', sub: `${state.prefs.batteryAh ? `البطارية ${state.prefs.batteryAh} أمبير ساعة` : 'أدخل سعة البطارية'} · تحديث كل ${state.prefs.pollSec} ثانية`, icon: icons.gauge, color: 'c-green' },
     { page: 'custom', title: 'المظهر والمصطلحات', sub: `${themeName} · ${INV_TERMS[state.prefs.invTerm]?.label} · ${GRID_TERMS[state.prefs.gridTerm]?.label}`, icon: icons.moon, color: 'c-violet' },
     { page: 'account', title: 'الحساب', sub: state.demo ? 'وضع تجريبي' : state.session?.usr || '', icon: icons.user, color: 'c-sky' },
+    { page: 'backup', title: 'النسخة الاحتياطية', sub: 'احفظ حسابك وإعداداتك في ملف مشفّر واستعدها بعد إعادة التثبيت', icon: icons.shield, color: 'c-green' },
+    { page: 'update', title: 'التحقق من التحديثات', sub: updateAvailable() ? `يتوفر الإصدار ${state.update.version}` : 'الإصدار الحالي ' + VERSION, icon: icons.upgrade, color: 'c-amber', badge: updateAvailable() ? 'جديد' : '' },
     { page: 'about', title: 'حول التطبيق', sub: 'طاقتي · الإصدار ' + VERSION, icon: icons.info, color: 'c-slate' },
   ])}
   <button class="btn danger wide logout-btn" id="logoutBtn">${icons.logout} ${state.demo ? 'الخروج من الوضع التجريبي' : 'تسجيل الخروج'}</button>
@@ -1733,6 +1745,193 @@ function pageAbout() {
   </section>
   <p class="foot">صُنع بـ ${icons.heart} للطاقة النظيفة</p>`;
 }
+
+
+// ================= التحديثات =================
+// يتحقق التطبيق تلقائياً مرة كل 12 ساعة على الأكثر، ومن زر في «المزيد» متى شاء المستخدم
+state.update = store.get('update', null);
+state.upd = { checking: false, error: null, pct: null, phase: null };
+const updateAvailable = () => !!state.update && isNewer(state.update.version, VERSION);
+
+async function checkUpdate(manual = false) {
+  if (state.upd.checking) return;
+  state.upd.checking = true;
+  state.upd.error = null;
+  if (manual && leaf() === 'update') render();
+  try {
+    state.update = await fetchLatest();
+    store.set('update', state.update);
+    store.set('updateAt', Date.now());
+  } catch (e) {
+    state.upd.error = e.message;
+  }
+  state.upd.checking = false;
+  if (state.tab === 'more' && (!state.page || leaf() === 'update')) render();
+}
+
+async function autoCheckUpdate() {
+  if (Date.now() - store.get('updateAt', 0) < 12 * 36e5) return;
+  await checkUpdate();
+  // نُعلم بكل إصدار جديد مرة واحدة فقط
+  if (updateAvailable() && store.get('updateSeen', '') !== state.update.version) {
+    store.set('updateSeen', state.update.version);
+    toast(`يتوفر إصدار جديد من طاقتي (${state.update.version}) — من «المزيد» ← التحقق من التحديثات`, 'ok');
+  }
+}
+
+function pageUpdate() {
+  const u = state.update, s = state.upd;
+  const avail = updateAvailable();
+  const mb = u?.size ? ` · ${(u.size / 1048576).toFixed(1)} ميغابايت` : '';
+  let body;
+  if (s.checking) body = '<div class="empty"><div class="spinner"></div>جارٍ التحقق من وجود إصدار جديد…</div>';
+  else if (avail) {
+    const busy = s.phase === 'download';
+    body = `<section class="card upd-new"><div class="card-h"><h2>${icons.upgrade} الإصدار ${esc(u.version)} متوفر</h2></div>
+      ${u.notes ? `<div class="upd-notes">${esc(u.notes).replace(/\n/g, '<br>')}</div>` : ''}
+      <p class="hint">${u.at ? `نُشر ${esc(new Date(u.at).toLocaleDateString('ar', { dateStyle: 'medium' }))}` : ''}${mb}</p>
+      ${busy ? `<div class="bar"><i id="updProg" style="width:${Math.max(0, s.pct ?? 0)}%"></i></div><p class="hint center" id="updTxt">${s.pct >= 0 ? `جارٍ التحميل ${s.pct}%` : 'جارٍ التحميل…'}</p>`
+        : `<button class="btn primary big wide" id="updGo">${icons.download} ${s.phase === 'ready' ? 'تثبيت التحديث' : 'تحميل وتثبيت التحديث'}</button>`}
+      ${s.phase === 'permission' ? '<p class="hint">اسمح لـ«طاقتي» بتثبيت التطبيقات من الشاشة التي فُتحت، ثم ارجع واضغط «تثبيت التحديث».</p>' : ''}
+    </section>`;
+  } else {
+    body = `<section class="card center"><div class="upd-ok">${icons.check}</div><h2>تطبيقك محدّث</h2>
+      <p class="hint">${u ? `آخر إصدار منشور ${esc(u.version)}` : 'لم يُنشر أي إصدار بعد'}${store.get('updateAt', 0) ? ` · آخر تحقق ${esc(fmt.ago(Date.now() - store.get('updateAt', 0)))}` : ''}</p></section>`;
+  }
+  return `${kv([['الإصدار المثبّت', val(VERSION)], ['مصدر التحديثات', val('صفحة إصدارات طاقتي على GitHub')]])}
+    ${s.error ? `<div class="empty bad">${esc(s.error)}</div>` : ''}
+    ${body}
+    ${s.checking || s.phase === 'download' ? '' : `<button class="btn ghost wide" id="updCheck">${icons.refresh} التحقق الآن</button>`}
+    <p class="hint">يُحمَّل التحديث من صفحة إصدارات التطبيق فقط، ويتحقق التطبيق قبل التثبيت أنه «طاقتي» نفسه، وأحدث من نسختك، وموقّع بمفتاح المطوّر. يطلب أندرويد موافقتك في كل تثبيت، وتبقى بياناتك وإعداداتك كما هي.</p>`;
+}
+AFTER.update = () => {
+  const c = $('#updCheck');
+  if (c) c.onclick = () => checkUpdate(true);
+  const go = $('#updGo');
+  if (!go) return;
+  // أندرويد قد يعيد تشغيل التطبيق بعد منح إذن التثبيت؛ نكمل من الملف المحمّل بدل تنزيله مجدداً
+  if (!state.upd.phase) updater.ready().then((r) => { if (r && !state.upd.phase) { state.upd.phase = 'ready'; render(); } }).catch(() => {});
+  go.onclick = async () => {
+    const s = state.upd;
+    s.error = null;
+    try {
+      if ((s.phase !== 'ready' && s.phase !== 'permission') || !(await updater.ready())) {
+        s.phase = 'download'; s.pct = 0; render();
+        const r = await updater.download(state.update.url, (pct) => {
+          s.pct = pct;
+          const bar = $('#updProg'), txt = $('#updTxt');
+          if (bar && pct >= 0) bar.style.width = pct + '%';
+          if (txt) txt.textContent = pct >= 0 ? `جارٍ التحميل ${pct}%` : 'جارٍ التحميل…';
+        });
+        if (r.web) { s.phase = null; render(); return; }
+      }
+      s.phase = 'ready';
+      const r = await updater.install();
+      s.phase = r.status === 'permission' ? 'permission' : 'ready';
+    } catch (e) {
+      s.phase = null;
+      s.error = e.message || 'تعذّر تثبيت التحديث';
+    }
+    render();
+  };
+};
+
+// ================= النسخة الاحتياطية =================
+function restoreForm() {
+  return `<section class="card"><div class="card-h"><h2>${icons.shield} استعادة من نسخة احتياطية</h2></div>
+    <div class="bk-form">
+      <label class="file-in"><input type="file" id="bkFile" accept=".json,application/json,text/plain,application/octet-stream"><span id="bkFileName">اختر ملف النسخة الاحتياطية</span></label>
+      <label>رمز النسخة الاحتياطية<input type="password" id="bkCodeIn" dir="ltr" autocomplete="off"></label>
+      <div class="err" id="bkErr" hidden></div>
+      <button class="btn primary wide" id="bkRestore">استعادة وتسجيل الدخول</button>
+    </div>
+    <p class="hint">يعيد التطبيق حسابك وإعداداتك ويدخل مباشرة دون كتابة كلمة المرور.</p></section>`;
+}
+
+function bindRestore() {
+  const file = $('#bkFile');
+  file.onchange = () => { $('#bkFileName').textContent = file.files[0]?.name || 'اختر ملف النسخة الاحتياطية'; };
+  $('#bkRestore').onclick = async () => {
+    const btn = $('#bkRestore'), err = $('#bkErr');
+    const fail = (m) => { err.textContent = m; err.hidden = false; btn.disabled = false; btn.textContent = 'استعادة وتسجيل الدخول'; };
+    err.hidden = true;
+    if (!file.files[0]) return fail('اختر ملف النسخة الاحتياطية أولاً');
+    btn.disabled = true;
+    btn.textContent = 'جارٍ فك التشفير…';
+    try {
+      const b = await decryptBackup(await file.files[0].text(), $('#bkCodeIn').value);
+      btn.textContent = 'جارٍ تسجيل الدخول…';
+      const fresh = new WatchPowerApi();
+      const session = await fresh.loginWithHash(b.account.usr, b.account.pwdHash, b.account.profile);
+      // نطبّق الإعدادات بعد التأكد من صحة الحساب فقط
+      state.prefs = { ...DEFAULT_PREFS, ...cleanPrefs(DEFAULT_PREFS, b.prefs) };
+      savePrefs();
+      state.calc = { ...defaultsCalc(), ...cleanCalc(defaultsCalc(), b.calc) };
+      store.set('calc', state.calc);
+      L = makeLocalizer(state.prefs);
+      applyTheme();
+      stopPolling();
+      resetAlertState();
+      Object.assign(state, { model: null, fields: null, tab: 'home', page: null });
+      state.rep = { ...state.rep, day: null, week: null, month: null, cmpData: null };
+      api = fresh;
+      await finishLogin(session, typeof b.devSn === 'string' ? b.devSn : null, (t) => { btn.textContent = t; });
+      toast('تمت استعادة حسابك وإعداداتك', 'ok');
+    } catch (e) {
+      fail(e instanceof BackupError || e instanceof ApiError ? e.message : 'تعذّرت قراءة الملف');
+    }
+  };
+}
+
+function renderRestoreStandalone() {
+  state.screen = 'restore';
+  document.getElementById('app').innerHTML = `
+    <header class="topbar"><button class="icon-btn" id="restoreBack" aria-label="رجوع">${icons.arrowBack}</button><div class="page-title">استعادة حسابي</div><span></span></header>
+    <main id="view"><div class="page-anim">${L(restoreForm())}</div></main>`;
+  $('#restoreBack').onclick = () => renderLogin();
+  bindRestore();
+}
+
+function pageBackup() {
+  const can = !state.demo && state.session?.pwdHash;
+  return `<section class="card"><div class="card-h"><h2>${icons.download} إنشاء نسخة احتياطية</h2></div>
+    ${can ? `<div class="bk-form">
+      <label>رمز للنسخة (${MIN_CODE} أحرف أو أرقام على الأقل)<input type="password" id="bkCode" dir="ltr" autocomplete="new-password"></label>
+      <label>أعد كتابة الرمز<input type="password" id="bkCode2" dir="ltr" autocomplete="new-password"></label>
+      <button class="btn primary wide" id="bkMake">إنشاء الملف ومشاركته</button>
+    </div>
+    <p class="hint">يحفظ الملف حسابك (${esc(state.session.usr)}) وكل الإعدادات: سعة البطارية، شروط التنبيه، المصطلحات، المظهر، وأجهزة الحاسبة. احفظه في Drive أو أرسله لنفسك على واتساب.</p>`
+    : '<p class="hint">سجّل الدخول بحسابك أولاً لإنشاء نسخة احتياطية.</p>'}
+  </section>
+  ${restoreForm()}
+  <section class="card"><div class="card-h"><h2>${icons.warn} مهم</h2></div>
+    <p class="hint">الملف مشفّر بالكامل بالرمز الذي تختاره، ولا يحتوي كلمة المرور نفسها بل بصمتها. <b>إذا نسيت الرمز لا يمكن استرجاع النسخة</b>، لكن يبقى بإمكانك الدخول بكلمة المرور العادية.</p>
+    <p class="hint">من يملك الملف والرمز معاً يستطيع الدخول إلى حسابك، فلا تشاركهما مع أحد. إذا غيّرت كلمة مرور WatchPower أنشئ نسخة جديدة.</p></section>`;
+}
+AFTER.backup = () => {
+  bindRestore();
+  const mk = $('#bkMake');
+  if (!mk) return;
+  mk.onclick = async () => {
+    const a = $('#bkCode').value, b = $('#bkCode2').value;
+    if (a.length < MIN_CODE) { toast(`الرمز يجب أن يكون ${MIN_CODE} أحرف أو أرقام على الأقل`, 'bad'); return; }
+    if (a !== b) { toast('الرمزان غير متطابقين', 'bad'); return; }
+    mk.disabled = true;
+    mk.textContent = 'جارٍ التشفير…';
+    try {
+      const text = await encryptBackup(makePayload({ session: state.session, prefs: state.prefs, calc: state.calc, devSn: state.devSn }), a);
+      await shareFile(backupName(), text, { mime: 'application/json', dialog: 'حفظ النسخة الاحتياطية' });
+      store.set('backupAt', Date.now());
+      toast('أُنشئت النسخة الاحتياطية — احفظ الرمز في مكان آمن', 'ok');
+      $('#bkCode').value = ''; $('#bkCode2').value = '';
+    } catch (e) {
+      // إغلاق نافذة المشاركة دون اختيار ليس خطأ
+      if (!/cancel/i.test(e?.message || '')) toast(e.message || 'تعذّر إنشاء النسخة الاحتياطية', 'bad');
+    }
+    mk.disabled = false;
+    mk.textContent = 'إنشاء الملف ومشاركته';
+  };
+};
 
 // ================= التشغيل =================
 async function boot() {
