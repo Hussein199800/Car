@@ -140,14 +140,17 @@ object AlertEvaluator {
             flags.put(key, active)
         }
 
+        // هامش رجوع (hysteresis) مطابق لـ main.js: لا يُعاد التسليح إلا بعد ابتعاد واضح عن الحد
+        fun hold(key: String, on: Boolean, stillOn: Boolean) = if (flags.opt(key) == true) stillOn else on
+
         s.soc?.let { soc ->
-            edge("lowSoc", soc <= cfg.lowSoc && (s.batW ?: 0.0) <= 0, {
+            edge("lowSoc", hold("lowSoc", soc <= cfg.lowSoc && (s.batW ?: 0.0) <= 0, soc < cfg.lowSoc + 5), {
                 alerts += Event("البطارية منخفضة", "نسبة الشحن ${soc.toInt()}% — يُنصح بتقليل الأحمال.", "bad")
             })
-            if (cfg.alertFull) edge("full", soc >= 100, { alerts += Event("البطارية ممتلئة", "وصل الشحن إلى 100% — وقت مناسب لتشغيل الأحمال الكبيرة", "ok") })
+            if (cfg.alertFull) edge("full", hold("full", soc >= 100, soc >= 95), { alerts += Event("البطارية ممتلئة", "وصل الشحن إلى 100% — وقت مناسب لتشغيل الأحمال الكبيرة", "ok") })
         }
         s.loadPct?.let { pct ->
-            edge("overload", pct >= cfg.overloadPct, {
+            edge("overload", hold("overload", pct >= cfg.overloadPct, pct >= cfg.overloadPct - 10), {
                 alerts += Event("حمل زائد", "الحمل وصل إلى ${pct.toInt()}%", "bad")
                 faults += Event("حمل زائد", "${pct.toInt()}%", "warn")
             })
@@ -165,9 +168,24 @@ object AlertEvaluator {
         return Outcome(alerts, faults, flags)
     }
 
-    private fun minutesAgo(ms: Long): String {
-        val m = ms / 60_000
-        return if (m < 60) "$m دقيقة" else "${m / 60} ساعة"
+    /** صيغة العدد العربية كما في countAr في model.js: دقيقة، دقيقتين، 3 دقائق، 11 دقيقة */
+    fun countAr(n: Long, forms: List<String>): String = when {
+        n == 1L -> forms[0]
+        n == 2L -> forms[1]
+        n in 3..10 -> "$n ${forms[2]}"
+        else -> "$n ${forms[3]}"
+    }
+
+    private val MIN = listOf("دقيقة", "دقيقتين", "دقائق", "دقيقة")
+    private val HOUR = listOf("ساعة", "ساعتين", "ساعات", "ساعة")
+    private val DAY = listOf("يوم", "يومين", "أيام", "يوماً")
+
+    fun minutesAgo(ms: Long): String {
+        val m = Math.round(ms / 60_000.0)
+        if (m < 60) return countAr(maxOf(m, 1), MIN)
+        val h = m / 60
+        if (h < 24) return countAr(h, HOUR) + if (m % 60 != 0L) " و" + countAr(m % 60, MIN) else ""
+        return countAr(h / 24, DAY)
     }
 
     /** نص الإشعار بالمصطلحات التي اختارها المستخدم */

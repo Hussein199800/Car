@@ -6,6 +6,7 @@ import { store } from './data.js';
 export const isNative = Capacitor.isNativePlatform();
 const SecureStore = isNative ? registerPlugin('SecureStore') : null;
 const Monitor = isNative ? registerPlugin('Monitor') : null;
+const DeviceTools = isNative ? registerPlugin('DeviceTools') : null;
 
 export const secure = {
   async get(key) {
@@ -41,5 +42,23 @@ export const monitor = {
   async takeOver() {
     if (!isNative) return { alerts: [], faults: [], flags: {} };
     return Monitor.takeOver();
+  },
+};
+
+export const APPS = { wifi: 'wifiapp.volfw.watchpower', ble: 'bleapp.volfw.watchpower' };
+
+// في المتصفح نفتح صفحة المتجر بدل التطبيق، وإعدادات الهاتف غير متاحة
+export const deviceTools = {
+  async openApp(pkg) {
+    if (!isNative) { window.open(`https://play.google.com/store/apps/details?id=${pkg}`, '_blank', 'noopener'); return 'web'; }
+    return (await DeviceTools.openApp({ package: pkg })).opened;
+  },
+  async openWifiSettings() {
+    if (!isNative) return false;
+    return (await DeviceTools.openWifiSettings()).opened;
+  },
+  async openBluetoothSettings() {
+    if (!isNative) return false;
+    return (await DeviceTools.openBluetoothSettings()).opened;
   },
 };

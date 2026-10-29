@@ -62,3 +62,42 @@ class MonitorPlugin : Plugin() {
         call.resolve(res)
     }
 }
+
+/** فتح إعدادات الهاتف والتطبيقات الرسمية لخطوات إعداد وحدة الواي فاي. */
+@CapacitorPlugin(name = "DeviceTools")
+class DeviceToolsPlugin : Plugin() {
+    private fun start(intent: android.content.Intent): Boolean = try {
+        activity.startActivity(intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+        true
+    } catch (e: android.content.ActivityNotFoundException) {
+        false
+    }
+
+    @PluginMethod
+    fun openWifiSettings(call: PluginCall) {
+        call.resolve(JSObject().put("opened", start(android.content.Intent(android.provider.Settings.ACTION_WIFI_SETTINGS))))
+    }
+
+    @PluginMethod
+    fun openBluetoothSettings(call: PluginCall) {
+        call.resolve(JSObject().put("opened", start(android.content.Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS))))
+    }
+
+    /** يفتح التطبيق إن كان مثبتاً، وإلا صفحته في المتجر. لا نقبل إلا تطبيقات WatchPower المعروفة. */
+    @PluginMethod
+    fun openApp(call: PluginCall) {
+        val pkg = call.getString("package") ?: return call.reject("package مطلوب")
+        if (pkg !in ALLOWED) return call.reject("تطبيق غير مسموح")
+        context.packageManager.getLaunchIntentForPackage(pkg)?.let {
+            if (start(it)) return call.resolve(JSObject().put("opened", "app"))
+        }
+        val market = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("market://details?id=$pkg"))
+        if (start(market)) return call.resolve(JSObject().put("opened", "store"))
+        val web = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://play.google.com/store/apps/details?id=$pkg"))
+        call.resolve(JSObject().put("opened", if (start(web)) "web" else "none"))
+    }
+
+    companion object {
+        val ALLOWED = setOf("wifiapp.volfw.watchpower", "bleapp.volfw.watchpower")
+    }
+}

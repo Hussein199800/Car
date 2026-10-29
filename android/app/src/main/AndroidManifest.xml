@@ -33,6 +33,12 @@
         </provider>
     </application>
 
+    <!-- لمعرفة إن كان تطبيق WatchPower مثبتاً لفتحه مباشرة (Android 11+) -->
+    <queries>
+        <package android:name="wifiapp.volfw.watchpower" />
+        <package android:name="bleapp.volfw.watchpower" />
+    </queries>
+
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />

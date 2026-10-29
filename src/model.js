@@ -76,6 +76,9 @@ const toMap = (points) => {
   return map;
 };
 
+// وجود الكهرباء: جهد أعلى من 40% من الجهد المقنّن (يناسب شبكات 110 و230 فولت)
+export const gridPresent = (v, rated) => v !== null && v !== undefined && v >= 0.4 * (rated || 230);
+
 // تصنيف الحقول لعرضها في صفحات منفصلة
 const GROUPS = [
   ['rated', /rating/],
@@ -104,8 +107,7 @@ export function normalize(points, staleMin = 15, offsetMs = 0) {
     rawTs,
     age,
     stale,
-    // نعتبر الكهرباء موجودة إذا تجاوز جهدها 40% من الجهد المقنّن (يناسب شبكات 110 و230 فولت)
-    gridOn: x.gridV !== null && x.gridV >= 0.4 * (x.gridRatedV || 230),
+    gridOn: gridPresent(x.gridV, x.gridRatedV),
     raw: points
       .filter((p) => String(p.title).toLowerCase() !== 'id')
       .map((p) => ({ title: p.title, ar: trTitle(p.title), val: p.val, valAr: trValue(p.val), unit: p.unit, group: groupOf(p.title) })),
@@ -128,6 +130,15 @@ export function rowsToSamples({ titles, rows }) {
 const HOUR = ['ساعة', 'ساعتين', 'ساعات', 'ساعة'];
 const MIN = ['دقيقة', 'دقيقتين', 'دقائق', 'دقيقة'];
 const DAY = ['يوم', 'يومين', 'أيام', 'يوماً'];
+// الأرقام العربية (٠-٩ و۰-۹) والفاصلة العشرية «٫» أو «,» إلى صيغة يفهمها Number والجهاز
+export function latinDigits(s) {
+  return String(s ?? '')
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06F0))
+    .replace(/[\u066B,]/g, '.')
+    .replace(/\u066C/g, '');
+}
+
 export function countAr(n, [one, two, few, many]) {
   if (n === 1) return one;
   if (n === 2) return two;
@@ -143,8 +154,11 @@ export const fmt = {
   hours: (h) => {
     if (!Number.isFinite(h) || h <= 0) return '—';
     if (h > 99) return 'أكثر من 99 ساعة';
-    const hh = Math.floor(h);
-    const mm = Math.round((h - hh) * 60);
+    // نقرّب إلى أقرب دقيقة أولاً حتى لا تظهر «ساعة و60 دقيقة»
+    const total = Math.round(h * 60);
+    if (total < 1) return 'أقل من دقيقة';
+    const hh = Math.floor(total / 60);
+    const mm = total % 60;
     if (!hh) return countAr(mm, MIN);
     return countAr(hh, HOUR) + (mm ? ' و' + countAr(mm, MIN) : '');
   },

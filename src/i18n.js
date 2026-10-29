@@ -3,7 +3,7 @@
 const TITLES = {
   'id': 'المعرّف',
   'timestamp': 'وقت القراءة',
-  'sn': 'الرقم التسلسلي',
+  'sn': 'الرقم التسلسلي للإنفرتر',
   'machine type': 'نوع الجهاز',
   'main cpu firmware version': 'إصدار برنامج المعالج الرئيسي',
   'secondary cpu firmware version': 'إصدار برنامج المعالج الثانوي',

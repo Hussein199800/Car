@@ -112,4 +112,30 @@ class AlertEvaluatorTest {
         assertEquals("العاكس غير متصل", AlertEvaluator.localize("الرافع غير متصل", c))
         assertEquals("انقطعت الكهرباء العمومية", AlertEvaluator.localize("انقطعت الكهرباء الوطنية", c))
     }
+
+    @Test
+    fun alertsUseHysteresisToAvoidFlapping() {
+        val low = AlertEvaluator.evaluate(AlertEvaluator.snapshot(points("2026-10-28 20:54:00", soc = "30", load = "80")), cfg, JSONObject(), now)
+        assertEquals(setOf("البطارية منخفضة", "حمل زائد"), low.alerts.map { it.title }.toSet())
+        // تذبذب بسيط فوق الحد لا يُعيد التسليح ولا يكرر التنبيه
+        val wobble = AlertEvaluator.evaluate(AlertEvaluator.snapshot(points("2026-10-28 20:55:00", soc = "32", load = "75")), cfg, low.flags, now)
+        assertEquals(true, wobble.flags.get("lowSoc"))
+        assertEquals(true, wobble.flags.get("overload"))
+        val back = AlertEvaluator.evaluate(AlertEvaluator.snapshot(points("2026-10-28 20:55:30", soc = "30", load = "80")), cfg, wobble.flags, now)
+        assertTrue(back.alerts.isEmpty())
+        // ابتعاد واضح يعيد التسليح
+        val clear = AlertEvaluator.evaluate(AlertEvaluator.snapshot(points("2026-10-28 20:55:40", soc = "36", load = "60")), cfg, back.flags, now)
+        assertEquals(false, clear.flags.get("lowSoc"))
+        assertEquals(false, clear.flags.get("overload"))
+    }
+
+    @Test
+    fun arabicCountGrammar() {
+        assertEquals("دقيقة", AlertEvaluator.minutesAgo(60_000))
+        assertEquals("دقيقتين", AlertEvaluator.minutesAgo(120_000))
+        assertEquals("5 دقائق", AlertEvaluator.minutesAgo(300_000))
+        assertEquals("25 دقيقة", AlertEvaluator.minutesAgo(25 * 60_000L))
+        assertEquals("ساعتين و3 دقائق", AlertEvaluator.minutesAgo(123 * 60_000L))
+        assertEquals("يومين", AlertEvaluator.minutesAgo(49 * 3_600_000L))
+    }
 }

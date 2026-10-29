@@ -9,7 +9,9 @@ function sampleAt(t) {
   const load = Math.round(380 + 250 * Math.max(0, Math.sin(((h - 15) / 8) * Math.PI)) + 30 * wave);
   const soc = Math.round(Math.min(100, Math.max(20, 55 + 40 * sun - (h > 18 || h < 6 ? 10 : 0))));
   const batV = +(48.5 + soc * 0.055).toFixed(1);
-  const net = pvW - load;
+  // أولوية SBU: الحمل على الألواح والبطارية، ولا يتحول للشبكة إلا إذا ضعفت البطارية بلا شمس
+  const onGrid = sun <= 0.05 && soc <= 40;
+  const net = onGrid ? Math.max(0, pvW) : pvW - load;
   const pad = (x) => String(x).padStart(2, '0');
   return [
     ['Timestamp', `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`, ''],
@@ -35,7 +37,7 @@ function sampleAt(t) {
     ['Output Source Priority', 'Solar Bat Utility', ''],
     ['Charger Source Priority', 'Solar + Utility', ''],
     ['Load Status', 'Load on', ''],
-    ['Model', net < 0 ? 'Battery Mode' : 'Line Mode', ''],
+    ['Model', onGrid ? 'Line Mode' : 'Battery Mode', ''],
     ['Today generation', h < 6 ? 0 : Math.round(((4200 * 13) / Math.PI) * (1 - Math.cos((Math.PI * Math.min(h - 6, 13)) / 13))), 'Wh'],
     ['Inverter Fault', '-', ''],
   ];

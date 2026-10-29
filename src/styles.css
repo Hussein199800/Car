@@ -537,3 +537,30 @@ button.banner { background-clip: padding-box; }
   .res-main b { font-size: 24px; }
   .bat-v b { font-size: 19px; }
 }
+
+/* ---------- مخطط التدفق: أسهم الاتجاه والعناصر القابلة للضغط ---------- */
+.flow-line { fill: none; stroke-width: 5; stroke-linecap: round; opacity: .35; }
+.f-solar.flow-line { stroke: var(--solar); } .f-grid.flow-line { stroke: var(--grid); } .f-load.flow-line { stroke: var(--load); } .f-bat.flow-line { stroke: var(--bat); }
+.arrow { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.a-solar { stroke: var(--solar); } .a-grid { stroke: var(--grid); } .a-load { stroke: var(--load); } .a-bat { stroke: var(--bat); }
+button.node { background: none; border: 0; padding: 0; font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+button.node .ic { display: block; transition: transform .15s, box-shadow .2s; }
+button.node:active .ic { transform: scale(.92); }
+button.node:focus-visible .ic { outline: 3px solid #6366f1; outline-offset: 3px; }
+.node .bt { font-weight: 800; margin-top: 0; }
+.node .bt.chg { color: var(--bat); }
+.node .bt.dis { color: var(--warn); }
+.flow-hint { text-align: center; color: var(--mute); font-size: 12px; margin: 6px 0 0 !important; }
+
+/* ---------- دليل الربط ---------- */
+.login-links { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+.login-links .btn { font-size: 14px; padding: 12px 8px; }
+.fold > summary h2 { display: flex; align-items: center; gap: 8px; }
+.fold > summary h2 svg { width: 22px; height: 22px; color: #0ea5e9; flex: none; }
+.gsteps { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 14px; }
+.gstep { display: flex; gap: 12px; align-items: flex-start; }
+.gn { width: 30px; height: 30px; flex: none; border-radius: 50%; display: grid; place-items: center; font-weight: 800; color: #fff; background: linear-gradient(145deg, #38bdf8, #2563eb); }
+.gstep b { font-size: 15px; }
+.gstep p { margin: 2px 0 8px; color: var(--mute); font-size: 13.5px; line-height: 1.8; }
+.gstep .btn { margin-top: 2px; }
+.gstep .verdict { margin: 0 0 8px; }

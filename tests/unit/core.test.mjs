@@ -155,3 +155,85 @@ test('أخطاء الخادم مترجمة حتى مع التفاصيل الإض
   assert.match(errorAr('ERR_SYSTEM_EXCEPTION', 1), /لم يستطع خادم/);
   assert.equal(errorAr('', 7), 'خطأ 7');
 });
+
+// ---------- مراجعة الإصدار 3.3: أخطاء حسابية ومنطقية ----------
+import { latinDigits, gridPresent } from '../../src/model.js';
+import { cacheSummary, cachedSummary, toCsv, today } from '../../src/data.js';
+import { demoPoints } from '../../src/demo.js';
+import { WatchPowerApi } from '../../src/api.js';
+
+test('المدة تُقرّب للدقائق أولاً: لا «ساعة و60 دقيقة»', () => {
+  assert.equal(fmt.hours(1.999), 'ساعتين');
+  assert.equal(fmt.hours(0.004), 'أقل من دقيقة');
+  assert.equal(fmt.hours(2.5), 'ساعتين و30 دقيقة');
+  assert.equal(fmt.hours(1 / 60), 'دقيقة');
+});
+
+test('الأرقام العربية والفاصلة العشرية تتحول قبل إرسال الإعداد', () => {
+  assert.equal(latinDigits('٥٤٫٥'), '54.5');
+  assert.equal(latinDigits('۱۲'), '12');
+  assert.equal(latinDigits('57,6'), '57.6');
+  assert.equal(Number(latinDigits('٣٠')), 30);
+});
+
+test('وجود الكهرباء يتبع الجهد المقنّن', () => {
+  assert.equal(gridPresent(225, 230), true);
+  assert.equal(gridPresent(60, 230), false);
+  assert.equal(gridPresent(110, 120), true);
+  assert.equal(gridPresent(null, 230), false);
+});
+
+test('عدّاد إنتاج اليوم يُصفَّر عند منتصف الليل ولا تُحمل قيمة الأمس', () => {
+  const t0 = new Date(2026, 9, 28, 0, 0).getTime();
+  // أول قراءتين تحملان عدّاد الأمس (8000) ثم يُصفّر الجهاز العداد
+  const rows = [8000, 8000, 0, 500, 1500].map((wh, i) => ({ ts: t0 + i * 5 * 60000, outW: 500, pvW: 0, soc: 50, gridV: 230, todayWh: wh }));
+  const s = summarize('2026-10-28', rows, 'server');
+  assert.equal(s.pvKwh, 1.5);
+});
+
+test('ساعات توفر الكهرباء على شبكة 120 فولت', () => {
+  const t0 = new Date(2026, 9, 28, 10).getTime();
+  const rows = [0, 5, 10].map((m) => ({ ts: t0 + m * 60000, outW: 100, pvW: 0, soc: 50, gridV: 110, gridRatedV: 120 }));
+  const s = summarize('2026-10-28', rows, 'server');
+  assert.ok(s.gridH > 0.16 && s.gridH < 0.17, String(s.gridH));
+});
+
+test('ملخص الأيام الماضية يُخزَّن نهائياً فقط إذا كان من الخادم', () => {
+  const mem = new Map();
+  globalThis.localStorage = { getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, String(v)), removeItem: (k) => mem.delete(k), get length() { return mem.size; }, key: (i) => [...mem.keys()][i] };
+  const date = today(-2);
+  cacheSummary('X', { date, count: 10, source: 'local' });
+  assert.equal(cachedSummary('X', date), null, 'القراءات المحلية قد تكون جزئية');
+  cacheSummary('X', { date, count: 10, source: 'server' });
+  assert.equal(cachedSummary('X', date).source, 'server');
+  delete globalThis.localStorage;
+});
+
+test('تصدير CSV يقتبس الفواصل والأسطر', () => {
+  assert.equal(toCsv(['a', 'b'], [['x,y', 'l1\r\nl2']]).replace(/^﻿/, ''), 'a,b\r\n"x,y","l1\r\nl2"');
+});
+
+test('بطارية الاحتياط تُحسب على متوسط السحب الفعلي', () => {
+  const c = { ...defaultsCalc(), acV: 220, eff: 90, sunH: 5, backupH: 8 };
+  const fridge = { ...APPLIANCES.find((a) => a.id === 'fridge'), qty: 1, hours: 24 };
+  const s = summarizeLoads([fridge], c, 48);
+  assert.equal(s.avg, fridge.w * fridge.duty);
+  assert.ok(Math.abs(s.batAh - (fridge.w * fridge.duty * 8) / (48 * 0.8 * 0.9)) < 1e-9);
+});
+
+test('الوضع التجريبي لا يعرض «وضع الشبكة» أثناء إنتاج الألواح', () => {
+  const noon = new Date(2026, 9, 28, 12, 30).getTime();
+  const p = Object.fromEntries(demoPoints(noon).map((x) => [x.title, x.val]));
+  assert.equal(p.Model, 'Battery Mode');
+  assert.ok(Number(p['PV1 Charging Power']) > 0);
+});
+
+test('طلبات متزامنة بعد انتهاء الرمز تسجّل الدخول مرة واحدة فقط', async () => {
+  const api = new WatchPowerApi({ usr: 'u', pwdHash: 'h', profile: 'dess' });
+  let logins = 0;
+  api.doAuthenticate = async function () { logins++; await new Promise((r) => setTimeout(r, 10)); this.token = 't'; this.secret = 's'; };
+  await Promise.all([api.authenticate(), api.authenticate(), api.authenticate()]);
+  assert.equal(logins, 1);
+  await api.authenticate();
+  assert.equal(logins, 2, 'بعد انتهاء المحاولة يمكن تسجيل الدخول من جديد');
+});

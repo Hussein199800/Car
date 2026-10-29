@@ -51,24 +51,26 @@ export function convert(c, sysV) {
 }
 
 export function summarizeLoads(list, c, sysV) {
-  let run = 0, maxExtra = 0, whDay = 0;
+  let run = 0, maxExtra = 0, whDay = 0, avg = 0;
   for (const it of list) {
     const w = it.w * it.qty;
     run += w;
+    avg += w * (it.duty || 1);
     maxExtra = Math.max(maxExtra, it.w * ((it.surge || 1) - 1));
     whDay += w * it.hours * (it.duty || 1);
   }
   const eff = c.eff / 100;
   const peak = run + maxExtra;
   return {
-    run, peak, whDay,
+    run, peak, whDay, avg,
     acA: run / c.acV,
     dcA: run / (sysV * eff),
     peakDcA: peak / (sysV * eff),
     // الألواح: الطاقة اليومية ÷ ساعات الشمس الفعّالة مع 25% فواقد (غبار، حرارة، أسلاك)
     pvKw: whDay / 1000 / (c.sunH * 0.75),
-    // البطارية لساعات الاحتياط المطلوبة بتفريغ 80% وكفاءة الإنفرتر
-    batAh: (run * c.backupH) / (sysV * 0.8 * eff),
+    // البطارية لساعات الاحتياط بتفريغ 80% وكفاءة الإنفرتر. نستخدم متوسط السحب الفعلي
+    // (الثلاجة والمكيف يفصلان ويشغلان) بدل جمع القدرات كأنها تعمل بلا توقف
+    batAh: (avg * c.backupH) / (sysV * 0.8 * eff),
   };
 }
 
@@ -175,12 +177,12 @@ function viewList(h, c, sysV) {
     <div class="stat c-sky"><small>ذروة الإقلاع</small><b>${num(s.peak)}</b><span>واط · ${num(s.peakDcA)} أمبير بطارية</span></div>
     ${ah ? `<div class="stat c-green"><small>تكفي بطاريتك</small><b>${s.dcA ? h.fmt.hours((ah * 0.8) / s.dcA) : '—'}</b><span>عند تشغيلها كلها معاً</span></div>` : ''}
     <div class="stat c-violet"><small>ألواح مقترحة</small><b>${num(s.pvKw, 1)} ك.واط</b><span>≈ ${Math.max(1, Math.ceil((s.pvKw * 1000) / 550))} لوح 550 واط</span></div>
-    <div class="stat c-pink"><small>بطارية لـ ${c.backupH} ساعات</small><b>${num(s.batAh)}</b><span>أمبير ساعة على ${sysV} فولت</span></div>
+    <div class="stat c-pink"><small>بطارية تكفي ${h.fmt.hours(c.backupH)}</small><b>${num(s.batAh)}</b><span>أمبير ساعة على ${sysV} فولت</span></div>
   </div>
   <details class="card fold"><summary><h2>افتراضات الحساب</h2>${h.icons.chevL}</summary><div class="form">
     <div class="set-row"><span>ساعات الشمس الفعّالة يومياً</span><span class="num-in"><input type="number" id="calcSun" min="2" max="9" step="0.5" value="${c.sunH}"><small>س</small></span></div>
     <div class="set-row"><span>ساعات الاحتياط المطلوبة</span><span class="num-in"><input type="number" id="calcBackup" min="1" max="48" value="${c.backupH}"><small>س</small></span></div>
-  </div><p class="hint">القيم تقديرية للتخطيط. الثلاجة والمكيف لا يعملان طوال الوقت، لذا حُسب استهلاكهما اليومي بنسبة تشغيل تقريبية. اقتراح الألواح يشمل 25% فواقد، والبطارية بتفريغ 80%.</p></details>
+  </div><p class="hint">القيم تقديرية للتخطيط. الثلاجة والمكيف لا يعملان طوال الوقت، لذا حُسب استهلاكهما اليومي بنسبة تشغيل تقريبية. اقتراح الألواح يشمل 25% فواقد، والبطارية محسوبة على متوسط السحب الفعلي (${num(s.avg)} واط) بتفريغ 80%.</p></details>
   <button class="btn ghost wide" id="clearLoads">مسح القائمة</button>` : ''}
   <h3 class="sec-h">أضف جهازاً</h3>
   ${catalog}`;
