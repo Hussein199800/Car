@@ -1,7 +1,0 @@
-node_modules/
-www/build/
-tests/e2e/out/
-*.apk
-*.jks
-*.keystore
-keystore.properties
