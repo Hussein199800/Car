@@ -251,6 +251,12 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       check('ERR_SYSTEM_EXCEPTION: الإعداد يبقى قابلاً للتعديل مع شرح عربي', eqText.includes('غير متاحة') && eqText.includes('لم يستطع خادم'));
       await page.fill('.field[data-i="1"] .f-in', '2000'); await page.click('.field[data-i="1"] .f-save');
       check('رفض قيمة خارج النطاق المسموح', !(await page.$('.modal')) && !page.calls.some((c) => c.action === 'ctrlDevice' && c.params.id === 'eq_time'));
+      // لوحة المفاتيح العربية: «٦٠» تُرسل 60
+      await page.fill('.field[data-i="1"] .f-in', '٦٠'); await page.click('.field[data-i="1"] .f-save');
+      await page.waitForSelector('.modal');
+      await page.click('.modal [data-v="1"]'); await page.waitForTimeout(400);
+      const eqSent = page.calls.find((c) => c.action === 'ctrlDevice' && c.params.id === 'eq_time');
+      check('الأرقام العربية في الإعدادات تُرسل كأرقام صحيحة', eqSent?.params.val === '60', JSON.stringify(eqSent?.params));
       // إعداد بخيار واحد = زر إجراء، لا يُقرأ ولا يظهر ERR_UNSUPPORTED
       await page.click('.field[data-i="2"] .field-h');
       await page.waitForSelector('.field[data-i="2"] .f-act');
@@ -291,6 +297,9 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       check('الحاسبة: إضافة أجهزة وحساب الحمل', (await page.$$('.ld')).length === 2 && (await text(page, '.res-main b')) === '250');
       check('الحاسبة: حكم على قدرة الإنفرتر', !!(await page.$('.verdict.ok')));
       // المزيد: اسم المطوّر وزر الخروج
+      await page.evaluate(() => window.__nav('more', 'about'));
+      const about = await text(page, '#view');
+      check('حول التطبيق يذكر الحاسبة والنصائح والمراقبة ودليل الربط', ['حاسبة أحمال', 'نصائح', 'في الخلفية', 'الواي فاي'].every((w) => about.includes(w)));
       await page.evaluate(() => window.__nav('more', null));
       check('اسم المطوّر ظاهر أعلى المزيد', (await text(page, '.dev-top')).includes('حسين محمد علي الطويل'));
       check('زر تسجيل الخروج أحمر ومنفصل في آخر المزيد', await page.$eval('#logoutBtn', (b) => getComputedStyle(b).backgroundColor === 'rgb(239, 68, 68)' && b.previousElementSibling?.classList.contains('lcards')));

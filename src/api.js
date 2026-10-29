@@ -84,7 +84,14 @@ export class WatchPowerApi {
     throw lastErr;
   }
 
-  async authenticate() {
+  // عدة طلبات متزامنة (التحديث والتقارير والإعدادات) قد تكتشف انتهاء الجلسة معاً؛
+  // نجعلها تنتظر دخولاً واحداً بدل أن يُبطل كل دخول رمز الآخر
+  authenticate() {
+    if (!this.authPromise) this.authPromise = this.doAuthenticate().finally(() => { this.authPromise = null; });
+    return this.authPromise;
+  }
+
+  async doAuthenticate() {
     this.token = '';
     this.secret = '';
     const p = PROFILES[this.profile];
@@ -119,15 +126,16 @@ export class WatchPowerApi {
     url += actionStr;
 
     let data;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 25000);
     try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 25000);
       const resp = await fetch(url, { signal: ctrl.signal });
-      clearTimeout(timer);
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       data = await resp.json();
     } catch (e) {
       throw new ApiError('تعذّر الاتصال بالخادم، تحقق من الإنترنت');
+    } finally {
+      clearTimeout(timer);
     }
 
     if (data.err && data.err !== 0) {

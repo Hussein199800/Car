@@ -8,7 +8,7 @@ import {
   LinearScale, CategoryScale, Filler, Tooltip, Legend,
 } from 'chart.js';
 import { WatchPowerApi, ApiError } from './api.js';
-import { normalize, rowsToSamples, fmt } from './model.js';
+import { normalize, rowsToSamples, fmt, latinDigits } from './model.js';
 import { trTitle, trValue, trUnit, isEmptyVal } from './i18n.js';
 import {
   store, today, addDays, dayKey, recordSample, localDay, summarize, cachedSummary, cacheSummary, toCsv, shareFile,
@@ -24,7 +24,7 @@ import { makeLocalizer, INV_TERMS, GRID_TERMS } from './terms.js';
 Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, CategoryScale, Filler, Tooltip, Legend);
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '3.2.0';
+const VERSION = '3.3.0';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -148,6 +148,7 @@ function stat(label, value, unit, color = '') {
 // ================= تسجيل الدخول =================
 function renderLogin(msg = '') {
   stopPolling();
+  state.screen = 'login';
   document.getElementById('app').innerHTML = `
   <div class="login">
     <div class="login-hero">
@@ -218,8 +219,18 @@ function renderLogin(msg = '') {
   };
 }
 
+// حالة التنبيهات تخص جهازاً بعينه: تُصفّر عند تبديل الجهاز أو الخروج حتى لا تنتقل
+// «انقطعت الكهرباء» أو «غير متصل» من جهاز لآخر فتولّد تنبيهات عودة وهمية
+function resetAlertState() {
+  state.flags = {};
+  store.set('flags', state.flags);
+  state.fetchCount = 0;
+}
+
 function logout() {
   stopPolling();
+  resetAlertState();
+  state.lastTs = {};
   ['devices', 'devSn', 'demo'].forEach(store.del);
   secure.del('session');
   monitor.configure({ enabled: false }).catch(() => {});
@@ -272,6 +283,12 @@ function navigate(tab, page) {
 }
 
 function back() {
+  // قبل تسجيل الدخول: زر الرجوع في دليل الربط يعيد لشاشة الدخول بدل إغلاق التطبيق
+  if (!state.session && !state.demo) {
+    if (state.screen === 'guide') renderLogin();
+    else CapApp.minimizeApp().catch(() => {});
+    return;
+  }
   if (state.page) navigate(state.tab, state.page.includes('/') ? state.page.slice(0, state.page.lastIndexOf('/')) : null);
   else if (state.tab !== 'home') navigate('home', null);
   else CapApp.minimizeApp().catch(() => {});
@@ -533,13 +550,16 @@ function checkAlerts(m) {
   if (m.warning && m.warning !== state.flags.warnCode) addFault('warn', 'تحذير من الإنفرتر', `الرمز: ${m.warning}`);
   state.flags.warnCode = m.warning;
 
+  // هامش رجوع (hysteresis): التنبيه لا يُعاد تسليحه إلا بعد ابتعاد واضح عن الحد،
+  // حتى لا تتكرر الإشعارات مع تذبذب القراءة حول الحد نفسه
+  const hold = (key, on, stillOn) => (state.flags[key] === true ? stillOn : on);
   if (m.soc !== null) {
-    edge('lowSoc', m.soc <= p.lowSoc && (m.batW ?? 0) <= 0,
+    edge('lowSoc', hold('lowSoc', m.soc <= p.lowSoc && (m.batW ?? 0) <= 0, m.soc < p.lowSoc + 5),
       () => raise('البطارية منخفضة', `نسبة الشحن ${m.soc}% — يُنصح بتقليل الأحمال.${eta(m).known ? ' ' + eta(m).text : ''}`, 'bad'));
-    if (p.alertFull) edge('full', m.soc >= 100, () => raise('البطارية ممتلئة', 'وصل الشحن إلى 100% — وقت مناسب لتشغيل الأحمال الكبيرة', 'ok'));
+    if (p.alertFull) edge('full', hold('full', m.soc >= 100, m.soc >= 95), () => raise('البطارية ممتلئة', 'وصل الشحن إلى 100% — وقت مناسب لتشغيل الأحمال الكبيرة', 'ok'));
   }
   if (m.loadPct !== null) {
-    edge('overload', m.loadPct >= p.overloadPct, () => {
+    edge('overload', hold('overload', m.loadPct >= p.overloadPct, m.loadPct >= p.overloadPct - 10), () => {
       raise('حمل زائد', `الحمل وصل إلى ${m.loadPct}% (${fmt.w(m.outW)})`, 'bad');
       addFault('warn', 'حمل زائد', `${m.loadPct}% (${fmt.w(m.outW)})`);
     });
@@ -759,7 +779,7 @@ AFTER.battery = () => { bindGoto(); drawToday('cSocToday', 'soc', '#34d399', '%'
 function pageSolar(m) {
   const pv2 = m.pv2V !== null || m.pv2W !== null;
   return `
-  ${hero(icons.panel, 'c-amber', 'إنتاج الألواح الآن', fmt.w(m.pvW), m.pvW > 5 && !m.stale ? 'تشحن وتغذّي الحمل' : 'لا يوجد إنتاج حالياً')}
+  ${hero(icons.panel, 'c-amber', 'إنتاج الألواح الآن', fmt.w(m.pvW), m.pvW > 5 && !m.stale ? 'الألواح تنتج الآن' : 'لا يوجد إنتاج حالياً')}
   <div class="stats">
     ${stat('إنتاج اليوم', m.todayWh !== null ? fmt.kwh(m.todayWh / 1000) : '—', 'كيلوواط ساعة', 'c-amber')}
     ${stat('الإنتاج الكلي', m.totalWh !== null ? fmt.kwh(m.totalWh / 1000) : '—', 'كيلوواط ساعة', 'c-green')}
@@ -794,7 +814,7 @@ function pageAll(m) {
   const live = m.raw.filter((r) => r.group === 'live');
   return `<section class="card"><div class="card-h"><h2>القراءات الحيّة</h2><small class="muted">${m.ts ? esc(fmt.dateTime(m.ts)) : ''}</small></div>
     ${kv(live.map((r) => [r.ar, isEmptyVal(r.val) ? val(null) : val(r.valAr, trUnit(r.unit))]))}</section>
-    <p class="hint center">المعلومات المقنّنة والإعدادات ومعلومات الجهاز موجودة في تبويب «الرافع».</p>`;
+    <p class="hint center">المعلومات المقنّنة والإعدادات ومعلومات الجهاز موجودة في صفحة «الرافع»: اضغط مربع الرافع في المخطط بالرئيسية.</p>`;
 }
 
 // ================= الرسوم =================
@@ -864,7 +884,8 @@ function viewReports() {
   <p class="hint center">تُجلب البيانات من سجل خادم WatchPower، وعند تعذّره تُستخدم القراءات التي حفظها التطبيق على هاتفك.</p>`;
 }
 
-// جلب قراءات يوم: من سجل الخادم أولاً، ثم من القراءات المحفوظة محلياً
+// جلب قراءات يوم: من سجل الخادم أولاً، ثم من القراءات المحفوظة محلياً.
+// بعد 3 إخفاقات متتالية نتوقف عن سؤال الخادم حتى نهاية التحميل الحالي (يُصفَّر مع كل تقرير جديد)
 let serverHistFails = 0;
 async function daySamples(date) {
   if (state.demo) return { samples: rowsToSamples(demoHistory(date)), source: 'demo' };
@@ -891,6 +912,7 @@ const dateLabel = (date) => (date === today() ? 'اليوم' : date === today(-1
 
 async function loadDay() {
   const date = state.rep.dayDate;
+  serverHistFails = 0;
   state.rep.day = { loading: true };
   render();
   try {
@@ -899,7 +921,8 @@ async function loadDay() {
     cacheSummary(sn(), sum);
     if (date === state.rep.dayDate) state.rep.day = { samples, sum, source };
   } catch (e) {
-    state.rep.day = { error: e.message };
+    // لا نعرض خطأ يوم قديم إذا انتقل المستخدم ليوم آخر أثناء التحميل
+    if (date === state.rep.dayDate) state.rep.day = { error: e.message };
   }
   if (state.page === 'day') render();
 }
@@ -1001,6 +1024,7 @@ async function loadRange(kind) {
   const off = kind === 'week' ? state.rep.weekOff : state.rep.monthOff;
   const dates = rangeDates(kind, off);
   const token = Symbol(kind);
+  serverHistFails = 0;
   state.rep[kind] = { loading: true, done: 0, total: dates.length, token };
   render();
   const sums = await loadSummaries(dates, (done, total) => {
@@ -1078,6 +1102,7 @@ AFTER.month = () => bindRange('month');
 async function loadCompare() {
   const kind = state.rep.cmp;
   state.rep.cmpData = { loading: true };
+  serverHistFails = 0;
   render();
   const cur = await loadSummaries(rangeDates(kind, 0));
   let prevDates = rangeDates(kind, 1);
@@ -1299,7 +1324,7 @@ function pageDevice(m) {
     ['جهد الناقل الداخلي', val(m.busV === null ? null : numAr(m.busV), 'فولت')],
     m.temp !== null ? ['الحرارة', val(numAr(m.temp), 'م°')] : null,
   ]), true)}
-  ${section('معلومات الجهاز', kv([['اسم الجهاز', val(d?.alias)], ['الرقم التسلسلي للجهاز', val(d?.sn)], ['رقم وحدة الواي فاي', val(d?.pn)], ...rows(product)]))}
+  ${section('معلومات الجهاز', kv([['اسم الجهاز', val(d?.alias)], ['رقم الجهاز في الحساب', val(d?.sn)], ['رقم وحدة الواي فاي', val(d?.pn)], ...rows(product)]))}
   ${group('rated').length ? section('القيم المقنّنة', kv(rows(group('rated')))) : ''}
   ${group('config').length ? section('الإعدادات الحالية', kv(rows(group('config'))) + '<p class="hint">للعرض فقط. لتغييرها: «المزيد ← إعدادات الرافع».</p>') : ''}
   <button class="btn ghost wide" data-goto="more:edit">${icons.wrench} تعديل إعدادات الرافع</button>
@@ -1425,7 +1450,8 @@ async function openField(li) {
     <div class="f-row">${input}<button class="btn primary f-save">حفظ</button></div>`;
   body.querySelector('.f-save').onclick = async () => {
     const inp = body.querySelector('.f-in');
-    const v = inp.value.trim();
+    // لوحة المفاتيح العربية تكتب «٥٤٫٥» فنحوّلها إلى 54.5 قبل الفحص والإرسال
+    const v = items.length ? inp.value.trim() : latinDigits(inp.value.trim());
     if (!v) { toast(items.length ? 'اختر قيمة أولاً' : 'أدخل قيمة أولاً', 'bad'); return; }
     if (!items.length) {
       const n = Number(v);
@@ -1552,6 +1578,7 @@ AFTER.setup = bindGuide;
 // نفس الدليل من شاشة الدخول قبل تسجيل الدخول
 function renderGuideStandalone(which) {
   state.guideOpen = which;
+  state.screen = 'guide';
   document.getElementById('app').innerHTML = `
     <header class="topbar"><button class="icon-btn" id="guideBack" aria-label="رجوع">${icons.arrowBack}</button><div class="page-title">ربط الجهاز والحساب</div><span></span></header>
     <main id="view"><div class="page-anim">${L(setupGuide(false))}</div></main>`;
@@ -1669,6 +1696,7 @@ AFTER.account = () => {
   if (sel) sel.onchange = () => {
     state.devSn = sel.value; store.set('devSn', sel.value);
     state.model = null; state.fields = null;
+    resetAlertState();
     state.rep = { ...state.rep, day: null, week: null, month: null, cmpData: null };
     loadCache(); refresh(); render();
   };
@@ -1693,11 +1721,15 @@ function pageAbout() {
       <li>${icons.bell}<span>تنبيهات لانقطاع الرافع والكهرباء وانخفاض البطارية والأعطال</span></li>
       <li>${icons.wrench}<span>عرض إعدادات الرافع وتعديلها عن بُعد بعد التأكيد</span></li>
       <li>${icons.offline}<span>حفظ آخر البيانات على الهاتف وعرضها بدون إنترنت</span></li>
+      <li>${icons.clock}<span>مراقبة في الخلفية كل ربع ساعة تقريباً حتى والتطبيق مغلق</span></li>
+      <li>${icons.calc}<span>حاسبة أحمال: تحويل الأمبير والواط وتقدير مدة البطارية والألواح المناسبة</span></li>
+      <li>${icons.bulb}<span>نصائح لاستخدام الرافع وبطاريات الليثيوم، ونصائح ذكية حسب قراءات جهازك</span></li>
+      <li>${icons.wifi}<span>دليل ربط الجهاز بالواي فاي وإنشاء الحساب خطوة بخطوة</span></li>
     </ul>
   </section>
   <section class="card"><div class="card-h"><h2>الخصوصية</h2></div>
     <p class="hint">«طاقتي» تطبيق مستقل غير تابع لشركة WatchPower أو الشركات المصنّعة للأجهزة، ويعتمد على خدمة WatchPower السحابية، لذا قد يتأثر إذا غيّرت الشركة خدمتها.</p>
-    <p class="hint">يتصل التطبيق مباشرة بخوادم WatchPower (DessMonitor) فقط. لا تُحفظ كلمة المرور، ولا تُرسل بياناتك إلى أي جهة أخرى. كل التقارير محفوظة على هاتفك.</p>
+    <p class="hint">يتصل التطبيق مباشرة بخوادم WatchPower (DessMonitor أو ShineMonitor) فقط. لا تُحفظ كلمة المرور كما كتبتها، بل بيانات الدخول مشفّرةً داخل الهاتف، ولا تُرسل بياناتك إلى أي جهة أخرى. كل التقارير محفوظة على هاتفك.</p>
   </section>
   <p class="foot">صُنع بـ ${icons.heart} للطاقة النظيفة</p>`;
 }

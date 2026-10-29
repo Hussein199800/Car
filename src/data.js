@@ -2,6 +2,7 @@
 import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
+import { gridPresent } from './model.js';
 
 const P = 'taqati.';
 export const store = {
@@ -31,7 +32,7 @@ export function addDays(date, n) {
 }
 
 // ---------- تسجيل القراءات محلياً (يعمل كاحتياط عند تعذّر سجل الخادم) ----------
-const REC_FIELDS = ['ts', 'pvW', 'outW', 'soc', 'batV', 'gridV', 'batW', 'todayWh', 'mode'];
+const REC_FIELDS = ['ts', 'pvW', 'outW', 'soc', 'batV', 'gridV', 'batW', 'todayWh', 'mode', 'gridRatedV'];
 const KEEP_DAYS = 62;
 
 export function recordSample(sn, s) {
@@ -65,10 +66,16 @@ export function summarize(date, samples, source) {
     coveredH += dt;
     if (s[i].outW != null) loadWh += s[i].outW * dt;
     if (s[i].pvW != null) pvWh += s[i].pvW * dt;
-    if (s[i].gridV != null && s[i].gridV >= 90) gridH += dt;
+    if (gridPresent(s[i].gridV, s[i].gridRatedV)) gridH += dt;
     if (/battery/i.test(s[i].mode || '') || (s[i].batW != null && s[i].batW < -20)) batH += dt;
   }
-  const today = s.map((x) => x.todayWh).filter((v) => v != null);
+  // عدّاد «إنتاج اليوم» في الجهاز قد يحمل قيمة الأمس لدقائق بعد منتصف الليل قبل أن يُصفَّر،
+  // فنأخذ القيم بعد آخر تصفير فقط
+  let meter = s.map((x) => x.todayWh).filter((v) => v != null);
+  for (let i = meter.length - 1; i > 0; i--) {
+    if (meter[i] < meter[i - 1]) { meter = meter.slice(i); break; }
+  }
+  const today = meter;
   const socs = s.map((x) => x.soc).filter((v) => v != null);
   const loads = s.map((x) => x.outW).filter((v) => v != null);
   return {
@@ -92,15 +99,16 @@ export function cachedSummary(sn, date) {
   return store.get(`sum.${sn}.${date}`, null);
 }
 export function cacheSummary(sn, sum) {
-  // أيام الماضي لا تتغير، فنحفظ ملخصها نهائياً لتسريع التقارير
-  if (sum.date < today() && sum.count > 0) store.set(`sum.${sn}.${sum.date}`, sum);
+  // نحفظ ملخص الأيام الماضية نهائياً فقط إذا كان من سجل الخادم الكامل؛ القراءات المحلية
+  // قد تكون جزئية (التطبيق لم يكن مفتوحاً طوال اليوم) فلا نمنع جلب بيانات أكمل لاحقاً
+  if (sum.date < today() && sum.count > 0 && sum.source === 'server') store.set(`sum.${sn}.${sum.date}`, sum);
 }
 
 // ---------- التصدير ----------
 export function toCsv(header, rows) {
   const q = (v) => {
     const s = v === null || v === undefined ? '' : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   return '﻿' + [header, ...rows].map((r) => r.map(q).join(',')).join('\r\n');
 }
