@@ -48,7 +48,10 @@ const ERROR_AR = {
 // الخادم يضيف أحياناً تفاصيل بعد الرمز مثل «ERR_UNSUPPORTED(cmd is null!!)»
 export function errorAr(desc, code) {
   const key = String(desc || '').match(/^ERR_[A-Z_]+/)?.[0];
-  return ERROR_AR[desc] || (key && ERROR_AR[key]) || desc || `خطأ ${code}`;
+  if (ERROR_AR[desc] || (key && ERROR_AR[key])) return ERROR_AR[desc] || ERROR_AR[key];
+  // رمز غير معروف: رسالة عربية مع الرمز للمساعدة في التشخيص بدل عرض الرمز الإنجليزي وحده
+  if (key) return `رفض خادم WatchPower الطلب (${desc})`;
+  return desc || `خطأ من الخادم (${code})`;
 }
 
 export class WatchPowerApi {

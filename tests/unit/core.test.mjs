@@ -153,7 +153,8 @@ test('نطاق الإعداد من ملاحظة الجهاز', () => {
 test('أخطاء الخادم مترجمة حتى مع التفاصيل الإضافية', () => {
   assert.equal(errorAr('ERR_UNSUPPORTED(cmd is null!!)', 9), 'هذا الإعداد لا يدعم قراءة قيمته الحالية');
   assert.match(errorAr('ERR_SYSTEM_EXCEPTION', 1), /لم يستطع خادم/);
-  assert.equal(errorAr('', 7), 'خطأ 7');
+  assert.equal(errorAr('', 7), 'خطأ من الخادم (7)');
+  assert.equal(errorAr('ERR_NEW_THING', 3), 'رفض خادم WatchPower الطلب (ERR_NEW_THING)', 'رمز غير معروف لا يُعرض وحده بالإنجليزية');
 });
 
 // ---------- مراجعة الإصدار 3.3: أخطاء حسابية ومنطقية ----------
@@ -386,9 +387,27 @@ test('رسالة الحالة عند الفتح: سطر واحد حسب أهم �
   const base = { stale: false, fault: null, soc: 60, gridOn: true, mode: 'Battery Mode', outW: 400, loadPct: 6 };
   assert.match(openingNotice({ ...base, pvW: 1500, batW: 900 }).text, /الألواح تغذّي البيت وتشحن البطارية/);
   assert.match(openingNotice({ ...base, pvW: 900, batW: 800, outW: 0 }).text, /^الألواح تشحن البطارية/);
-  assert.match(openingNotice({ ...base, pvW: 0, batW: -450 }).text, /البيت يعمل على البطارية \(60%\)/);
+  const dis = openingNotice({ ...base, pvW: 0, batW: -450 }).text;
+  assert.match(dis.replace(/[\u2066-\u2069]/g, ''), /البيت يعمل على البطارية \(60%\)/);
+  assert.ok(dis.includes('\u206660%\u2069'), 'النسبة معزولة اتجاهياً حتى لا تظهر (%60)');
   assert.match(openingNotice({ ...base, mode: 'Line Mode', pvW: 0, batW: 0 }).text, /الكهرباء الوطنية تغذّي البيت/);
   assert.match(openingNotice({ ...base, mode: 'Line Mode', pvW: 700, batW: 600 }).text, /والألواح تشحن البطارية/);
   assert.equal(openingNotice({ ...base, loadPct: 92, outW: 6000 }).kind, 'bad');
   assert.equal(openingNotice({ ...base, stale: true }), null, 'لا رسالة على قراءة قديمة');
+});
+
+// ---------- الإصدار 3.6: التدقيق الشامل ----------
+test('التواريخ والأوقات بالأرقام 0-9 دائماً', () => {
+  const t = new Date(2026, 9, 30, 13, 5).getTime();
+  for (const v of [fmt.time(t), fmt.dateTime(t), fmt.day('2026-10-30', { weekday: 'long', day: 'numeric', month: 'long' })]) {
+    assert.ok(!/[\u0660-\u0669\u06F0-\u06F9]/.test(v), v);
+    assert.ok(/[0-9]/.test(v), v);
+  }
+  assert.equal(fmt.iso(t), '2026-10-30 13:05:00');
+});
+
+test('الوحدات بالعربية في المخطط أيضاً', () => {
+  assert.equal(fmt.wShort(408), '408 واط');
+  assert.equal(fmt.wShort(4230), '4.2 ك.واط');
+  assert.equal(fmt.wShort(null), '—');
 });

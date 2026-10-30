@@ -50,7 +50,7 @@ object DefaultHttp : HttpGet {
         conn.readTimeout = 20_000
         conn.instanceFollowRedirects = false
         try {
-            if (conn.responseCode != 200) throw ApiException("HTTP ${conn.responseCode}")
+            if (conn.responseCode != 200) throw ApiException("رد غير متوقع من الخادم (HTTP ${conn.responseCode})")
             return conn.inputStream.bufferedReader().use { it.readText() }
         } finally {
             conn.disconnect()

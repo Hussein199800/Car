@@ -1,12 +1,15 @@
 // مستشار الطاقة: تحليلات وتوصيات مبنية فقط على القراءات الفعلية المسجّلة.
 // كل رقم هنا إما قراءة من الجهاز أو حساب مباشر منها، ولا نعرض تقديراً كأنه قياس.
-import { fmt } from './model.js';
+import { fmt, countAr, DAY } from './model.js';
 
 const kwh = (v) => (v == null ? '—' : `${v.toFixed(v >= 10 ? 1 : 2)} ك.و.س`);
 const pct = (v) => `${Math.round(v)}%`;
 const avg = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
 const clock = (t) => fmt.time(t);
 const minutesOfDay = (t) => { const d = new Date(t); return d.getHours() * 60 + d.getMinutes(); };
+// «في 3 من 7 أيام» بصيغة صحيحة لأي عدد
+const ofDays = (x, n) => `${x} من ${n === 1 ? 'يوم واحد' : n === 2 ? 'يومين' : n <= 10 ? n + ' أيام' : n + ' يوماً'}`;
+const lastDays = (n) => (n === 1 ? 'آخر يوم' : 'آخر ' + countAr(n, DAY));
 const hhmm = (m) => fmt.time(new Date(2000, 0, 1, Math.floor(m / 60), Math.round(m % 60)).getTime());
 
 // يوم «كامل» = بيانات تغطي معظم ساعاته، حتى لا تُقارن أيام ناقصة بأيام كاملة
@@ -76,21 +79,21 @@ function tips(r, days, { prefs, ratedW, model }) {
   if (r.gridChg >= 0.5) {
     const prio = (model?.raw || []).find((x) => /charger (source )?priority/i.test(x.title))?.val || '';
     const utilityToo = /utility|grid|mains/i.test(prio) && !/only/i.test(prio);
-    add('info', 'شحن من الكهرباء الوطنية', `شُحنت البطارية من الكهرباء ${kwh(r.gridChg)} خلال ${n === 1 ? 'اليوم الماضي' : `آخر ${n} أيام`}، ومن الألواح ${kwh(r.solarChg)}.${utilityToo ? ' إذا كانت الشمس تكفي لشحنها، اجعل «أولوية مصدر الشحن» على الألواح أولاً من إعدادات الرافع لتوفير الكهرباء.' : ''}`);
+    add('info', 'شحن من الكهرباء الوطنية', `شُحنت البطارية من الكهرباء ${kwh(r.gridChg)} خلال ${n === 1 ? 'اليوم الماضي' : lastDays(n)}، ومن الألواح ${kwh(r.solarChg)}.${utilityToo ? ' إذا كانت الشمس تكفي لشحنها، اجعل «أولوية مصدر الشحن» على الألواح أولاً من إعدادات الرافع لتوفير الكهرباء.' : ''}`);
   }
 
   // 3) انخفاض البطارية
   const lowDays = days.filter((s) => s.socMin != null && s.socMin <= (prefs.lowSoc ?? 30));
   if (lowDays.length) {
     const l = r.battery.lowest;
-    add('bad', 'البطارية تنخفض كثيراً', `وصلت البطارية إلى ${l.soc}% (${dayLabel(l.date)}${l.at ? ' الساعة ' + clock(l.at) : ''}) ونزلت تحت ${prefs.lowSoc ?? 30}% في ${lowDays.length} من ${n} أيام. خفّف الأحمال الليلية، فالتفريغ العميق المتكرر يقصّر عمر البطارية.`);
+    add('bad', 'البطارية تنخفض كثيراً', `وصلت البطارية إلى ${l.soc}% (${dayLabel(l.date)}${l.at ? ' الساعة ' + clock(l.at) : ''}) ونزلت تحت ${prefs.lowSoc ?? 30}% في ${ofDays(lowDays.length, n)}. خفّف الأحمال الليلية، فالتفريغ العميق المتكرر يقصّر عمر البطارية.`);
   }
 
   // 4) وقت امتلاء البطارية = أفضل وقت للأحمال الكبيرة
   if (r.battery.avgFullTime != null && r.battery.avgFullTime < 15 * 60) {
-    add('ok', 'وقت مناسب للأحمال الكبيرة', `تمتلئ بطاريتك عادة قرابة ${hhmm(r.battery.avgFullTime)} (في ${r.battery.fullDays} من ${n} أيام). بعدها شغّل الغسالة والمضخة والمكواة والشمس موجودة لتستفيد من الفائض بدل أن يضيع.`);
+    add('ok', 'وقت مناسب للأحمال الكبيرة', `تمتلئ بطاريتك عادة قرابة ${hhmm(r.battery.avgFullTime)} (في ${ofDays(r.battery.fullDays, n)}). بعدها شغّل الغسالة والمضخة والمكواة والشمس موجودة لتستفيد من الفائض بدل أن يضيع.`);
   } else if (n >= 3 && r.battery.fullDays === 0) {
-    add('warn', 'البطارية لا تمتلئ', `لم تصل البطارية إلى 100% في آخر ${n} أيام. الامتلاء الكامل من حين لآخر يساعد نظام إدارة بطاريات الليثيوم على موازنة الخلايا.`);
+    add('warn', 'البطارية لا تمتلئ', `لم تصل البطارية إلى 100% في ${lastDays(n)}. الامتلاء الكامل من حين لآخر يساعد نظام إدارة بطاريات الليثيوم على موازنة الخلايا.`);
   }
 
   // 5) انخفاض الإنتاج مقارنة بالمعتاد
@@ -100,7 +103,7 @@ function tips(r, days, { prefs, ratedW, model }) {
   // 6) ذروة الحمل
   if (ratedW) {
     const peaks = days.filter((s) => s.peakW != null && s.peakW >= 0.8 * ratedW);
-    if (peaks.length) add('warn', 'ذروة حمل مرتفعة', `تجاوز الحمل 80% من قدرة الإنفرتر في ${peaks.length} من ${n} أيام (أعلى ذروة ${fmt.w(Math.max(...peaks.map((s) => s.peakW)))}). تجنّب تشغيل الأجهزة الكبيرة معاً.`);
+    if (peaks.length) add('warn', 'ذروة حمل مرتفعة', `تجاوز الحمل 80% من قدرة الإنفرتر في ${ofDays(peaks.length, n)} (أعلى ذروة ${fmt.w(Math.max(...peaks.map((s) => s.peakW)))}). تجنّب تشغيل الأجهزة الكبيرة معاً.`);
   }
 
   // 7) الاستهلاك الليلي مقابل ما تخزنه البطارية
@@ -124,7 +127,7 @@ export function productionDrop(days) {
   return { by, text: `إنتاج ${dayLabel(last.date)} ${kwh(last.pvKwh)}، أقل بـ ${pct(by)} من متوسط الأيام السابقة (${kwh(base)}).${full}` };
 }
 
-const dayLabel = (date) => new Date(date + 'T12:00:00').toLocaleDateString('ar', { weekday: 'long' });
+const dayLabel = (date) => fmt.day(date, { weekday: 'long' });
 
 // ---------- أسئلة عن منظومتك: أجوبة من القراءات الفعلية ----------
 export function answers(r, model, { todayKey, sums = [] } = {}) {
@@ -150,7 +153,7 @@ export function answers(r, model, { todayKey, sums = [] } = {}) {
     if (b.soh != null) parts.push(`البطارية ترسل حالة صحة (SOH) ${b.soh}%.`);
     if (b.avgDod != null) parts.push(`متوسط عمق التفريغ اليومي ${pct(b.avgDod)}.`);
     if (b.lowest) parts.push(`أدنى نسبة في الفترة ${b.lowest.soc}%.`);
-    if (r.days) parts.push(`امتلأت إلى 100% في ${b.fullDays} من ${r.days} أيام.`);
+    if (r.days) parts.push(`امتلأت إلى 100% في ${ofDays(b.fullDays, r.days)}.`);
     if (b.cyclesPerDay != null) parts.push(`تقوم بقرابة ${b.cyclesPerDay.toFixed(2)} دورة كاملة يومياً (محسوبة من طاقة التفريغ وسعة البطارية التي أدخلتها).`);
     if (b.soh == null) parts.push('الرافع لا يرسل حالة صحة البطارية، لذلك لا يمكن قياس نسبة التدهور بدقة من التطبيق. علامات تستحق الانتباه: انخفاض النسبة بسرعة أكبر من المعتاد بنفس الحمل، أو هبوط كبير في الجهد عند تشغيل حمل كبير.');
     out.push({ q: 'هل البطارية تعمل بكفاءة؟', a: parts.join(' ') || 'لا توجد بيانات كافية بعد.' });
@@ -195,11 +198,11 @@ export function openingNotice(m, prefs = {}) {
   if (m.loadPct != null && m.loadPct >= (prefs.overloadPct ?? 80)) return { kind: 'bad', text: `حمل البيت مرتفع: ${m.loadPct}% (${w(m.outW)})` };
   if (line && m.gridOn) {
     if (!chg) return { kind: 'info', text: `الكهرباء الوطنية تغذّي البيت بـ ${w(m.outW)}` };
-    return { kind: 'info', text: pv ? 'الكهرباء الوطنية تغذّي البيت والألواح تشحن البطارية' : `الكهرباء الوطنية تغذّي البيت وتشحن البطارية (${m.soc ?? '—'}%)` };
+    return { kind: 'info', text: pv ? 'الكهرباء الوطنية تغذّي البيت والألواح تشحن البطارية' : `الكهرباء الوطنية تغذّي البيت وتشحن البطارية (${fmt.pct(m.soc ?? '—')})` };
   }
   if (pv && chg) return { kind: 'ok', text: (m.outW ?? 0) > 30 ? `الألواح تغذّي البيت وتشحن البطارية بـ ${w(m.batW)}` : `الألواح تشحن البطارية بـ ${w(m.batW)}` };
   if (pv && !dis) return { kind: 'ok', text: `الألواح تغذّي البيت بـ ${w(m.pvW)}` };
-  if (dis) return { kind: m.soc != null && m.soc <= (prefs.lowSoc ?? 30) ? 'warn' : 'info', text: `البيت يعمل على البطارية (${m.soc ?? '—'}%) بسحب ${w(m.batW)}` };
+  if (dis) return { kind: m.soc != null && m.soc <= (prefs.lowSoc ?? 30) ? 'warn' : 'info', text: `البيت يعمل على البطارية (${fmt.pct(m.soc ?? '—')}) بسحب ${w(m.batW)}` };
   if (m.outW != null) return { kind: 'info', text: `الرافع يعمل والحمل ${w(m.outW)}` };
   return null;
 }

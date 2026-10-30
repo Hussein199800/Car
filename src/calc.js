@@ -31,7 +31,8 @@ export const APPLIANCES = [
   { id: 'custom', e: '🔌', name: 'جهاز آخر', w: 100 },
 ];
 
-const num = (v, d = 0) => (Number.isFinite(v) ? v.toLocaleString('en-US', { maximumFractionDigits: d, minimumFractionDigits: 0 }) : '—');
+const panelsAr = (n) => (n === 1 ? 'لوح واحد' : n === 2 ? 'لوحان' : n <= 10 ? `${n} ألواح` : `${n} لوحاً`);
+const num = (v, d = 0) => (Number.isFinite(v) ? v.toLocaleString('en-US', { maximumFractionDigits: d, minimumFractionDigits: 0, useGrouping: false }) : '—');
 
 export function defaultsCalc() {
   return { mode: 'ac', input: 1, acV: 220, kind: 'res', eff: 90, tab: 'conv', backupH: 8, sunH: 5, list: [] };
@@ -81,7 +82,7 @@ export function viewCalc(h) {
   const sysV = h.sysV();
   const seg = `<div class="seg"><button data-ctab="conv" class="${c.tab === 'conv' ? 'on' : ''}">محوّل الأمبير</button><button data-ctab="list" class="${c.tab === 'list' ? 'on' : ''}">أجهزة بيتي</button></div>`;
   const intro = `<section class="hero c-amber calc-hero"><span class="g-deco">${icons.calc}</span><div class="h-ic">${icons.calc}</div>
-    <b style="font-size:24px">حاسبة الأحمال</b><span>اعرف كم واط يسحب جهازك، وكم أمبير يأخذ من بطاريتك، وهل يتحمّله الإنفرتر</span></section>`;
+    <b class="hero-t">حاسبة الأحمال</b><span>اعرف كم واط يسحب جهازك، وكم أمبير يأخذ من بطاريتك، وهل يتحمّله الإنفرتر</span></section>`;
   return intro + seg + (c.tab === 'conv' ? viewConverter(h, c, sysV) : viewList(h, c, sysV));
 }
 
@@ -132,7 +133,7 @@ function viewConverter(h, c, sysV) {
   </section>
 
   <section class="card"><div class="card-h"><h2>جدول سريع</h2><small class="muted">أمبير البطارية</small></div>
-    <div class="table qt"><div class="tr th"><span>الكهرباء</span><span>القدرة</span><span>48V</span><span>24V</span><span>12V</span></div>${quick}</div>
+    <div class="table qt"><div class="tr th"><span>الكهرباء</span><span>القدرة</span><span>48 فولت</span><span>24 فولت</span><span>12 فولت</span></div>${quick}</div>
   </section>`;
 }
 
@@ -167,7 +168,7 @@ function viewList(h, c, sysV) {
     <div class="bar"><i class="${verdict[0] === 'bad' ? 'hot' : verdict[0] === 'warn' ? 'warm' : ''}" style="width:${Math.min(100, pct)}%"></i></div>
     <div class="bar-legend"><span>0</span><span>قدرة الإنفرتر ${num(rated)} واط</span></div>
     <p class="verdict ${verdict[0]}">${esc(verdict[1])}</p>
-    <p class="hint">لحظة الإقلاع قد يصل السحب إلى <b>${num(s.peak)} واط</b> (${num(peakPct)}%) بسبب المحركات.</p>
+    <p class="hint">لحظة الإقلاع قد يصل السحب إلى <b>${num(s.peak)} واط</b> (${h.fmt.pct(num(peakPct))}) بسبب المحركات.</p>
   </section>` : ''}
   <h3 class="sec-h">أجهزتي (${c.list.length})</h3>
   <div class="lds">${rows}</div>
@@ -176,7 +177,7 @@ function viewList(h, c, sysV) {
     <div class="stat c-amber"><small>الاستهلاك اليومي</small><b>${num(s.whDay / 1000, 2)}</b><span>كيلوواط ساعة</span></div>
     <div class="stat c-sky"><small>ذروة الإقلاع</small><b>${num(s.peak)}</b><span>واط · ${num(s.peakDcA)} أمبير بطارية</span></div>
     ${ah ? `<div class="stat c-green"><small>تكفي بطاريتك</small><b>${s.dcA ? h.fmt.hours((ah * 0.8) / s.dcA) : '—'}</b><span>عند تشغيلها كلها معاً</span></div>` : ''}
-    <div class="stat c-violet"><small>ألواح مقترحة</small><b>${num(s.pvKw, 1)} ك.واط</b><span>≈ ${Math.max(1, Math.ceil((s.pvKw * 1000) / 550))} لوح 550 واط</span></div>
+    <div class="stat c-violet"><small>ألواح مقترحة</small><b>${num(s.pvKw, 1)} ك.واط</b><span>≈ ${panelsAr(Math.max(1, Math.ceil((s.pvKw * 1000) / 550)))} بقدرة 550 واط</span></div>
     <div class="stat c-pink"><small>بطارية تكفي ${h.fmt.hours(c.backupH)}</small><b>${num(s.batAh)}</b><span>أمبير ساعة على ${sysV} فولت</span></div>
   </div>
   <details class="card fold"><summary><h2>افتراضات الحساب</h2>${h.icons.chevL}</summary><div class="form">
