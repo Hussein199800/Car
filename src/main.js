@@ -7,8 +7,8 @@ import {
   Chart, LineController, LineElement, PointElement, BarController, BarElement,
   LinearScale, CategoryScale, Filler, Tooltip, Legend,
 } from 'chart.js';
-import { WatchPowerApi, ApiError } from './api.js';
-import { normalize, rowsToSamples, fmt, latinDigits } from './model.js';
+import { WatchPowerApi, ApiError, errorAr } from './api.js';
+import { normalize, rowsToSamples, fmt, latinDigits, LOC, countAr, DAY } from './model.js';
 import { trTitle, trValue, trUnit, isEmptyVal } from './i18n.js';
 import {
   store, today, addDays, dayKey, recordSample, localDay, summarize, cachedSummary, cacheSummary, toCsv, shareFile,
@@ -27,7 +27,7 @@ import { makeLocalizer, INV_TERMS, GRID_TERMS } from './terms.js';
 Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, CategoryScale, Filler, Tooltip, Legend);
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '3.5.0';
+const VERSION = '3.5.1';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -117,6 +117,7 @@ function applyTheme() {
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
   document.documentElement.style.setProperty('--fs', String(state.prefs.fontScale || 1));
   Chart.defaults.color = dark ? '#9aa7c7' : '#5b6785';
+  Chart.defaults.locale = LOC;
   if (Capacitor.isNativePlatform()) {
     StatusBar.setStyle({ style: dark ? Style.Dark : Style.Light }).catch(() => {});
     StatusBar.setBackgroundColor({ color: dark ? '#070d1d' : '#eef1f8' }).catch(() => {});
@@ -184,7 +185,7 @@ function renderLogin(msg = '') {
       <button class="btn ghost" type="button" data-guide="wifi">${icons.wifi} إعداد وحدة الواي فاي</button>
       <button class="btn ghost wide" type="button" id="restoreBtn">${icons.shield} استعادة حسابي من نسخة احتياطية</button>
     </div>
-    <p class="foot">تطوير: حسين محمد علي الطويل</p>
+    <p class="foot">تطوير: حسين محمد علي الطويل · لا تنسونا من صالح دعائكم</p>
   </div>`;
 
   document.querySelectorAll('[data-guide]').forEach((b) => { b.onclick = () => renderGuideStandalone(b.dataset.guide); });
@@ -268,7 +269,8 @@ const TABS = [
 // الصفحة الحالية مسار مثل «tips/lithium»، والرجوع يحذف آخر جزء منه
 const leaf = () => (state.page ? state.page.split('/').pop() : null);
 
-function startApp() {
+// quiet: إعادة بناء الهيكل فقط (مثل تغيير المصطلحات) دون معاملتها كفتح جديد للتطبيق
+function startApp(quiet = false) {
   document.getElementById('app').innerHTML = `
     <header class="topbar" id="topbar"></header>
     <main id="view"></main>
@@ -285,9 +287,10 @@ function startApp() {
   });
   loadCache();
   navigate(state.tab, state.page);
+  startPolling();
+  if (quiet) return;
   state.noticePending = true;
   takeOverFromBackground().then(() => { refresh(); syncMonitor(); });
-  startPolling();
   autoCheckUpdate();
 }
 
@@ -380,7 +383,12 @@ function render() {
   const v = $('#view');
   if (!v) return;
   const views = { home: viewHome, reports: viewReports, calc: () => viewCalc(calcHelpers()), alerts: viewAlerts, more: viewMore };
+  // التحديث الدوري يعيد رسم الصفحة نفسها: نحافظ على الأقسام التي فتحها المستخدم بدل طيّها كل 30 ثانية
+  const key = state.tab + '/' + (state.page || '');
+  const opened = v.dataset.key === key ? [...v.querySelectorAll('details')].map((d) => d.open) : null;
   v.innerHTML = L(`<div class="${state.animate ? 'page-anim' : ''}">${views[state.tab]()}</div>`);
+  v.dataset.key = key;
+  if (opened) v.querySelectorAll('details').forEach((d, i) => { if (i < opened.length) d.open = opened[i]; });
   state.animate = false;
   AFTER[leaf() || state.tab]?.();
 }
@@ -437,6 +445,9 @@ async function refresh(manual = false) {
   renderHeader();
   try {
     const points = state.demo ? demoPoints() : await api.lastData(d);
+    // تبديل الجهاز أو الخروج أثناء الطلب: نتجاهل الرد حتى لا تظهر قراءة جهاز باسم جهاز آخر
+    // ولا يُستنتج منها فرق توقيت خاطئ، ثم نجلب الجهاز الحالي فوراً
+    if (sn() !== d.sn) { state.switched = true; return; }
     if (!points.length) throw new ApiError('الجهاز لم يرسل أي بيانات بعد');
     let model = normalize(points, state.prefs.staleMin, tzOffset());
     if (!state.demo) {
@@ -462,12 +473,18 @@ async function refresh(manual = false) {
     showOpeningNotice();
     if (manual) toast(state.model.stale ? 'تم التحديث — الرافع ما زال غير متصل' : 'تم التحديث', state.model.stale ? 'bad' : 'ok');
   } catch (err) {
+    if (sn() !== d.sn) { state.switched = true; return; }
     state.fails++;
     state.netError = err.message;
     if (state.fails === 3) addFault('comm', 'تعذّر الاتصال بالخادم', err.message);
     if (manual) toast(err.message, 'bad');
   } finally {
     state.loading = false;
+    if (state.switched) {
+      state.switched = false;
+      if (device() && (state.session || state.demo)) refresh(manual);
+      return;
+    }
     if (state.model) state.model = { ...state.model, age: state.model.ts ? Date.now() - state.model.ts : null };
     // نعيد الرسم فقط للصفحات التي تعرض القراءة الحية حتى لا تُفقد حالة الصفحات الأخرى
     if (state.tab === 'home' || (state.tab === 'more' && ['tips', 'tips/smart'].includes(state.page))) render();
@@ -503,7 +520,8 @@ async function takeOverFromBackground() {
   try {
     const r = await monitor.takeOver();
     (r.alerts || []).forEach((a) => state.alerts.unshift({ ...a, read: false }));
-    (r.faults || []).forEach((f) => state.faults.unshift(f));
+    // رسائل الخادم في الخلفية تصل برموزها الإنجليزية (ERR_...)، فنترجمها بنفس جدول الواجهة
+    (r.faults || []).forEach((f) => state.faults.unshift(f.kind === 'comm' ? { ...f, body: errorAr(f.body) } : f));
     state.alerts = state.alerts.slice(0, 200);
     state.faults = state.faults.slice(0, 300);
     if (r.flags && Object.keys(r.flags).length) state.flags = { ...state.flags, ...r.flags };
@@ -606,7 +624,7 @@ function checkAlerts(m) {
   }
   if (p.alertGrid && m.gridV !== null) {
     edge('gridOff', !m.gridOn, () => {
-      raise('انقطعت الكهرباء الوطنية', `المنظومة تعمل على البطارية${m.soc !== null ? ` (${m.soc}%)` : ''}`, 'warn');
+      raise('انقطعت الكهرباء الوطنية', `المنظومة تعمل على البطارية${m.soc !== null ? ` (${fmt.pct(m.soc)})` : ''}`, 'warn');
       addFault('grid', 'انقطاع الكهرباء الوطنية', `جهد الشبكة ${numAr(m.gridV)} فولت`);
     }, () => {
       raise('عادت الكهرباء الوطنية', `الجهد ${numAr(m.gridV)} فولت`, 'ok');
@@ -697,7 +715,7 @@ function viewHome() {
       ${flowLine('bat', 'M180 226 L180 264', live && Math.abs(m.batW ?? 0) > 10, m.batW, (m.batW ?? 0) < 0)}
     </svg>
     <button class="node n-solar ${(m.pvW ?? 0) > 5 && live ? '' : 'dim'}" data-page="solar" aria-label="تفاصيل الألواح"><b><bdi>${fmt.wShort(m.pvW)}</bdi></b><small>الألواح</small><span class="ic">${icons.panel}</span></button>
-    <button class="node n-grid ${m.gridOn && live ? '' : 'dim'}" data-page="grid" aria-label="تفاصيل الكهرباء الوطنية"><span class="ic">${icons.grid}</span><b><bdi>${m.gridOn ? numAr(m.gridV) + 'V' : 'مقطوعة'}</bdi></b><small>${live && isLine && m.gridOn ? 'تغذّي البيت' : 'الوطنية'}</small></button>
+    <button class="node n-grid ${m.gridOn && live ? '' : 'dim'}" data-page="grid" aria-label="تفاصيل الكهرباء الوطنية"><span class="ic">${icons.grid}</span><b><bdi>${m.gridOn ? numAr(m.gridV) + ' فولت' : 'مقطوعة'}</bdi></b><small>${live && isLine && m.gridOn ? 'تغذّي البيت' : 'الوطنية'}</small></button>
     <button class="node n-load ${(m.outW ?? 0) > 5 && live ? '' : 'dim'}" data-page="load" aria-label="تفاصيل الحمل"><span class="ic">${icons.home}</span><b><bdi>${fmt.wShort(m.outW)}</bdi></b><small>الحمل</small></button>
     <button class="node n-bat ${live ? '' : 'dim'}" data-page="battery" aria-label="تفاصيل البطارية"><span class="ic">${icons.battery}</span><b><bdi>${m.soc ?? '—'}%</bdi></b>${batTag(m, live)}</button>
     <button class="node n-inv" data-page="device" aria-label="تفاصيل الرافع"><span class="ic">${icons.inverter}</span></button>
@@ -727,7 +745,7 @@ function viewHome() {
   ].map((c) => (live ? c : { ...c, sub: 'آخر قيمة مسجّلة' })), live ? '' : 'stale')}
   ${listCards([
     { page: 'device', title: 'الرافع', sub: m.stale ? 'غير متصل' : `${m.fault ? 'يوجد عطل' : 'يعمل'} · الحالة والمعلومات والإعدادات الحالية`, icon: icons.inverter, color: m.stale ? 'c-slate' : m.fault ? 'c-pink' : 'c-sky' },
-    { page: 'all', title: 'كل القراءات', sub: `${m.raw.filter((r) => r.group === 'live').length} قراءة حيّة مترجمة`, icon: icons.list, color: 'c-slate' },
+    { page: 'all', title: 'كل القراءات', sub: `${countAr(m.raw.filter((r) => r.group === 'live').length, READINGS)} حيّة مترجمة`, icon: icons.list, color: 'c-slate' },
   ])}
   </div></div>`;
 }
@@ -929,42 +947,49 @@ function viewReports() {
 // جلب قراءات يوم: من سجل الخادم أولاً، ثم من القراءات المحفوظة محلياً.
 // بعد 3 إخفاقات متتالية نتوقف عن سؤال الخادم حتى نهاية التحميل الحالي (يُصفَّر مع كل تقرير جديد)
 let serverHistFails = 0;
-async function daySamples(date) {
+// d: الجهاز الذي بدأ له التحميل، حتى لا تختلط بيانات جهازين إذا بُدّل الجهاز أثناء التحميل
+async function daySamples(date, d = device()) {
   if (state.demo) return { samples: rowsToSamples(demoHistory(date)), source: 'demo' };
   let err;
   if (serverHistFails < 3) {
     try {
-      const s = rowsToSamples(await api.dayHistory(device(), date));
+      const s = rowsToSamples(await api.dayHistory(d, date));
       serverHistFails = 0;
+      // سجل الخادم بتوقيته هو؛ نطبّق فرق التوقيت المكتشف كما في القراءة الحية والسجل المحلي
+      const off = store.get('tz.' + d.sn, 0);
+      if (off) s.forEach((x) => { x.ts += off; });
       if (s.length) return { samples: s, source: 'server' };
     } catch (e) {
       err = e;
       serverHistFails++;
     }
   }
-  const local = localDay(sn(), date);
+  const local = localDay(d.sn, date);
   if (local.length) return { samples: local, source: 'local' };
   if (err && err.code === undefined) throw err;
   return { samples: [], source: 'none' };
 }
 
 const SRC = { server: 'سجل خادم WatchPower', local: 'قراءات محفوظة على الهاتف', demo: 'بيانات تجريبية', none: 'لا توجد بيانات' };
-const dayName = (date) => new Date(date + 'T12:00:00').toLocaleDateString('ar', { weekday: 'short', day: 'numeric', month: 'numeric' });
-const dateLabel = (date) => (date === today() ? 'اليوم' : date === today(-1) ? 'أمس' : new Date(date + 'T12:00:00').toLocaleDateString('ar', { weekday: 'long', day: 'numeric', month: 'long' }));
+const dayName = (date) => fmt.day(date, { weekday: 'short', day: 'numeric', month: 'numeric' });
+const dateLabel = (date) => (date === today() ? 'اليوم' : date === today(-1) ? 'أمس' : fmt.day(date, { weekday: 'long', day: 'numeric', month: 'long' }));
+const READINGS = ['قراءة واحدة', 'قراءتان', 'قراءات', 'قراءة'];
 
 async function loadDay() {
   const date = state.rep.dayDate;
+  const d = device();
+  const current = () => date === state.rep.dayDate && device() === d;
   serverHistFails = 0;
   state.rep.day = { loading: true };
   render();
   try {
-    const { samples, source } = await daySamples(date);
+    const { samples, source } = await daySamples(date, d);
     const sum = summarize(date, samples, source);
-    cacheSummary(sn(), sum);
-    if (date === state.rep.dayDate) state.rep.day = { samples, sum, source };
+    cacheSummary(d.sn, sum);
+    if (current()) state.rep.day = { samples, sum, source };
   } catch (e) {
-    // لا نعرض خطأ يوم قديم إذا انتقل المستخدم ليوم آخر أثناء التحميل
-    if (date === state.rep.dayDate) state.rep.day = { error: e.message };
+    // لا نعرض خطأ يوم أو جهاز آخر إذا تغيّر الاختيار أثناء التحميل
+    if (current()) state.rep.day = { error: e.message };
   }
   if (state.page === 'day') render();
 }
@@ -996,7 +1021,7 @@ function pageDay() {
   </div>
   ${s.fullAt ? `<p class="hint">امتلأت البطارية الساعة ${esc(fmt.time(s.fullAt))}.</p>` : ''}
   <p class="hint">الشحن مقسوم حسب مصدره: الألواح بقدر إنتاجها، والباقي من الكهرباء الوطنية في وضع الشبكة فقط. الاستقلالية = نسبة استهلاك البيت التي لم تأتِ من الكهرباء الوطنية مباشرة أو عبر شحن البطارية.</p>
-  <p class="hint">المصدر: ${SRC[r.source]} · ${r.samples.length} قراءة · ساعات مغطّاة ${numAr(s.coveredH, 1)}${s.pvFromMeter ? ' · الإنتاج من عدّاد الجهاز' : ' · الإنتاج محسوب من القدرة'}</p>
+  <p class="hint">المصدر: ${SRC[r.source]} · ${countAr(r.samples.length, READINGS)} · ساعات مغطّاة ${numAr(s.coveredH, 1)}${s.pvFromMeter ? ' · الإنتاج من عدّاد الجهاز' : ' · الإنتاج محسوب من القدرة'}</p>
   <section class="card"><div class="card-h"><h2>القدرة خلال اليوم</h2></div><div class="chart-box"><canvas id="cPower"></canvas></div></section>
   <section class="card"><div class="card-h"><h2>نسبة شحن البطارية</h2></div><div class="chart-box sm"><canvas id="cSoc"></canvas></div></section>
   <section class="card"><div class="card-h"><h2>جهد البطارية</h2></div><div class="chart-box sm"><canvas id="cBatV"></canvas></div></section>
@@ -1042,14 +1067,15 @@ function rangeDates(kind, off) {
 // تحميل ملخصات عدة أيام مع حفظ الأيام المكتملة لتسريع المرات القادمة
 async function loadSummaries(dates, onProgress) {
   const sums = [];
+  const dev = device();
   for (let i = 0; i < dates.length; i++) {
     const d = dates[i];
-    let s = d < today() ? cachedSummary(sn(), d) : null;
+    let s = d < today() ? cachedSummary(dev.sn, d) : null;
     if (!s) {
       try {
-        const { samples, source } = await daySamples(d);
+        const { samples, source } = await daySamples(d, dev);
         s = summarize(d, samples, source);
-        cacheSummary(sn(), s);
+        cacheSummary(dev.sn, s);
       } catch (e) {
         s = { date: d, count: 0, error: e.message };
       }
@@ -1065,12 +1091,16 @@ function totals(sums) {
   const add = (k) => ok.reduce((a, s) => a + (s[k] || 0), 0);
   const pv = add('pvKwh');
   const load = add('loadKwh');
+  // المتوسط اليومي من الأيام المكتملة فقط؛ اليوم الجاري أو يوم ناقص البيانات يخفض المتوسط خطأً
+  const full = ok.filter((s) => s.date < today() && s.coveredH >= 18);
+  const base = full.length ? full : ok;
+  const avgOf = (k) => (base.length ? base.reduce((a, s) => a + (s[k] || 0), 0) / base.length : null);
   const best = ok.reduce((b, s) => (s.pvKwh != null && (!b || s.pvKwh > b.pvKwh) ? s : b), null);
   // الاستقلالية للفترة: موزونة بالاستهلاك، ومن الأيام التي عُرف فيها وضع التشغيل فقط
   const ind = ok.filter((s) => s.independence != null && s.loadKwh > 0);
   const indLoad = ind.reduce((a, s) => a + s.loadKwh, 0);
   const independence = indLoad > 0 ? ind.reduce((a, s) => a + s.independence * s.loadKwh, 0) / indLoad : null;
-  return { days: ok.length, pv, load, avgPv: ok.length ? pv / ok.length : null, avgLoad: ok.length ? load / ok.length : null, gridH: add('gridH'), batH: add('batH'), best,
+  return { days: ok.length, pv, load, avgPv: avgOf('pvKwh'), avgLoad: avgOf('loadKwh'), gridH: add('gridH'), batH: add('batH'), best,
     solarChg: add('solarChgKwh'), gridChg: add('gridChgKwh'), independence };
 }
 
@@ -1083,7 +1113,7 @@ async function loadRange(kind) {
   render();
   const sums = await loadSummaries(dates, (done, total) => {
     const p = $('#rangeProg');
-    if (p && state.rep[kind]?.token === token) { p.style.width = (done / total) * 100 + '%'; $('#rangeTxt').textContent = `${done} من ${total} يوم`; }
+    if (p && state.rep[kind]?.token === token) { p.style.width = (done / total) * 100 + '%'; $('#rangeTxt').textContent = `${done} من ${countAr(total, DAY)}`; }
   });
   if (state.rep[kind]?.token !== token) return;
   state.rep[kind] = { dates, sums };
@@ -1092,7 +1122,7 @@ async function loadRange(kind) {
 
 function rangeTitle(kind, off) {
   const dates = rangeDates(kind, off);
-  if (kind === 'month') return new Date(dates[0] + 'T12:00:00').toLocaleDateString('ar', { month: 'long', year: 'numeric' });
+  if (kind === 'month') return fmt.day(dates[0], { month: 'long', year: 'numeric' });
   if (off === 0) return 'آخر 7 أيام';
   return `${dayName(dates[0])} — ${dayName(dates[6])}`;
 }
@@ -1161,11 +1191,19 @@ async function loadCompare() {
   state.rep.cmpData = { loading: true };
   serverHistFails = 0;
   render();
-  const cur = await loadSummaries(rangeDates(kind, 0));
+  // نقارن أياماً مكتملة فقط: اليوم الجاري ناقص فيظلم الفترة الحالية دائماً
+  let curDates = rangeDates(kind, 0);
   let prevDates = rangeDates(kind, 1);
-  // نقارن الشهر الحالي بنفس عدد الأيام من الشهر السابق حتى تكون المقارنة عادلة
-  if (kind === 'month') prevDates = prevDates.slice(0, cur.length);
+  if (kind === 'week') { curDates = rangeDates('week', 0).map((d) => addDays(d, -1)); prevDates = curDates.map((d) => addDays(d, -7)); }
+  else {
+    const done = curDates.filter((d) => d < today());
+    if (done.length) curDates = done;
+    // نفس عدد الأيام من الشهر السابق حتى تكون المقارنة عادلة
+    prevDates = prevDates.slice(0, curDates.length);
+  }
+  const cur = await loadSummaries(curDates);
   const prev = await loadSummaries(prevDates);
+  if (state.rep.cmpData?.loading !== true || state.rep.cmp !== kind) return;
   state.rep.cmpData = { kind, cur: totals(cur), prev: totals(prev), curN: cur.length };
   if (state.page === 'compare') render();
 }
@@ -1200,7 +1238,7 @@ function pageAdvisor() {
   const lvl = { ok: 'ok', warn: 'warn', bad: 'bad', info: 'info' };
   return `
   <section class="card adv-ind">
-    <div class="card-h"><h2>${icons.sun} مؤشر الاستقلالية عن الكهرباء</h2><small class="muted">آخر ${r.days} أيام</small></div>
+    <div class="card-h"><h2>${icons.sun} مؤشر الاستقلالية عن الكهرباء</h2><small class="muted">${r.days ? 'آخر ' + countAr(r.days, DAY) + ' مكتملة' : ''}</small></div>
     ${ind == null ? '<p class="hint">يحتاج المؤشر إلى وضع التشغيل (شبكة/بطارية) في سجل الجهاز ليوم كامل على الأقل.</p>' : `
     <div class="adv-big"><b>${Math.round(ind)}%</b><span>من استهلاك بيتك جاء من الألواح والبطارية</span></div>
     <div class="bar"><i style="width:${Math.round(ind)}%"></i></div>
@@ -1218,7 +1256,7 @@ function pageAdvisor() {
     ${kv([
       b.soh != null ? ['حالة الصحة (من البطارية)', val(b.soh + '%')] : null,
       ['متوسط عمق التفريغ اليومي', val(b.avgDod == null ? null : Math.round(b.avgDod) + '%')],
-      ['أدنى نسبة في الفترة', val(b.lowest ? `${b.lowest.soc}% · ${new Date(b.lowest.date + 'T12:00:00').toLocaleDateString('ar', { weekday: 'long' })}${b.lowest.at ? ' ' + fmt.time(b.lowest.at) : ''}` : null)],
+      ['أدنى نسبة في الفترة', val(b.lowest ? `${b.lowest.soc}% · ${fmt.day(b.lowest.date, { weekday: 'long' })}${b.lowest.at ? ' ' + fmt.time(b.lowest.at) : ''}` : null)],
       ['أيام امتلأت فيها إلى 100%', val(r.days ? `${b.fullDays} من ${r.days}` : null)],
       b.cyclesPerDay != null ? ['دورات كاملة مكافئة يومياً', val(b.cyclesPerDay.toFixed(2))] : null,
       r.avgNight != null ? ['الاستهلاك حين لا تنتج الألواح', val(fmt.kwh(r.avgNight), 'ك.و.س / يوم')] : null,
@@ -1247,13 +1285,13 @@ function pageCompare() {
   const r = state.rep.cmpData;
   const seg = `<div class="seg"><button data-cmp="week" class="${k === 'week' ? 'on' : ''}">أسبوعي</button><button data-cmp="month" class="${k === 'month' ? 'on' : ''}">شهري</button></div>`;
   if (!r || r.loading || r.kind !== k) return seg + '<div class="empty"><div class="spinner"></div>جارٍ تجميع البيانات للمقارنة…</div>';
-  const [a, b] = k === 'week' ? ['آخر 7 أيام', 'الأسبوع الذي قبله'] : ['هذا الشهر', `نفس الفترة من الشهر السابق`];
+  const [a, b] = k === 'week' ? ['آخر 7 أيام مكتملة', 'الأسبوع الذي قبله'] : ['هذا الشهر حتى أمس', 'نفس الفترة من الشهر السابق'];
   const row = (label, x, y, unit, better = 'up') => {
     const ch = x != null && y ? ((x - y) / y) * 100 : null;
     const good = ch === null || Math.abs(ch) < 1 ? '' : (ch > 0) === (better === 'up') ? 'good' : 'bad';
     return `<div class="cmp-row"><div class="cmp-l">${esc(label)}</div>
-      <div class="cmp-v"><b>${x == null ? '—' : fmt.kwh(x)}</b><small>${esc(unit)}</small></div>
-      <div class="cmp-v prev"><b>${y == null ? '—' : fmt.kwh(y)}</b><small>${esc(unit)}</small></div>
+      <div class="cmp-v"><b>${x == null ? '—' : unit === 'ساعة' ? numAr(x, 0) : fmt.kwh(x)}</b><small>${esc(unit)}</small></div>
+      <div class="cmp-v prev"><b>${y == null ? '—' : unit === 'ساعة' ? numAr(y, 0) : fmt.kwh(y)}</b><small>${esc(unit)}</small></div>
       <div class="cmp-ch ${good}">${ch === null ? '—' : (Math.abs(ch) < 1 ? '' : ch > 0 ? '▲ ' : '▼ ') + Math.abs(ch).toFixed(0) + '%'}</div></div>`;
   };
   return seg + `
@@ -1285,8 +1323,8 @@ function pageExport() {
   ${listCards([
     { page: 'x-today', title: 'قراءات اليوم', sub: 'كل القراءات المسجّلة اليوم', icon: icons.calendar, color: 'c-amber' },
     { page: 'x-month', title: 'ملخص آخر 30 يوماً', sub: 'الإنتاج والاستهلاك والبطارية لكل يوم', icon: icons.month, color: 'c-green' },
-    { page: 'x-alerts', title: 'سجل التنبيهات', sub: `${state.alerts.length} تنبيه`, icon: icons.bell, color: 'c-sky' },
-    { page: 'x-faults', title: 'سجل الأعطال والانقطاعات', sub: `${state.faults.length} حدث`, icon: icons.warn, color: 'c-pink' },
+    { page: 'x-alerts', title: 'سجل التنبيهات', sub: countAr(state.alerts.length, ['تنبيه واحد', 'تنبيهان', 'تنبيهات', 'تنبيه']), icon: icons.bell, color: 'c-sky' },
+    { page: 'x-faults', title: 'سجل الأعطال والانقطاعات', sub: countAr(state.faults.length, ['حدث واحد', 'حدثان', 'أحداث', 'حدث']), icon: icons.warn, color: 'c-pink' },
   ])}`;
 }
 AFTER.export = () => {
@@ -1299,8 +1337,8 @@ AFTER.export = () => {
       try {
         if (what === 'x-today') { const { samples } = await daySamples(today()); await exportSamples(today(), samples); }
         if (what === 'x-month') { const dates = Array.from({ length: 30 }, (_, i) => today(i - 29)); await exportSummaries('30days-' + today(), await loadSummaries(dates)); }
-        if (what === 'x-alerts') await shareFile_(`taqati-alerts-${today()}.csv`, toCsv(['الوقت', 'التنبيه', 'التفاصيل'], state.alerts.map((a) => [fmt.dateTime(a.at), a.title, a.body])));
-        if (what === 'x-faults') await shareFile_(`taqati-faults-${today()}.csv`, toCsv(['الوقت', 'الحدث', 'التفاصيل'], state.faults.map((a) => [fmt.dateTime(a.at), a.title, a.body])));
+        if (what === 'x-alerts') await shareFile_(`taqati-alerts-${today()}.csv`, toCsv(['الوقت', 'التنبيه', 'التفاصيل'], state.alerts.map((a) => [fmt.iso(a.at), a.title, a.body])));
+        if (what === 'x-faults') await shareFile_(`taqati-faults-${today()}.csv`, toCsv(['الوقت', 'الحدث', 'التفاصيل'], state.faults.map((a) => [fmt.iso(a.at), a.title, a.body])));
       } catch (err) {
         toast('تعذّر التصدير: ' + err.message, 'bad');
       }
@@ -1316,14 +1354,15 @@ async function exportSamples(date, samples) {
   if (!samples.length) { toast('لا توجد قراءات لهذا اليوم', 'bad'); return; }
   await shareFile_(`taqati-${date}.csv`, toCsv(
     ['الوقت', 'الوضع', 'الألواح (واط)', 'الحمل (واط)', 'البطارية (%)', 'جهد البطارية (فولت)', 'قدرة البطارية (واط)', 'جهد الكهرباء (فولت)'],
-    samples.map((s) => [new Date(s.ts).toLocaleString('ar'), s.mode ? trValue(s.mode) : '', s.pvW, s.outW, s.soc, s.batV, s.batW, s.gridV]),
+    samples.map((s) => [fmt.iso(s.ts), s.mode ? trValue(s.mode) : '', s.pvW, s.outW, s.soc, s.batV, s.batW, s.gridV]),
   ));
 }
 
 async function exportSummaries(name, sums) {
   await shareFile_(`taqati-${name}.csv`, toCsv(
-    ['التاريخ', 'الإنتاج (ك.و.س)', 'الاستهلاك (ك.و.س)', 'أدنى شحن %', 'أعلى شحن %', 'ذروة الحمل (واط)', 'ساعات الكهرباء', 'ساعات البطارية', 'عدد القراءات', 'المصدر'],
-    sums.map((s) => [s.date, s.pvKwh?.toFixed(2) ?? '', s.loadKwh?.toFixed(2) ?? '', s.socMin ?? '', s.socMax ?? '', s.peakW ?? '', s.gridH?.toFixed(1) ?? '', s.batH?.toFixed(1) ?? '', s.count, SRC[s.source] || '']),
+    ['التاريخ', 'الإنتاج (ك.و.س)', 'الاستهلاك (ك.و.س)', 'أدنى شحن %', 'أعلى شحن %', 'ذروة الحمل (واط)', 'ساعات الكهرباء', 'ساعات البطارية', 'شحن من الألواح (ك.و.س)', 'شحن من الكهرباء (ك.و.س)', 'الاستقلالية %', 'عدد القراءات', 'المصدر'],
+    sums.map((s) => [s.date, s.pvKwh?.toFixed(2) ?? '', s.loadKwh?.toFixed(2) ?? '', s.socMin ?? '', s.socMax ?? '', s.peakW ?? '', s.gridH?.toFixed(1) ?? '', s.batH?.toFixed(1) ?? '',
+      s.solarChgKwh?.toFixed(2) ?? '', s.gridChgKwh?.toFixed(2) ?? '', s.independence == null ? '' : Math.round(s.independence), s.count, SRC[s.source] || '']),
   ));
 }
 
@@ -1394,7 +1433,7 @@ function pageRules() {
     ${toggle('openNotice', 'رسالة الحالة عند فتح التطبيق', 'سطر قصير داخل التطبيق فقط، مثل: الألواح تشحن البطارية')}
   </div></section>
   <button class="btn ghost wide" id="testNotif">${icons.bell} إرسال إشعار تجريبي</button>
-  <p class="hint">والتطبيق مفتوح يُفحص الرافع كل ${state.prefs.pollSec} ثانية. ${isNative
+  <p class="hint">والتطبيق مفتوح يُفحص الرافع كل ${countAr(state.prefs.pollSec, ['ثانية', 'ثانيتين', 'ثوانٍ', 'ثانية'])}. ${isNative
     ? (state.prefs.bgMonitor
       ? 'وبعد إغلاقه يتولى نظام أندرويد الفحص كل 15 دقيقة تقريباً (أقل مدة يسمح بها النظام)، وقد يتأخر الفحص عند تفعيل توفير البطارية الشديد. لأفضل نتيجة اجعل «طاقتي» غير مقيّد في إعدادات البطارية بالهاتف.'
       : 'المراقبة بعد الإغلاق متوقفة، فلن تصل التنبيهات حتى تفتح التطبيق.')
@@ -1461,7 +1500,7 @@ function pageDevice(m) {
   ${group('rated').length ? section('القيم المقنّنة', kv(rows(group('rated')))) : ''}
   ${group('config').length ? section('الإعدادات الحالية', kv(rows(group('config'))) + '<p class="hint">للعرض فقط. لتغييرها: «المزيد ← إعدادات الرافع».</p>') : ''}
   <button class="btn ghost wide" data-goto="more:edit">${icons.wrench} تعديل إعدادات الرافع</button>
-  <p class="hint">يُعتبر الرافع غير متصل إذا لم تصل منه قراءة جديدة منذ أكثر من ${state.prefs.staleMin} دقيقة.</p>`;
+  <p class="hint">يُعتبر الرافع غير متصل إذا لم تصل منه قراءة جديدة منذ أكثر من ${countAr(state.prefs.staleMin, ['دقيقة', 'دقيقتين', 'دقائق', 'دقيقة'])}.</p>`;
 }
 AFTER.device = () => bindGoto();
 
@@ -1599,6 +1638,10 @@ async function openField(li) {
 }
 
 async function sendSetting(li, f, val, shown) {
+  // منع الإرسال المزدوج إذا ضُغط الزر مرة أخرى قبل وصول الرد
+  if (li.dataset.sending) return;
+  li.dataset.sending = '1';
+  li.querySelectorAll('button').forEach((b) => { b.disabled = true; });
   try {
     await api.setCtrl(device(), f.id, val);
     toast('تم إرسال الإعداد إلى الرافع', 'ok');
@@ -1607,6 +1650,9 @@ async function sendSetting(li, f, val, shown) {
     setTimeout(() => openField(li), 1500);
   } catch (e) {
     toast(e.message, 'bad');
+  } finally {
+    delete li.dataset.sending;
+    li.querySelectorAll('button').forEach((b) => { b.disabled = false; });
   }
 }
 
@@ -1628,7 +1674,7 @@ function viewTips() {
   const sec = TIP_SECTIONS.find((x) => 'tips/' + x.id === state.page);
   if (sec) {
     return `<section class="hero ${sec.color}"><span class="g-deco">${icons[sec.icon]}</span><div class="h-ic">${icons[sec.icon]}</div>
-        <b style="font-size:24px">${esc(sec.title)}</b><span>${esc(sec.sub)} · ${sec.tips.length} نصيحة</span></section>
+        <b class="hero-t">${esc(sec.title)}</b><span>${esc(sec.sub)} · ${countAr(sec.tips.length, ['نصيحة واحدة', 'نصيحتان', 'نصائح', 'نصيحة'])}</span></section>
       <div class="tips">${sec.tips.map(([title, body], i) => `
         <article class="tip ${sec.color}"><span class="tip-n">${i + 1}</span>
           <div><h3>${esc(title)}</h3><p>${esc(body).replace(/\n/g, '<br>')}</p></div></article>`).join('')}</div>`;
@@ -1641,7 +1687,7 @@ function viewTips() {
   <section class="tod"><div class="tod-h">${icons.star}<span>نصيحة اليوم · ${esc(tod.section)}</span></div>
     <b>${esc(tod.title)}</b><p>${esc(tod.body).replace(/\n/g, '<br>')}</p></section>
   ${listCards([{ page: 'tips/smart', title: 'نصائح لجهازك الآن', sub: state.model ? `${smart.length} ملاحظة من قراءات جهازك وإعداداته` : 'تظهر بعد وصول بيانات الجهاز', icon: icons.bulb, color: urgent ? 'c-pink' : 'c-violet', badge: urgent ? `${urgent} مهم` : '' }])}
-  ${gridCards(TIP_SECTIONS.map((t) => ({ page: 'tips/' + t.id, title: t.title, sub: t.sub, icon: icons[t.icon], color: t.color, value: '', badge: `${t.tips.length} نصيحة` })))}`;
+  ${gridCards(TIP_SECTIONS.map((t) => ({ page: 'tips/' + t.id, title: t.title, sub: t.sub, icon: icons[t.icon], color: t.color, value: '', badge: countAr(t.tips.length, ['نصيحة واحدة', 'نصيحتان', 'نصائح', 'نصيحة']) })))}`;
 }
 
 // ================= ربط الجهاز والحساب =================
@@ -1659,7 +1705,7 @@ function setupGuide(loggedIn) {
   const step = (n, title, body, btn = '') => `<li class="gstep"><span class="gn">${n}</span><div><b>${title}</b><p>${body}</p>${btn}</div></li>`;
   return `
   <section class="hero c-sky"><span class="g-deco">${icons.wifi}</span><div class="h-ic">${icons.wifi}</div>
-    <b style="font-size:22px">ربط الجهاز والحساب</b><span>إنشاء حساب وربط وحدة الواي فاي بشبكة البيت</span></section>
+    <b class="hero-t">ربط الجهاز والحساب</b><span>إنشاء حساب وربط وحدة الواي فاي بشبكة البيت</span></section>
   <div class="banner demo">${icons.info}<span><b>لماذا عبر تطبيق WatchPower؟</b>التسجيل وبرمجة وحدة الواي فاي يتمّان بنظام خاص بالشركة المصنّعة غير منشور. لذلك يرشدك «طاقتي» خطوة بخطوة ويفتح لك الشاشات المطلوبة، وبعد الربط يعمل بنفس الحساب.</span></div>
 
   <details class="card fold" ${loggedIn ? '' : state.guideOpen === 'register' ? 'open' : ''}><summary><h2>${icons.user} إنشاء حساب جديد</h2>${icons.chevL}</summary>
@@ -1736,7 +1782,7 @@ function viewMore() {
     { page: 'edit', title: 'إعدادات الرافع', sub: 'تغيير الأولويات وتيارات الشحن عن بُعد', icon: icons.wrench, color: 'c-pink' },
     { page: 'setup', title: 'ربط الجهاز والحساب', sub: 'إنشاء حساب، إعداد الواي فاي (Wi-Fi Config)، البلوتوث', icon: icons.wifi, color: 'c-sky' },
     { page: 'tips', title: 'النصائح', sub: 'نصائح لجهازك، واستخدام الرافع وبطاريات الليثيوم والسلامة', icon: icons.bulb, color: 'c-amber', badge: urgent ? `${urgent} مهم` : '' },
-    { page: 'monitor', title: 'المراقبة والبطارية', sub: `${state.prefs.batteryAh ? `البطارية ${state.prefs.batteryAh} أمبير ساعة` : 'أدخل سعة البطارية'} · تحديث كل ${state.prefs.pollSec} ثانية`, icon: icons.gauge, color: 'c-green' },
+    { page: 'monitor', title: 'المراقبة والبطارية', sub: `${state.prefs.batteryAh ? `البطارية ${state.prefs.batteryAh} أمبير ساعة` : 'أدخل سعة البطارية'} · تحديث كل ${countAr(state.prefs.pollSec, ['ثانية', 'ثانيتين', 'ثوانٍ', 'ثانية'])}`, icon: icons.gauge, color: 'c-green' },
     { page: 'custom', title: 'المظهر والمصطلحات', sub: `${themeName} · ${INV_TERMS[state.prefs.invTerm]?.label} · ${GRID_TERMS[state.prefs.gridTerm]?.label}`, icon: icons.moon, color: 'c-violet' },
     { page: 'account', title: 'الحساب', sub: state.demo ? 'وضع تجريبي' : state.session?.usr || '', icon: icons.user, color: 'c-sky' },
     { page: 'backup', title: 'النسخة الاحتياطية', sub: 'احفظ حسابك وإعداداتك في ملف مشفّر واستعدها بعد إعادة التثبيت', icon: icons.shield, color: 'c-green' },
@@ -1804,7 +1850,7 @@ AFTER.terms = () => {
       L = makeLocalizer(state.prefs);
       state.tab = 'more';
       state.page = 'custom';
-      startApp();
+      startApp(true);
     };
   });
 };
@@ -1857,7 +1903,8 @@ function pageAbout() {
   </section>
   <section class="dev-card">
     <div class="dev-av">${icons.user}</div>
-    <div><small>مطوّر التطبيق</small><b>حسين محمد علي الطويل</b></div>
+    <div><small>مطوّر التطبيق</small><b>حسين محمد علي الطويل</b>
+      <p class="dua">اللهم اجعل هذا العمل خالصاً لوجهك الكريم، ونافعاً لكل من يستخدمه.<br>لا تنسونا من صالح دعائكم 🤲</p></div>
   </section>
   <section class="card"><div class="card-h"><h2>ماذا يقدّم التطبيق؟</h2></div>
     <ul class="feat">
@@ -1870,6 +1917,9 @@ function pageAbout() {
       <li>${icons.calc}<span>حاسبة أحمال: تحويل الأمبير والواط وتقدير مدة البطارية والألواح المناسبة</span></li>
       <li>${icons.bulb}<span>نصائح لاستخدام الرافع وبطاريات الليثيوم، ونصائح ذكية حسب قراءات جهازك</span></li>
       <li>${icons.wifi}<span>دليل ربط الجهاز بالواي فاي وإنشاء الحساب خطوة بخطوة</span></li>
+      <li>${icons.sun}<span>مستشار الطاقة: الاستقلالية عن الكهرباء، واستخدام البطارية، وتوصيات من قراءاتك</span></li>
+      <li>${icons.shield}<span>نسخة احتياطية مشفّرة للحساب والإعدادات تُستعاد بعد إعادة التثبيت</span></li>
+      <li>${icons.upgrade}<span>تحديث التطبيق من داخله عند صدور إصدار جديد</span></li>
     </ul>
   </section>
   <section class="card"><div class="card-h"><h2>الخصوصية</h2></div>
@@ -1922,7 +1972,7 @@ function pageUpdate() {
     const busy = s.phase === 'download';
     body = `<section class="card upd-new"><div class="card-h"><h2>${icons.upgrade} الإصدار ${esc(u.version)} متوفر</h2></div>
       ${u.notes ? `<div class="upd-notes">${esc(u.notes).replace(/\n/g, '<br>')}</div>` : ''}
-      <p class="hint">${u.at ? `نُشر ${esc(new Date(u.at).toLocaleDateString('ar', { dateStyle: 'medium' }))}` : ''}${mb}</p>
+      <p class="hint">${u.at ? `نُشر ${esc(new Date(u.at).toLocaleDateString(LOC, { dateStyle: 'medium' }))}` : ''}${mb}</p>
       ${busy ? `<div class="bar"><i id="updProg" style="width:${Math.max(0, s.pct ?? 0)}%"></i></div><p class="hint center" id="updTxt">${s.pct >= 0 ? `جارٍ التحميل ${s.pct}%` : 'جارٍ التحميل…'}</p>`
         : `<button class="btn primary big wide" id="updGo">${icons.download} ${s.phase === 'ready' ? 'تثبيت التحديث' : 'تحميل وتثبيت التحديث'}</button>`}
       ${s.phase === 'permission' ? '<p class="hint">اسمح لـ«طاقتي» بتثبيت التطبيقات من الشاشة التي فُتحت، ثم ارجع واضغط «تثبيت التحديث».</p>' : ''}

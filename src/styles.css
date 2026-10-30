@@ -232,7 +232,7 @@ bdi { unicode-bidi: isolate; }
 .f-solar { stroke: var(--solar); } .f-grid { stroke: var(--grid); } .f-load { stroke: var(--load); } .f-bat { stroke: var(--bat); }
 .node { position: absolute; transform: translate(-50%, -50%); display: grid; justify-items: center; text-align: center; transition: opacity .4s; }
 .node .ic { width: 58px; height: 58px; padding: 13px; border-radius: 20px; background: var(--node); border: 1.5px solid currentColor; box-shadow: 0 0 24px -8px currentColor; }
-.node b { font-size: calc(17px * var(--fs, 1)); font-weight: 800; margin-top: 4px; color: var(--txt); }
+.node b { font-size: calc(17px * var(--fs, 1)); font-weight: 800; margin-top: 4px; color: var(--txt); white-space: nowrap; }
 .node small { color: var(--mute); font-size: calc(12px * var(--fs, 1)); margin-top: -3px; }
 .node.dim { opacity: .4; }
 .n-solar { left: 50%; top: 18%; color: var(--solar); }
@@ -604,3 +604,6 @@ button.node:focus-visible .ic { outline: 3px solid #6366f1; outline-offset: 3px;
 .qa p { margin: 10px 0 2px; font-size: calc(14px * var(--fs, 1)); line-height: 1.9; color: var(--mute); }
 .qa summary h2 { font-size: calc(15px * var(--fs, 1)); }
 .fs-opt b:first-child { line-height: 1; }
+
+.hero-t { font-size: calc(24px * var(--fs, 1)); }
+.dua { margin: 8px 0 0; font-size: calc(13px * var(--fs, 1)); line-height: 1.9; opacity: .92; }

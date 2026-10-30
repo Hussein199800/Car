@@ -188,7 +188,7 @@ object AlertEvaluator {
         if (cfg.alertGrid && s.gridV != null) {
             val gridOn = s.gridV >= 0.4 * (s.gridRatedV ?: 230.0)
             edge("gridOff", !gridOn, {
-                alerts += Event("انقطعت الكهرباء الوطنية", "المنظومة تعمل على البطارية${s.soc?.let { " (${it.toInt()}%)" } ?: ""}", "warn")
+                alerts += Event("انقطعت الكهرباء الوطنية", "المنظومة تعمل على البطارية${s.soc?.let { " (\u2066${it.toInt()}%\u2069)" } ?: ""}", "warn")
                 faults += Event("انقطاع الكهرباء الوطنية", "جهد الشبكة ${s.gridV.toInt()} فولت", "grid")
             }, {
                 alerts += Event("عادت الكهرباء الوطنية", "الجهد ${s.gridV.toInt()} فولت", "ok")

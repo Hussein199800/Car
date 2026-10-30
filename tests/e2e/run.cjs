@@ -54,8 +54,8 @@ function check(name, cond, info = '') {
   if (!cond) failures++;
 }
 
-async function newPage(browser, { viewport = { width: 390, height: 844 }, scheme = 'light', api, loggedIn = true, prefs, storage = {}, release = relOf(VER) } = {}) {
-  const ctx = await browser.newContext({ viewport, deviceScaleFactor: 1, colorScheme: scheme, acceptDownloads: true });
+async function newPage(browser, { viewport = { width: 390, height: 844 }, scheme = 'light', api, loggedIn = true, prefs, storage = {}, release = relOf(VER), locale } = {}) {
+  const ctx = await browser.newContext({ viewport, deviceScaleFactor: 1, colorScheme: scheme, acceptDownloads: true, ...(locale ? { locale } : {}) });
   const page = await ctx.newPage();
   page.errors = [];
   page.calls = [];
@@ -279,8 +279,10 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
 
     // 9) الوضع التجريبي: كل الصفحات والتقارير والتصدير وحجم الشاشات
     {
-      const page = await newPage(browser, { loggedIn: false });
+      // هاتف بلغة عربية (السعودية) تعرض تواريخه افتراضياً بالأرقام الهندية: يجب أن يبقى التطبيق على 0-9
+      const page = await newPage(browser, { loggedIn: false, locale: 'ar-SA' });
       await page.click('#demoBtn'); await page.waitForSelector('.flow-card');
+      const mixed = [];
       const PAGES = {
         home: [null, 'load', 'battery', 'solar', 'grid', 'device', 'all'],
         reports: [null, 'advisor', 'day', 'week', 'month', 'compare', 'export'],
@@ -294,8 +296,10 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
           await page.waitForTimeout(['week', 'month', 'compare', 'day', 'advisor'].includes(pg) ? 2200 : 250);
           const ok = (await page.$eval('#view', (v) => v.textContent.trim().length > 0)) && (await noHScroll(page));
           check(`صفحة ${tab}${pg ? '/' + pg : ''} تعمل بلا تمرير أفقي`, ok);
+          if (/[\u0660-\u0669\u06F0-\u06F9]/.test(await page.$eval('body', (b) => b.innerText))) mixed.push(`${tab}/${pg}`);
         }
       }
+      check('نظام أرقام واحد (0-9) في كل الصفحات حتى على هاتف بلغة عربية', mixed.length === 0, mixed.join(', '));
       // الحاسبة
       await page.evaluate(() => window.__nav('calc', null));
       await page.fill('#calcInput', '1'); await page.waitForTimeout(150);
@@ -317,6 +321,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 8000 }).catch(() => null), page.click('[data-page="x-today"]')]);
       const csv = dl ? fs.readFileSync(await dl.path(), 'utf8') : '';
       check('تصدير CSV بترميز يفتح في Excel', csv.startsWith('﻿') && csv.includes('الوقت'));
+      check('وقت القراءات في CSV بصيغة ثابتة يفهمها Excel', /\n"?\d{4}-\d\d-\d\d \d\d:\d\d:\d\d/.test(csv), csv.slice(0, 160));
       // المظهر
       await page.evaluate(() => window.__nav('more', 'custom'));
       await page.click('[data-theme=dark]');
@@ -373,6 +378,41 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await plain.waitForSelector('.toast.notice', { timeout: 5000 }).catch(() => null);
       check('رسالة الحالة بقراءة جهاز حقيقي (تفريغ ليلي)', (await text(plain, '.toast.notice')).includes('البيت يعمل على البطارية'), await text(plain, '.toast.notice'));
       await plain.context().close();
+    }
+
+    // 14) تبديل الجهاز أثناء جلب قراءته: لا تظهر قراءة الجهاز السابق باسم الجهاز الجديد
+    {
+      const A = { ...DEVICE, sn: 'AAAA1111', devalias: 'جهاز أ', alias: 'جهاز أ' };
+      const B = { ...DEVICE, sn: 'BBBB2222', devalias: 'جهاز ب', alias: 'جهاز ب' };
+      const page = await newPage(browser, {
+        storage: { devices: [A, B], devSn: A.sn },
+        api: async (a, q) => {
+          if (a !== 'queryDeviceLastData') return null;
+          if (q.get('sn') === A.sn) { await new Promise((r) => setTimeout(r, 1500)); return { err: 0, dat: points(Date.now() - 60000, { 'Battery Capacity': '11' }) }; }
+          return { err: 0, dat: points(Date.now() - 60000, { 'Battery Capacity': '88' }) };
+        },
+      });
+      await page.waitForTimeout(300);
+      await page.evaluate(() => window.__nav('more', 'account'));
+      await page.selectOption('#devSel', B.sn);
+      await page.waitForTimeout(2500);
+      await page.evaluate(() => window.__nav('home', null));
+      await page.waitForSelector('.ring-txt');
+      const ring = await text(page, '.ring-txt b');
+      check('تبديل الجهاز أثناء الطلب: تظهر قراءة الجهاز الجديد فقط', ring.includes('88') && (await text(page, '.dev-name')).includes('جهاز ب'), ring);
+      await page.context().close();
+    }
+    {
+      // التحديث الدوري لا يطوي الأقسام التي فتحها المستخدم
+      const page = await newPage(browser, { api: lastData(2), prefs: { pollSec: 10 } });
+      await page.waitForSelector('.flow-card');
+      await page.evaluate(() => window.__nav('home', 'device'));
+      await page.click('details.fold:nth-of-type(2) summary');
+      const before = page.calls.filter((c) => c.action === 'queryDeviceLastData').length;
+      await page.waitForTimeout(11500);
+      const after = page.calls.filter((c) => c.action === 'queryDeviceLastData').length;
+      check('التحديث الدوري لا يطوي القسم المفتوح', after > before && await page.$eval('details.fold:nth-of-type(2)', (d) => d.open));
+      await page.context().close();
     }
 
     // 11) التحقق من التحديثات

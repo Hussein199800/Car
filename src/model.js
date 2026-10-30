@@ -142,7 +142,7 @@ export function rowsToSamples({ titles, rows }) {
 // صياغة العدد مع المعدود حسب قواعد العربية: ساعة، ساعتين، 3 ساعات، 11 ساعة
 const HOUR = ['ساعة', 'ساعتين', 'ساعات', 'ساعة'];
 const MIN = ['دقيقة', 'دقيقتين', 'دقائق', 'دقيقة'];
-const DAY = ['يوم', 'يومين', 'أيام', 'يوماً'];
+export const DAY = ['يوم', 'يومين', 'أيام', 'يوماً'];
 // الأرقام العربية (٠-٩ و۰-۹) والفاصلة العشرية «٫» أو «,» إلى صيغة يفهمها Number والجهاز
 export function latinDigits(s) {
   return String(s ?? '')
@@ -159,9 +159,17 @@ export function countAr(n, [one, two, few, many]) {
   return `${n} ${many}`;
 }
 
+// نظام أرقام واحد في كل التطبيق: الأرقام 0-9 (كما في الوحدات والقراءات)، مهما كانت لغة الهاتف.
+// بدون هذا تعرض بعض الهواتف التواريخ بالأرقام الهندية ٠-٩ بجانب قراءات بالأرقام 0-9
+export const LOC = 'ar-u-nu-latn';
+const p2 = (x) => String(x).padStart(2, '0');
+
 export const fmt = {
+  // نسبة داخل نص عربي: نعزلها اتجاهياً حتى لا تظهر «(%45)» بين الأقواس
+  pct: (n) => `\u2066${n}%\u2069`,
   w: (w) => (w === null || w === undefined ? '—' : Math.abs(w) >= 1000 ? (w / 1000).toFixed(2) + ' كيلوواط' : Math.round(w) + ' واط'),
-  wShort: (w) => (w === null || w === undefined ? '—' : Math.abs(w) >= 1000 ? (w / 1000).toFixed(1) + 'kW' : Math.round(w) + 'W'),
+  // صيغة مختصرة للمخطط بنفس الوحدات العربية المستخدمة في باقي الشاشات
+  wShort: (w) => (w === null || w === undefined ? '—' : Math.abs(w) >= 1000 ? (w / 1000).toFixed(1) + ' ك.واط' : Math.round(w) + ' واط'),
   kwh: (k) => (k === null || k === undefined || !Number.isFinite(k) ? '—' : k.toFixed(k >= 100 ? 0 : 2)),
   v: (v, d = 1) => (v === null || v === undefined ? '—' : v.toFixed(d) + ' فولت'),
   hours: (h) => {
@@ -184,6 +192,10 @@ export const fmt = {
     if (h < 24) return 'قبل ' + countAr(h, HOUR) + (m % 60 ? ' و' + countAr(m % 60, MIN) : '');
     return 'قبل ' + countAr(Math.floor(h / 24), DAY);
   },
-  time: (t) => new Date(t).toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' }),
-  dateTime: (t) => new Date(t).toLocaleString('ar', { dateStyle: 'medium', timeStyle: 'short' }),
+  time: (t) => new Date(t).toLocaleTimeString(LOC, { hour: '2-digit', minute: '2-digit' }),
+  dateTime: (t) => new Date(t).toLocaleString(LOC, { dateStyle: 'medium', timeStyle: 'short' }),
+  // تاريخ يوم بصيغة YYYY-MM-DD (منتصف النهار لتجنّب مشاكل التوقيت الصيفي)
+  day: (date, opts) => new Date(date + 'T12:00:00').toLocaleDateString(LOC, opts),
+  // للملفات المصدّرة: صيغة ثابتة يفهمها Excel بلا رموز اتجاه مخفية
+  iso: (t) => { const d = new Date(t); return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`; },
 };
