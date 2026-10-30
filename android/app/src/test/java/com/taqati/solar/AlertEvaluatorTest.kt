@@ -138,4 +138,23 @@ class AlertEvaluatorTest {
         assertEquals("ساعتين و3 دقائق", AlertEvaluator.minutesAgo(123 * 60_000L))
         assertEquals("يومين", AlertEvaluator.minutesAgo(49 * 3_600_000L))
     }
+
+    @Test
+    fun temperatureAlertsOnlyWhenDeviceReportsTemperature() {
+        val none = AlertEvaluator.snapshot(points("2026-10-28 20:54:00"))
+        assertNull(none.batTemp)
+        assertNull(none.invTemp)
+        val hot = points("2026-10-28 20:54:00") + Point("Inverter heat sink temperature", "82") + Point("Battery Temperature", "0")
+        val s = AlertEvaluator.snapshot(hot)
+        assertEquals(82.0, s.invTemp!!, 0.0)
+        assertNull("الصفر يعني حساساً غير موجود", s.batTemp)
+        val out = AlertEvaluator.evaluate(s, cfg, JSONObject(), now)
+        assertEquals(listOf("حرارة الرافع مرتفعة"), out.alerts.map { it.title })
+        // 78° ما زالت ضمن هامش الرجوع (75 - 5) فلا يتكرر التنبيه
+        val warm = AlertEvaluator.snapshot(points("2026-10-28 20:55:00") + Point("Inverter heat sink temperature", "78"))
+        val again = AlertEvaluator.evaluate(warm, cfg, out.flags, now)
+        assertTrue(again.alerts.isEmpty())
+        assertEquals(true, again.flags.get("hotInv"))
+        assertTrue(AlertEvaluator.evaluate(s, cfg.copy(alertTemp = false), JSONObject(), now).alerts.isEmpty())
+    }
 }

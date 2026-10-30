@@ -72,7 +72,7 @@ export const backupName = (t = Date.now()) => {
 };
 
 // حدود القيم الرقمية كما في حقول الإعدادات، حتى لا يضبط ملف معدَّل قيماً تضر التطبيق
-export const PREF_RANGES = { lowSoc: [5, 90], overloadPct: [30, 120], batteryAh: [10, 5000], cutoffSoc: [0, 60], pollSec: [10, 600], staleMin: [5, 180] };
+export const PREF_RANGES = { lowSoc: [5, 90], overloadPct: [30, 120], batteryAh: [10, 5000], cutoffSoc: [0, 60], pollSec: [10, 600], staleMin: [5, 180], tempBat: [30, 80], tempInv: [40, 110], fontScale: [0.9, 1.2] };
 
 export function cleanPrefs(defaults, obj) {
   const p = pickKnown(defaults, obj);

@@ -19,6 +19,8 @@ data class Snapshot(
     val batW: Double?,
     val mode: String?,
     val fault: String?,
+    val batTemp: Double? = null,
+    val invTemp: Double? = null,
 )
 
 data class MonitorConfig(
@@ -31,6 +33,9 @@ data class MonitorConfig(
     val alertOffline: Boolean = true,
     val alertFull: Boolean = true,
     val notify: Boolean = true,
+    val alertTemp: Boolean = true,
+    val tempBat: Int = 50,
+    val tempInv: Int = 75,
     val invLabel: String = "الإنفرتر",
     val gridLabel: String = "كهرباء الشبكة",
 ) {
@@ -45,6 +50,9 @@ data class MonitorConfig(
             alertOffline = o.optBoolean("alertOffline", true),
             alertFull = o.optBoolean("alertFull", true),
             notify = o.optBoolean("notify", true),
+            alertTemp = o.optBoolean("alertTemp", true),
+            tempBat = o.optInt("tempBat", 50),
+            tempInv = o.optInt("tempInv", 75),
             invLabel = o.optString("invLabel", "الإنفرتر"),
             gridLabel = o.optString("gridLabel", "كهرباء الشبكة"),
         )
@@ -85,6 +93,12 @@ object AlertEvaluator {
         val dis = num(find(points, Regex("^battery discharg.* current")))
         val modeRaw = find(points, Regex("^working state$"), Regex("^work mode$"), Regex("^operating mode$"), Regex("^mode$"), Regex("^model$"))
         val fault = find(points, Regex("^inverter fault"), Regex("^fault code"), Regex("^fault$"))
+        // الحرارة كما في extract في model.js: نتجاهل الصفر والقيم غير المنطقية
+        val temps = points.mapNotNull { p ->
+            val t = p.title.trim().lowercase()
+            if (!t.contains("temp")) return@mapNotNull null
+            num(p.value)?.takeIf { it > 0 && it < 150 }?.let { (t.contains("bat")) to it }
+        }
         return Snapshot(
             tsRaw = parseTs(find(points, Regex("^timestamp$"), Regex("^time$"), Regex("^date$"))),
             soc = num(find(points, Regex("^battery capacity"), Regex("^soc$"), Regex("state of charge"))),
@@ -95,6 +109,8 @@ object AlertEvaluator {
             batW = if (batV != null && (chg != null || dis != null)) batV * ((chg ?: 0.0) - (dis ?: 0.0)) else null,
             mode = modeRaw?.takeIf { it.contains("mode", ignoreCase = true) },
             fault = fault?.takeUnless { it.isBlank() || it.trim().all { c -> c == '-' } || it.trim().all { c -> c == '0' } },
+            batTemp = temps.filter { it.first }.maxOfOrNull { it.second },
+            invTemp = temps.filter { !it.first }.maxOfOrNull { it.second },
         )
     }
 
@@ -154,6 +170,20 @@ object AlertEvaluator {
                 alerts += Event("حمل زائد", "الحمل وصل إلى ${pct.toInt()}%", "bad")
                 faults += Event("حمل زائد", "${pct.toInt()}%", "warn")
             })
+        }
+        if (cfg.alertTemp) {
+            s.batTemp?.let { t ->
+                edge("hotBat", hold("hotBat", t >= cfg.tempBat, t > cfg.tempBat - 5), {
+                    alerts += Event("حرارة البطارية مرتفعة", "${t.toInt()}° — الحد ${cfg.tempBat}°. خفّف الحمل وتأكد من تهوية مكان البطارية.", "bad")
+                    faults += Event("حرارة البطارية مرتفعة", "${t.toInt()}°", "warn")
+                })
+            }
+            s.invTemp?.let { t ->
+                edge("hotInv", hold("hotInv", t >= cfg.tempInv, t > cfg.tempInv - 5), {
+                    alerts += Event("حرارة الرافع مرتفعة", "${t.toInt()}° — الحد ${cfg.tempInv}°. خفّف الحمل وتأكد أن فتحات التهوية والمراوح تعمل.", "bad")
+                    faults += Event("حرارة الرافع مرتفعة", "${t.toInt()}°", "warn")
+                })
+            }
         }
         if (cfg.alertGrid && s.gridV != null) {
             val gridOn = s.gridV >= 0.4 * (s.gridRatedV ?: 230.0)

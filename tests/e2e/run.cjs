@@ -283,7 +283,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.click('#demoBtn'); await page.waitForSelector('.flow-card');
       const PAGES = {
         home: [null, 'load', 'battery', 'solar', 'grid', 'device', 'all'],
-        reports: [null, 'day', 'week', 'month', 'compare', 'export'],
+        reports: [null, 'advisor', 'day', 'week', 'month', 'compare', 'export'],
         calc: [null],
         alerts: [null, 'rules'],
         more: [null, 'setup', 'edit', 'tips', 'tips/smart', 'tips/lithium', 'monitor', 'custom', 'account', 'backup', 'update', 'about'],
@@ -291,7 +291,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       for (const [tab, pages] of Object.entries(PAGES)) {
         for (const pg of pages) {
           await page.evaluate(({ tab, pg }) => window.__nav?.(tab, pg), { tab, pg });
-          await page.waitForTimeout(pg === 'week' || pg === 'month' || pg === 'compare' || pg === 'day' ? 2200 : 250);
+          await page.waitForTimeout(['week', 'month', 'compare', 'day', 'advisor'].includes(pg) ? 2200 : 250);
           const ok = (await page.$eval('#view', (v) => v.textContent.trim().length > 0)) && (await noHScroll(page));
           check(`صفحة ${tab}${pg ? '/' + pg : ''} تعمل بلا تمرير أفقي`, ok);
         }
@@ -328,12 +328,59 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.context().close();
     }
 
+    // 13) مستشار الطاقة والتقرير اليومي ورسالة الحالة وحجم الخط (تجريبي)
+    {
+      const page = await newPage(browser, { loggedIn: false, viewport: { width: 320, height: 640 } });
+      await page.click('#demoBtn'); await page.waitForSelector('.flow-card');
+      await page.waitForSelector('.toast.notice', { timeout: 5000 }).catch(() => null);
+      check('رسالة الحالة تظهر داخل التطبيق عند الفتح', (await text(page, '.toast.notice')).length > 5, await text(page, '.toast.notice'));
+      await page.evaluate(() => window.__nav('reports', 'advisor'));
+      await page.waitForSelector('.adv-ind', { timeout: 15000 }).catch(() => null);
+      const adv = await text(page, '#view');
+      check('مستشار الطاقة: مؤشر الاستقلالية واستخدام البطارية والتوصيات والأسئلة', /\d+%/.test(await text(page, '.adv-big b')) && adv.includes('استخدام البطارية') && (await page.$$('.adv-tip')).length > 0 && (await page.$$('.qa')).length === 5, adv.slice(0, 200));
+      check('المستشار لا يخترع حالة صحة البطارية', adv.includes('لا يرسل حالة صحة البطارية'));
+      await page.click('.qa summary');
+      check('الأسئلة تُفتح بإجابة', (await text(page, '.qa[open] p')).length > 20);
+      await page.evaluate(() => window.__nav('reports', 'day'));
+      await page.waitForTimeout(1500);
+      const day = await text(page, '#view');
+      check('التقرير اليومي: أدنى وأعلى نسبة مع الوقت والشحن من الألواح والكهرباء والاستقلالية', ['أدنى نسبة للبطارية', 'الساعة', 'شحن من الألواح', 'شحن من الكهرباء', 'الاستقلالية'].every((w) => day.includes(w)));
+      await page.evaluate(() => window.__nav('more', 'custom'));
+      await page.click('[data-fs="1.2"]');
+      const fs = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--fs').trim());
+      const h1 = await page.$eval('.page-title', (e) => parseFloat(getComputedStyle(e).fontSize));
+      check('تكبير الخط يطبّق على التطبيق كله', fs === '1.2' && h1 > 18, `${fs} ${h1}`);
+      for (const [tab, pg] of [['home', null], ['reports', 'advisor'], ['more', null]]) {
+        await page.evaluate(({ tab, pg }) => window.__nav(tab, pg), { tab, pg }); await page.waitForTimeout(300);
+        check(`خط أكبر على شاشة 320: ${tab}${pg ? '/' + pg : ''} بلا تمرير أفقي`, await noHScroll(page));
+      }
+      check('بلا أخطاء JavaScript (المستشار)', page.errors.length === 0, page.errors.join(' | '));
+      await page.context().close();
+    }
+    {
+      // الحرارة: تظهر وتُنبّه فقط عندما يرسلها الجهاز
+      const page = await newPage(browser, { api: lastData(2, { 'Inverter heat sink temperature': '85' }) });
+      await page.waitForSelector('.flow-card');
+      await page.evaluate(() => window.__nav('home', 'device'));
+      check('صفحة الرافع تعرض الحرارة المرسلة', (await text(page, '#view')).includes('حرارة المبدّد الحراري'));
+      await page.click('[data-tab=alerts]');
+      check('تنبيه ارتفاع حرارة الرافع (بالمصطلح المختار)', /حرارة (الرافع|الإنفرتر) مرتفعة/.test(await text(page, '#view')));
+      await page.context().close();
+      const plain = await newPage(browser, { api: lastData(2) });
+      await plain.waitForSelector('.flow-card');
+      await plain.evaluate(() => window.__nav('alerts', 'rules'));
+      check('شروط التنبيه توضّح أن الجهاز لا يرسل الحرارة', (await text(plain, '#view')).includes('لا يرسل قراءات الحرارة'));
+      await plain.waitForSelector('.toast.notice', { timeout: 5000 }).catch(() => null);
+      check('رسالة الحالة بقراءة جهاز حقيقي (تفريغ ليلي)', (await text(plain, '.toast.notice')).includes('البيت يعمل على البطارية'), await text(plain, '.toast.notice'));
+      await plain.context().close();
+    }
+
     // 11) التحقق من التحديثات
     {
       const page = await newPage(browser, { api: lastData(2), release: relOf('9.9.0', 'ميزة رائعة\nإصلاحات') });
       await page.waitForSelector('.flow-card');
-      await page.waitForSelector('.toast', { timeout: 5000 }).catch(() => null);
-      check('إشعار مرة واحدة عند توفر إصدار جديد', (await text(page, '.toast')).includes('9.9.0'));
+      await page.waitForSelector('.toast:not(.notice)', { timeout: 5000 }).catch(() => null);
+      check('إشعار مرة واحدة عند توفر إصدار جديد', (await text(page, '.toast:not(.notice)')).includes('9.9.0'));
       check('التحقق التلقائي يطلب GitHub مرة واحدة', page.ghCalls === 1, String(page.ghCalls));
       await page.click('[data-tab=more]');
       check('شارة «جديد» على بطاقة التحديثات', (await text(page, '[data-page=update]')).includes('جديد'));
@@ -363,7 +410,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.waitForSelector('.flow-card');
       await page.evaluate(() => window.__nav('more', 'backup'));
       await page.fill('#bkCode', 'abc123'); await page.fill('#bkCode2', 'abc999'); await page.click('#bkMake');
-      check('رفض رمزين غير متطابقين', (await text(page, '.toast')).includes('غير متطابقين'));
+      check('رفض رمزين غير متطابقين', (await text(page, '.toast:not(.notice)')).includes('غير متطابقين'));
       await page.fill('#bkCode2', 'abc123');
       const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 15000 }).catch(() => null), page.click('#bkMake')]);
       const file = dl ? path.join(OUT, 'backup.json') : null;

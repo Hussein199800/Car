@@ -202,10 +202,12 @@ test('ملخص الأيام الماضية يُخزَّن نهائياً فقط 
   const mem = new Map();
   globalThis.localStorage = { getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, String(v)), removeItem: (k) => mem.delete(k), get length() { return mem.size; }, key: (i) => [...mem.keys()][i] };
   const date = today(-2);
-  cacheSummary('X', { date, count: 10, source: 'local' });
+  cacheSummary('X', { v: 2, date, count: 10, source: 'local' });
   assert.equal(cachedSummary('X', date), null, 'القراءات المحلية قد تكون جزئية');
-  cacheSummary('X', { date, count: 10, source: 'server' });
+  cacheSummary('X', { v: 2, date, count: 10, source: 'server' });
   assert.equal(cachedSummary('X', date).source, 'server');
+  cacheSummary('X', { date: today(-3), count: 10, source: 'server' });
+  assert.equal(cachedSummary('X', today(-3)), null, 'ملخص بصيغة قديمة يُعاد حسابه بالحقول الجديدة');
   delete globalThis.localStorage;
 });
 
@@ -304,4 +306,89 @@ test('رقم الإصدار موحّد في package.json والتطبيق وأن
   const gradle = readFileSync(new URL('../../android/app/build.gradle', import.meta.url), 'utf8').match(/versionName "([\d.]+)"/)[1];
   assert.equal(main, ver);
   assert.equal(gradle, ver);
+});
+
+// ---------- الإصدار 3.5: مستشار الطاقة والاستقلالية والحرارة ----------
+import { analyze, answers, openingNotice, productionDrop } from '../../src/advisor.js';
+
+const sampleDay = (date, { pv = 0, load = 500, chg = 0, mode = 'Battery Mode', socs = null } = {}) => {
+  const t0 = new Date(date + 'T00:00:00').getTime();
+  return Array.from({ length: 289 }, (_, i) => ({
+    ts: t0 + i * 5 * 60000, outW: load, pvW: pv, batW: chg, gridV: 230, gridRatedV: 230, mode,
+    soc: socs ? socs(i) : 50,
+  }));
+};
+
+test('تقسيم الشحن بين الألواح والكهرباء والاستقلالية', () => {
+  // وضع البطارية: كل الشحن من الألواح ولا شيء من الكهرباء، والاستقلالية 100%
+  const a = summarize('2026-10-20', sampleDay('2026-10-20', { pv: 1500, load: 500, chg: 1000 }), 'server');
+  assert.ok(Math.abs(a.solarChgKwh - 24) < 0.01 && a.gridChgKwh === 0, `${a.solarChgKwh} ${a.gridChgKwh}`);
+  assert.equal(Math.round(a.independence), 100);
+  // وضع الشبكة: الحمل من الكهرباء، والشحن 1000 واط منها 300 من الألواح و700 من الكهرباء
+  const b = summarize('2026-10-21', sampleDay('2026-10-21', { pv: 300, load: 500, chg: 1000, mode: 'Line Mode' }), 'server');
+  assert.ok(Math.abs(b.solarChgKwh - 7.2) < 0.01 && Math.abs(b.gridChgKwh - 16.8) < 0.01);
+  assert.equal(b.independence, 0);
+  // بدون وضع التشغيل لا نحسب الاستقلالية
+  const c = summarize('2026-10-22', sampleDay('2026-10-22', { mode: null }), 'server');
+  assert.equal(c.independence, null);
+  assert.equal(c.gridLoadKwh, null);
+});
+
+test('أدنى وأعلى نسبة للبطارية مع الوقت، ووقت الامتلاء', () => {
+  const socs = (i) => (i < 72 ? 40 - i / 6 : Math.min(100, 28 + (i - 72) / 2));
+  const s = summarize('2026-10-23', sampleDay('2026-10-23', { socs }), 'server');
+  assert.equal(s.socMin, 28);
+  assert.equal(new Date(s.socMinAt).getHours(), 6);
+  assert.equal(s.socMax, 100);
+  assert.equal(new Date(s.fullAt).getHours(), 18);
+  assert.equal(s.socMaxAt, s.fullAt, 'أول وصول لأعلى نسبة');
+});
+
+test('الحرارة تُقرأ فقط إن أرسلها الجهاز، ويُتجاهل الصفر', () => {
+  assert.equal(normalize(device(2)).temps.length, 0);
+  const m = normalize(device(2, { 'Inverter heat sink temperature': '61', 'Battery Temperature': '0' }));
+  assert.equal(m.invTemp, 61);
+  assert.equal(m.batTemp, null);
+  assert.equal(m.temps[0].ar, 'حرارة المبدّد الحراري');
+});
+
+test('مستشار الطاقة: توصيات من بيانات فعلية فقط', () => {
+  const sums = [];
+  for (let d = 20; d <= 27; d++) {
+    const date = `2026-10-${d}`;
+    const low = d === 25;
+    sums.push(summarize(date, sampleDay(date, { pv: d === 26 ? 200 : 1200, load: 600, chg: 300, socs: (i) => (low ? 20 + (i % 50) : Math.min(100, 50 + i / 3)) }), 'server'));
+  }
+  const r = analyze(sums, { todayKey: '2026-10-27', prefs: { lowSoc: 30, batteryAh: 200, cutoffSoc: 20 }, ratedW: 6500, volts: 48 });
+  assert.equal(r.days, 7, 'اليوم الجاري لا يدخل في المتوسطات');
+  assert.equal(Math.round(r.independence), 100);
+  assert.ok(Math.abs(r.cap - 9.6) < 1e-9);
+  const titles = r.tips.map((t) => t.title);
+  assert.ok(titles.includes('البطارية تنخفض كثيراً'), titles.join('|'));
+  assert.ok(titles.includes('انخفاض في الإنتاج'), 'إنتاج آخر يوم أقل بكثير من المعتاد');
+  assert.ok(!titles.includes('شحن من الكهرباء الوطنية'), 'لا شحن من الكهرباء في وضع البطارية');
+  assert.equal(r.battery.soh, null, 'لا نخترع حالة صحة غير مرسلة');
+  const qa = answers(r, null, { todayKey: '2026-10-27', sums });
+  assert.equal(qa.length, 5);
+  assert.match(qa.find((x) => x.q.includes('الحرارة')).a, /لا يرسل/);
+  assert.match(qa.find((x) => x.q.includes('البطارية')).a, /لا يرسل حالة صحة/);
+});
+
+test('انخفاض الإنتاج بسبب امتلاء البطارية يُشرح', () => {
+  const days = [5, 5, 5, 5, 2].map((pv, i) => ({ date: `2026-10-1${i}`, pvKwh: pv, fullAt: i === 4 ? new Date(2026, 9, 14, 11, 30).getTime() : null }));
+  const d = productionDrop(days);
+  assert.equal(Math.round(d.by), 60);
+  assert.match(d.text, /امتلأت/);
+  assert.equal(productionDrop(days.slice(0, 3)), null, 'تحتاج 4 أيام على الأقل');
+});
+
+test('رسالة الحالة عند الفتح: سطر واحد حسب أهم ما يحدث', () => {
+  const base = { stale: false, fault: null, soc: 60, gridOn: true, mode: 'Battery Mode', outW: 400, loadPct: 6 };
+  assert.match(openingNotice({ ...base, pvW: 1500, batW: 900 }).text, /الألواح تغذّي البيت وتشحن البطارية/);
+  assert.match(openingNotice({ ...base, pvW: 900, batW: 800, outW: 0 }).text, /^الألواح تشحن البطارية/);
+  assert.match(openingNotice({ ...base, pvW: 0, batW: -450 }).text, /البيت يعمل على البطارية \(60%\)/);
+  assert.match(openingNotice({ ...base, mode: 'Line Mode', pvW: 0, batW: 0 }).text, /الكهرباء الوطنية تغذّي البيت/);
+  assert.match(openingNotice({ ...base, mode: 'Line Mode', pvW: 700, batW: 600 }).text, /والألواح تشحن البطارية/);
+  assert.equal(openingNotice({ ...base, loadPct: 92, outW: 6000 }).kind, 'bad');
+  assert.equal(openingNotice({ ...base, stale: true }), null, 'لا رسالة على قراءة قديمة');
 });

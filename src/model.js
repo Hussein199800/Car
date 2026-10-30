@@ -36,6 +36,15 @@ export function extract(map) {
   const modeRaw = find(...MODE_TITLES);
   const mode = modeRaw && /mode/i.test(String(modeRaw)) ? String(modeRaw) : null;
   const fault = find(/^inverter fault/, /^fault code/, /^fault$/);
+  // الحرارة: بعض الأجهزة ترسلها (حرارة المشتت أو البطارية) وبعضها لا يرسلها أبداً.
+  // نتجاهل الصفر والقيم غير المنطقية لأنها تعني غالباً حساساً غير موجود
+  const temps = [];
+  for (const [k, v] of map) {
+    if (!/temp/.test(k)) continue;
+    const t = num(v);
+    if (t !== null && t > 0 && t < 150) temps.push({ key: k, v: t, bat: /bat/.test(k) });
+  }
+  const maxOf = (list) => (list.length ? Math.max(...list.map((t) => t.v)) : null);
   const warning = find(/^warning code/, /^warning$/);
   return {
     ts,
@@ -61,7 +70,10 @@ export function extract(map) {
     todayWh: n(/^today generation/, /^energy today/),
     totalWh: n(/^total generation/, /^energy total/),
     busV: n(/^bus voltage/),
-    temp: n(/temperature/),
+    temps,
+    temp: maxOf(temps),
+    batTemp: maxOf(temps.filter((t) => t.bat)),
+    invTemp: maxOf(temps.filter((t) => !t.bat)),
     ratedW: n(/^ac output rating active power/),
     ratedV: n(/^battery rating voltage/),
     gridRatedV: n(/^grid rating voltage/, /^ac output rating voltage/),
@@ -104,6 +116,7 @@ export function normalize(points, staleMin = 15, offsetMs = 0) {
   const stale = age !== null && age > staleMin * 60000;
   return {
     ...x,
+    temps: x.temps.map((t) => ({ ...t, ar: trTitle(t.key) })),
     rawTs,
     age,
     stale,
