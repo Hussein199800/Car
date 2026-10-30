@@ -1,6 +1,6 @@
 {
   "name": "taqati-solar",
-  "version": "3.4.0",
+  "version": "3.5.0",
   "private": true,
   "description": "طاقتي - مراقبة منظومة الطاقة الشمسية (متوافق مع حسابات WatchPower)",
   "scripts": {
