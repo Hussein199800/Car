@@ -7,8 +7,8 @@ const TITLES = {
   'machine type': 'نوع الجهاز',
   'main cpu firmware version': 'إصدار برنامج المعالج الرئيسي',
   'secondary cpu firmware version': 'إصدار برنامج المعالج الثانوي',
-  'grid voltage': 'جهد الكهرباء الوطنية',
-  'grid frequency': 'تردد الكهرباء الوطنية',
+  'grid voltage': 'جهد كهرباء الشبكة',
+  'grid frequency': 'تردد كهرباء الشبكة',
   'ac input voltage': 'جهد الدخل المتردد',
   'ac input frequency': 'تردد الدخل المتردد',
   'pv1 input voltage': 'جهد الألواح 1',
@@ -70,7 +70,7 @@ const TITLES = {
 
 const VALUES = {
   'battery mode': 'وضع البطارية',
-  'line mode': 'وضع الكهرباء الوطنية',
+  'line mode': 'وضع كهرباء الشبكة',
   'standby mode': 'وضع الاستعداد',
   'fault mode': 'وضع العطل',
   'power on mode': 'وضع بدء التشغيل',

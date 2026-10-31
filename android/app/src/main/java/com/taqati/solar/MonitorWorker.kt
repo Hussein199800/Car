@@ -23,7 +23,7 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 /**
- * يفحص الرافع كل 15 دقيقة تقريباً والتطبيق مغلق أو في الخلفية، ويرسل الإشعارات.
+ * يفحص الإنفرتر كل 15 دقيقة تقريباً والتطبيق مغلق أو في الخلفية، ويرسل الإشعارات.
  * أثناء فتح التطبيق تتولى الواجهة المراقبة كل بضع ثوانٍ، فلا يعمل هذا الفحص حتى لا تتكرر التنبيهات.
  */
 class MonitorWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params) {
@@ -60,7 +60,7 @@ class MonitorWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params
         val out = AlertEvaluator.evaluate(AlertEvaluator.snapshot(points), cfg, flags, System.currentTimeMillis())
         prefs.edit().putString(MonitorStore.FLAGS, out.flags.toString()).apply()
         MonitorStore.queue(ctx, out.alerts, out.faults)
-        if (cfg.notify) out.alerts.forEach { notify(ctx, AlertEvaluator.localize(it.title, cfg), AlertEvaluator.localize(it.body, cfg)) }
+        if (cfg.notify) out.alerts.forEach { notify(ctx, it.title, it.body) }
         return Result.success()
     }
 
@@ -83,7 +83,7 @@ class MonitorWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params
         fun ensureChannel(ctx: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val ch = NotificationChannel(CHANNEL, "تنبيهات المنظومة", NotificationManager.IMPORTANCE_HIGH)
-                ch.description = "انقطاع الكهرباء والرافع وانخفاض البطارية والأعطال"
+                ch.description = "انقطاع الكهرباء والإنفرتر وانخفاض البطارية والأعطال"
                 ctx.getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
             }
         }

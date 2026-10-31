@@ -58,7 +58,7 @@ function pruneRecords(sn, keepDays) {
 // ---------- ملخص يوم ----------
 const MAX_GAP_H = 0.34; // فجوة أكبر من 20 دقيقة تعني انقطاع البيانات فلا نحسبها
 
-// «Line Mode»: البيت يتغذى من الكهرباء الوطنية مباشرة عبر الإنفرتر
+// «Line Mode»: البيت يتغذى من كهرباء الشبكة مباشرة عبر الإنفرتر
 const isLine = (m) => /line|utility|bypass/i.test(m || '');
 
 export function summarize(date, samples, source) {
@@ -111,7 +111,7 @@ export function summarize(date, samples, source) {
   }
   const temps = s.map((x) => x.temp).filter((v) => v != null);
   const kwh = (wh) => (s.length > 1 ? wh / 1000 : null);
-  // الاستقلالية: نسبة استهلاك البيت التي لم تأتِ من الكهرباء الوطنية (لا مباشرة ولا عبر شحن البطارية).
+  // الاستقلالية: نسبة استهلاك البيت التي لم تأتِ من كهرباء الشبكة (لا مباشرة ولا عبر شحن البطارية).
   // نحسبها فقط إذا كان وضع التشغيل معروفاً في معظم الوقت، وإلا لا يمكن الفصل بدقة
   const modeKnown = coveredH > 0 && modeH / coveredH >= 0.8;
   const independence = modeKnown && loadWh > 0 ? Math.max(0, Math.min(100, (1 - (gridLoadWh + gridChgWh) / loadWh) * 100)) : null;

@@ -141,7 +141,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.context().close();
     }
 
-    // 3) الرافع مطفأ: آخر قراءة قبل 99 دقيقة
+    // 3) الإنفرتر مطفأ: آخر قراءة قبل 99 دقيقة
     {
       const page = await newPage(browser, { api: lastData(99), scheme: 'dark' });
       await page.waitForSelector('.banner.off');
@@ -173,6 +173,15 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       check('الضغط على الألواح يفتح تفاصيلها', (await text(page, '.page-title')) === 'الألواح الشمسية');
       await page.click('#backBtn');
       check('ملاحظة عاجلة من النصائح لا تظهر بلا داعٍ', !(await page.$('.tip-banner')));
+      check('أربعة تبويبات فقط', (await page.$$('.tabbar button')).length === 4);
+      const cards = await page.$$eval('.gcard', (e) => e.map((x) => x.dataset.page));
+      check('بطاقات الرئيسية: الحمل والألواح والكهرباء والإنفرتر (البطارية في المخطط والحلقة)', cards.join() === 'load,solar,grid,device', cards.join());
+      check('لا يوجد اختيار جهاز لحساب بجهاز واحد', !(await page.$('#devPick')));
+      await page.click('.battery-card .ring'); await page.waitForTimeout(250);
+      check('الضغط على حلقة البطارية يفتح صفحتها', (await text(page, '.page-title')) === 'البطارية');
+      await page.click('#backBtn'); await page.click('.gcard[data-page=device]'); await page.waitForTimeout(250);
+      check('كل القراءات داخل صفحة الإنفرتر', (await text(page, '#view')).includes('كل القراءات الحيّة'));
+      await page.click('#backBtn');
       await page.context().close();
     }
 
@@ -188,14 +197,14 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
     // 5) فرق توقيت: الخادم متأخر 3 ساعات والقراءات تتجدد
     {
       const page = await newPage(browser, {
-        prefs: { pollSec: 10 },
+        storage: { devPollSec: 10 },
         api: (a, _p, n) => (a === 'queryDeviceLastData' ? { err: 0, dat: points(Date.now() - 180 * 60000 - 60000 + n * 20000) } : null),
       });
       await page.waitForSelector('.flow-card');
       await page.waitForTimeout(11500);
       check('اكتشاف فرق التوقيت تلقائياً', (await text(page, '.dev-sub')).includes('آخر قراءة') && !(await page.$('.banner.off')));
-      const alerts = await page.evaluate(() => JSON.parse(localStorage.getItem('taqati.alerts') || '[]').length);
-      check('لا تنبيه انقطاع كاذب بسبب التوقيت', alerts === 0);
+      const offline = await page.evaluate(() => JSON.parse(localStorage.getItem('taqati.log') || '[]').filter((e) => e.cat === 'conn').length);
+      check('لا تنبيه انقطاع كاذب بسبب التوقيت', offline === 0);
       await page.context().close();
     }
 
@@ -218,7 +227,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.context().close();
     }
 
-    // 8) تعديل إعداد في الرافع مع التأكيد
+    // 8) تعديل إعداد في الإنفرتر مع التأكيد
     {
       const page = await newPage(browser, {
         api: (a) => ({
@@ -284,11 +293,10 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.click('#demoBtn'); await page.waitForSelector('.flow-card');
       const mixed = [];
       const PAGES = {
-        home: [null, 'load', 'battery', 'solar', 'grid', 'device', 'all'],
-        reports: [null, 'advisor', 'day', 'week', 'month', 'compare', 'export'],
-        calc: [null],
+        home: [null, 'load', 'battery', 'solar', 'grid', 'device'],
+        reports: [null, 'advisor', 'day', 'week', 'month'],
         alerts: [null, 'rules'],
-        more: [null, 'setup', 'edit', 'tips', 'tips/smart', 'tips/lithium', 'monitor', 'custom', 'account', 'backup', 'update', 'about'],
+        more: [null, 'setup', 'edit', 'calc', 'tips', 'tips/lithium', 'settings', 'update', 'about'],
       };
       for (const [tab, pages] of Object.entries(PAGES)) {
         for (const pg of pages) {
@@ -301,7 +309,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       }
       check('نظام أرقام واحد (0-9) في كل الصفحات حتى على هاتف بلغة عربية', mixed.length === 0, mixed.join(', '));
       // الحاسبة
-      await page.evaluate(() => window.__nav('calc', null));
+      await page.evaluate(() => window.__nav('more', 'calc'));
       await page.fill('#calcInput', '1'); await page.waitForTimeout(150);
       const res = await page.$$eval('.res-main b', (e) => e.map((x) => x.textContent));
       const bat = await page.$$eval('.bat-v b', (e) => e.map((x) => x.textContent));
@@ -312,45 +320,51 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       // المزيد: اسم المطوّر وزر الخروج
       await page.evaluate(() => window.__nav('more', 'about'));
       const about = await text(page, '#view');
-      check('حول التطبيق يذكر الحاسبة والنصائح والمراقبة ودليل الربط', ['حاسبة أحمال', 'نصائح', 'في الخلفية', 'الواي فاي'].every((w) => about.includes(w)));
+      check('حول التطبيق: الإصدار والخصوصية', about.includes(VER) && about.includes('الخصوصية'));
       await page.evaluate(() => window.__nav('more', null));
       check('اسم المطوّر ظاهر أعلى المزيد', (await text(page, '.dev-top')).includes('حسين محمد علي الطويل'));
       check('زر تسجيل الخروج أحمر ومنفصل في آخر المزيد', await page.$eval('#logoutBtn', (b) => getComputedStyle(b).backgroundColor === 'rgb(239, 68, 68)' && b.previousElementSibling?.classList.contains('lcards')));
-      // التصدير
-      await page.evaluate(() => window.__nav('reports', 'export'));
-      const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 8000 }).catch(() => null), page.click('[data-page="x-today"]')]);
+      // نسبة التغيّر داخل التقرير الأسبوعي بدل صفحة المقارنة
+      await page.evaluate(() => window.__nav('reports', 'week'));
+      await page.waitForSelector('.stat .trend', { timeout: 15000 }).catch(() => null);
+      check('التقرير الأسبوعي يعرض نسبة التغيّر عن الأسبوع السابق', (await page.$$('.stat .trend')).length === 4 && (await text(page, '#view')).includes('الأسبوع السابق'));
+      await page.evaluate(() => window.__nav('reports', null));
+      check('لا توجد صفحة مقارنة منفصلة', !(await page.$('[data-page=compare]')));
+      // التصدير من داخل التقرير اليومي
+      await page.evaluate(() => window.__nav('reports', 'day'));
+      await page.waitForSelector('#expDay', { timeout: 8000 }).catch(() => null);
+      const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 8000 }).catch(() => null), page.click('#expDay')]);
       const csv = dl ? fs.readFileSync(await dl.path(), 'utf8') : '';
       check('تصدير CSV بترميز يفتح في Excel', csv.startsWith('﻿') && csv.includes('الوقت'));
       check('وقت القراءات في CSV بصيغة ثابتة يفهمها Excel', /\n"?\d{4}-\d\d-\d\d \d\d:\d\d:\d\d/.test(csv), csv.slice(0, 160));
       // المظهر
-      await page.evaluate(() => window.__nav('more', 'custom'));
+      await page.evaluate(() => window.__nav('more', 'settings'));
       await page.click('[data-theme=dark]');
       check('التبديل للوضع الليلي', (await page.getAttribute('html', 'data-theme')) === 'dark');
-      await page.click('[data-term="invTerm:akis"]');
       await page.evaluate(() => window.__nav('home', null));
-      check('تغيير المصطلح يظهر في الواجهة', (await text(page, '#view')).includes('العاكس'));
+      check('المصطلحات الثابتة في الواجهة', (await text(page, '#view')).includes('الإنفرتر') && !(await text(page, 'body')).includes('الرافع'));
       check('بلا أخطاء JavaScript أو مخالفات CSP (تجريبي)', page.errors.length === 0, page.errors.join(' | '));
       await page.context().close();
     }
 
-    // 13) مستشار الطاقة والتقرير اليومي ورسالة الحالة وحجم الخط (تجريبي)
+    // 13) مستشار الطاقة والتقرير اليومي وحجم الخط (تجريبي)
     {
       const page = await newPage(browser, { loggedIn: false, viewport: { width: 320, height: 640 } });
       await page.click('#demoBtn'); await page.waitForSelector('.flow-card');
-      await page.waitForSelector('.toast.notice', { timeout: 5000 }).catch(() => null);
-      check('رسالة الحالة تظهر داخل التطبيق عند الفتح', (await text(page, '.toast.notice')).length > 5, await text(page, '.toast.notice'));
       await page.evaluate(() => window.__nav('reports', 'advisor'));
       await page.waitForSelector('.adv-ind', { timeout: 15000 }).catch(() => null);
       const adv = await text(page, '#view');
-      check('مستشار الطاقة: مؤشر الاستقلالية واستخدام البطارية والتوصيات والأسئلة', /\d+%/.test(await text(page, '.adv-big b')) && adv.includes('استخدام البطارية') && (await page.$$('.adv-tip')).length > 0 && (await page.$$('.qa')).length === 5, adv.slice(0, 200));
+      check('مستشار الطاقة: مؤشر الاستقلالية واستخدام البطارية والتوصيات', /\d+%/.test(await text(page, '.adv-big b')) && adv.includes('استخدام البطارية') && (await page.$$('.adv-tip')).length > 0, adv.slice(0, 200));
       check('المستشار لا يخترع حالة صحة البطارية', adv.includes('لا يرسل حالة صحة البطارية'));
-      await page.click('.qa summary');
-      check('الأسئلة تُفتح بإجابة', (await text(page, '.qa[open] p')).length > 20);
+      check('ملاحظات الآن وآخر 7 أيام في صفحة واحدة', adv.includes('الآن') && adv.includes('آخر 7 أيام') && (await page.$$('#view .alerts .alert')).length > 0);
+      await page.evaluate(() => window.__nav('more', 'tips'));
+      await page.click('[data-page="reports:advisor"]'); await page.waitForTimeout(300);
+      check('بطاقة ملاحظات الجهاز في النصائح تفتح صفحة التقارير', (await text(page, '.page-title')) === 'ملاحظات على منظومتك' && !!(await page.$('.tabbar [data-tab=reports].on')));
       await page.evaluate(() => window.__nav('reports', 'day'));
       await page.waitForTimeout(1500);
       const day = await text(page, '#view');
       check('التقرير اليومي: أدنى وأعلى نسبة مع الوقت والشحن من الألواح والكهرباء والاستقلالية', ['أدنى نسبة للبطارية', 'الساعة', 'شحن من الألواح', 'شحن من الكهرباء', 'الاستقلالية'].every((w) => day.includes(w)));
-      await page.evaluate(() => window.__nav('more', 'custom'));
+      await page.evaluate(() => window.__nav('more', 'settings'));
       await page.click('[data-fs="1.2"]');
       const fs = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--fs').trim());
       const h1 = await page.$eval('.page-title', (e) => parseFloat(getComputedStyle(e).fontSize));
@@ -367,17 +381,41 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       const page = await newPage(browser, { api: lastData(2, { 'Inverter heat sink temperature': '85' }) });
       await page.waitForSelector('.flow-card');
       await page.evaluate(() => window.__nav('home', 'device'));
-      check('صفحة الرافع تعرض الحرارة المرسلة', (await text(page, '#view')).includes('حرارة المبدّد الحراري'));
+      check('صفحة الإنفرتر تعرض الحرارة المرسلة', (await text(page, '#view')).includes('حرارة المبدّد الحراري'));
       await page.click('[data-tab=alerts]');
-      check('تنبيه ارتفاع حرارة الرافع (بالمصطلح المختار)', /حرارة (الرافع|الإنفرتر) مرتفعة/.test(await text(page, '#view')));
+      check('تنبيه ارتفاع حرارة الإنفرتر', /حرارة الإنفرتر مرتفعة/.test(await text(page, '#view')));
+      await page.evaluate(() => window.__nav('alerts', 'rules'));
+      check('إعدادات الحرارة تظهر لما يرسله الجهاز فقط', !!(await page.$('[data-pref=alertTemp]')) && !!(await page.$('[data-pref=tempInv]')) && !(await page.$('[data-pref=tempBat]')));
       await page.context().close();
       const plain = await newPage(browser, { api: lastData(2) });
       await plain.waitForSelector('.flow-card');
       await plain.evaluate(() => window.__nav('alerts', 'rules'));
-      check('شروط التنبيه توضّح أن الجهاز لا يرسل الحرارة', (await text(plain, '#view')).includes('لا يرسل قراءات الحرارة'));
-      await plain.waitForSelector('.toast.notice', { timeout: 5000 }).catch(() => null);
-      check('رسالة الحالة بقراءة جهاز حقيقي (تفريغ ليلي)', (await text(plain, '.toast.notice')).includes('البيت يعمل على البطارية'), await text(plain, '.toast.notice'));
+      check('شروط التنبيه تخفي الحرارة وتوضّح السبب', (await text(plain, '#view')).includes('لا يرسل قراءات الحرارة') && !(await plain.$('[data-pref=alertTemp]')));
       await plain.context().close();
+    }
+
+    // 15) السجل الموحّد: ترحيل سجلّي الإصدارات السابقة بلا تكرار
+    {
+      const t = Date.now() - 3600e3;
+      const page = await newPage(browser, {
+        api: lastData(2),
+        storage: {
+          faults: [{ kind: 'grid', title: 'انقطاع الكهرباء الوطنية', body: 'جهد الشبكة 0 فولت', at: t }, { kind: 'info', title: 'تغيير إعداد', body: 'أولوية مصدر الخرج ← SBU', at: t - 60e3 }],
+          alerts: [{ kind: 'warn', title: 'انقطعت الكهرباء الوطنية', body: 'المنظومة تعمل على البطارية', at: t + 2, read: false }, { kind: 'bad', title: 'البطارية منخفضة', body: 'نسبة الشحن 25%', at: t - 120e3, read: true }],
+        },
+      });
+      await page.waitForSelector('.flow-card');
+      check('شارة التنبيهات تعدّ غير المقروء بعد الترحيل', (await text(page, '#alertBadge')) === '1');
+      await page.click('[data-tab=alerts]');
+      check('السجل الموحّد: كل حدث مرة واحدة', (await page.$$('.alerts .alert')).length === 3 && (await page.$$('.alert.new')).length === 1);
+      const chips = await page.$$eval('.log-filter button', (e) => e.map((x) => x.textContent.replace(/\s+/g, ' ').trim()));
+      check('فلاتر بعدّادات للفئات الموجودة فقط', chips.join('|') === 'الكل 3|الكهرباء 1|البطارية 1|الإعدادات 1', chips.join('|'));
+      await page.click('.log-filter [data-filter=grid]');
+      check('الفلتر يعرض فئته فقط', (await page.$$('.alerts .alert')).length === 1 && (await text(page, '.alerts')).includes('انقطعت'));
+      const stored = await page.evaluate(() => ({ alerts: localStorage.getItem('taqati.alerts'), faults: localStorage.getItem('taqati.faults') }));
+      check('المفاتيح القديمة تُحذف بعد الترحيل', stored.alerts === null && stored.faults === null);
+      check('بلا أخطاء JavaScript (السجل)', page.errors.length === 0, page.errors.join(' | '));
+      await page.context().close();
     }
 
     // 14) تبديل الجهاز أثناء جلب قراءته: لا تظهر قراءة الجهاز السابق باسم الجهاز الجديد
@@ -393,8 +431,8 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
         },
       });
       await page.waitForTimeout(300);
-      await page.evaluate(() => window.__nav('more', 'account'));
-      await page.selectOption('#devSel', B.sn);
+      await page.click('#devPick');
+      await page.click(`.modal [data-sn="${B.sn}"]`);
       await page.waitForTimeout(2500);
       await page.evaluate(() => window.__nav('home', null));
       await page.waitForSelector('.ring-txt');
@@ -404,7 +442,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
     }
     {
       // التحديث الدوري لا يطوي الأقسام التي فتحها المستخدم
-      const page = await newPage(browser, { api: lastData(2), prefs: { pollSec: 10 } });
+      const page = await newPage(browser, { api: lastData(2), storage: { devPollSec: 10 } });
       await page.waitForSelector('.flow-card');
       await page.evaluate(() => window.__nav('home', 'device'));
       await page.click('details.fold:nth-of-type(2) summary');
@@ -440,53 +478,6 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.evaluate(() => window.__nav('more', 'update'));
       await page.click('#updCheck'); await page.waitForTimeout(400);
       check('التحقق اليدوي: «تطبيقك محدّث» عندما لا يوجد أحدث', page.ghCalls === 1 && (await text(page, '#view')).includes('تطبيقك محدّث'));
-      await page.context().close();
-    }
-
-    // 12) النسخة الاحتياطية: إنشاء ثم استعادة بعد «إعادة التثبيت»
-    {
-      const HASH = 'e5e9fa1ba31ecd1ae84f75caaa474f3a663f05f4';
-      const page = await newPage(browser, { api: lastData(2), prefs: { batteryAh: 321, invTerm: 'akis' }, storage: { session: { ...SESSION, pwdHash: HASH } } });
-      await page.waitForSelector('.flow-card');
-      await page.evaluate(() => window.__nav('more', 'backup'));
-      await page.fill('#bkCode', 'abc123'); await page.fill('#bkCode2', 'abc999'); await page.click('#bkMake');
-      check('رفض رمزين غير متطابقين', (await text(page, '.toast:not(.notice)')).includes('غير متطابقين'));
-      await page.fill('#bkCode2', 'abc123');
-      const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 15000 }).catch(() => null), page.click('#bkMake')]);
-      const file = dl ? path.join(OUT, 'backup.json') : null;
-      if (dl) await dl.saveAs(file);
-      const body = file ? fs.readFileSync(file, 'utf8') : '';
-      check('ملف النسخة الاحتياطية مشفّر بلا اسم مستخدم أو بصمة', body.includes('taqati-backup') && !body.includes('tester') && !body.includes(HASH) && /taqati-backup-\d{4}-\d\d-\d\d\.json/.test(dl?.suggestedFilename() || ''));
-      await page.context().close();
-
-      const fresh = await newPage(browser, {
-        loggedIn: false,
-        api: (a) => ({
-          authSource: { err: 0, dat: { token: 'T', secret: 'S', expire: 7200 } },
-          queryPlants: { err: 0, dat: { plant: [{ pid: 7 }] } },
-          webQueryDeviceEs: { err: 0, dat: { device: [DEVICE] } },
-          queryDeviceLastData: { err: 0, dat: points(Date.now() - 60000) },
-        })[a],
-      });
-      await fresh.click('#restoreBtn');
-      if (file) await fresh.setInputFiles('#bkFile', file);
-      await fresh.fill('#bkCodeIn', 'wrong1'); await fresh.click('#bkRestore');
-      await fresh.waitForSelector('#bkErr:not([hidden])', { timeout: 15000 }).catch(() => null);
-      check('رمز خاطئ: رسالة واضحة ولا اتصال بالخادم', (await text(fresh, '#bkErr')).includes('الرمز غير صحيح') && !fresh.calls.some((c) => c.action === 'authSource'));
-      await fresh.fill('#bkCodeIn', 'abc123'); await fresh.click('#bkRestore');
-      await fresh.waitForSelector('.flow-card', { timeout: 15000 }).catch(() => null);
-      const auth = fresh.calls.find((c) => c.action === 'authSource');
-      check('الاستعادة تدخل الحساب مباشرة دون كلمة المرور', !!(await fresh.$('.flow-card')) && auth?.params.usr === 'tester');
-      const restored = await fresh.evaluate(() => JSON.parse(localStorage.getItem('taqati.prefs') || '{}'));
-      check('الاستعادة تعيد الإعدادات (سعة البطارية والمصطلحات)', restored.batteryAh === 321 && restored.invTerm === 'akis' && (await text(fresh, '#view')).includes('العاكس'));
-      check('بلا أخطاء JavaScript (النسخة الاحتياطية)', fresh.errors.length === 0, fresh.errors.join(' | '));
-      await fresh.context().close();
-    }
-    {
-      // زر الرجوع في شاشة الاستعادة يعيد لشاشة الدخول
-      const page = await newPage(browser, { loggedIn: false });
-      await page.click('#restoreBtn'); await page.click('#restoreBack');
-      check('الرجوع من شاشة الاستعادة إلى الدخول', !!(await page.$('#loginForm')));
       await page.context().close();
     }
 

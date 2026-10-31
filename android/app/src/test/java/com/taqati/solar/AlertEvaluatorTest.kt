@@ -37,7 +37,7 @@ class AlertEvaluatorTest {
     fun staleReadingRaisesOfflineOnceAndSkipsOtherAlerts() {
         val s = AlertEvaluator.snapshot(points("2026-10-28 19:17:29", soc = "10"))
         val first = AlertEvaluator.evaluate(s, cfg, JSONObject(), now)
-        assertEquals(listOf("الرافع غير متصل"), first.alerts.map { it.title })
+        assertEquals(listOf("الإنفرتر غير متصل"), first.alerts.map { it.title })
         assertEquals(listOf("offline"), first.faults.map { it.kind })
         val second = AlertEvaluator.evaluate(s, cfg, first.flags, now + 900_000)
         assertTrue("لا تكرار", second.alerts.isEmpty())
@@ -47,9 +47,9 @@ class AlertEvaluatorTest {
     fun recoveryAfterOfflineAnnouncesOnlyIfOfflineWasAnnounced() {
         val fresh = AlertEvaluator.snapshot(points("2026-10-28 20:54:00"))
         val back = AlertEvaluator.evaluate(fresh, cfg, JSONObject().put("offline", true), now)
-        assertTrue(back.alerts.any { it.title == "عاد اتصال الرافع" })
+        assertTrue(back.alerts.any { it.title == "عاد اتصال الإنفرتر" })
         val silent = AlertEvaluator.evaluate(fresh, cfg, JSONObject().put("offline", "silent"), now)
-        assertTrue(silent.alerts.none { it.title == "عاد اتصال الرافع" })
+        assertTrue(silent.alerts.none { it.title == "عاد اتصال الإنفرتر" })
         assertEquals(false, silent.flags.get("offline"))
     }
 
@@ -58,19 +58,19 @@ class AlertEvaluatorTest {
         // الخادم متأخر 3 ساعات عن الهاتف
         val s = AlertEvaluator.snapshot(points("2026-10-28 17:54:00"))
         val out = AlertEvaluator.evaluate(s, cfg.copy(tzOffsetMs = 3 * 3_600_000L), JSONObject(), now)
-        assertTrue(out.alerts.none { it.title == "الرافع غير متصل" })
+        assertTrue(out.alerts.none { it.title == "الإنفرتر غير متصل" })
     }
 
     @Test
     fun lowBatteryGridLossAndOverloadAreEdgeTriggered() {
         val s = AlertEvaluator.snapshot(points("2026-10-28 20:54:00", soc = "25", grid = "0", load = "95"))
         val out = AlertEvaluator.evaluate(s, cfg, JSONObject(), now)
-        assertEquals(setOf("البطارية منخفضة", "حمل زائد", "انقطعت الكهرباء الوطنية"), out.alerts.map { it.title }.toSet())
+        assertEquals(setOf("البطارية منخفضة", "حمل زائد", "انقطعت كهرباء الشبكة"), out.alerts.map { it.title }.toSet())
         val again = AlertEvaluator.evaluate(s, cfg, out.flags, now + 60_000)
         assertTrue(again.alerts.isEmpty())
         val restored = AlertEvaluator.snapshot(points("2026-10-28 20:55:00", soc = "60", grid = "230", load = "20"))
         val after = AlertEvaluator.evaluate(restored, cfg, again.flags, now + 120_000)
-        assertEquals(listOf("عادت الكهرباء الوطنية"), after.alerts.map { it.title })
+        assertEquals(listOf("عادت كهرباء الشبكة"), after.alerts.map { it.title })
     }
 
     @Test
@@ -107,10 +107,13 @@ class AlertEvaluatorTest {
     }
 
     @Test
-    fun localizeUsesChosenTerms() {
-        val c = cfg.copy(invLabel = "العاكس", gridLabel = "الكهرباء العمومية")
-        assertEquals("العاكس غير متصل", AlertEvaluator.localize("الرافع غير متصل", c))
-        assertEquals("انقطعت الكهرباء العمومية", AlertEvaluator.localize("انقطعت الكهرباء الوطنية", c))
+    fun notificationsUseFixedTerms() {
+        // المصطلحات ثابتة في النص نفسه: «الإنفرتر» و«كهرباء الشبكة»
+        val s = AlertEvaluator.snapshot(points("2026-10-28 20:54:00", grid = "0"))
+        val out = AlertEvaluator.evaluate(s, cfg, JSONObject(), now)
+        assertTrue(out.alerts.any { it.title == "انقطعت كهرباء الشبكة" })
+        val stale = AlertEvaluator.evaluate(AlertEvaluator.snapshot(points("2026-10-28 19:17:29")), cfg, JSONObject(), now)
+        assertTrue(stale.alerts.all { it.body.contains("الإنفرتر") && !it.body.contains("الرافع") })
     }
 
     @Test
@@ -149,7 +152,7 @@ class AlertEvaluatorTest {
         assertEquals(82.0, s.invTemp!!, 0.0)
         assertNull("الصفر يعني حساساً غير موجود", s.batTemp)
         val out = AlertEvaluator.evaluate(s, cfg, JSONObject(), now)
-        assertEquals(listOf("حرارة الرافع مرتفعة"), out.alerts.map { it.title })
+        assertEquals(listOf("حرارة الإنفرتر مرتفعة"), out.alerts.map { it.title })
         // 78° ما زالت ضمن هامش الرجوع (75 - 5) فلا يتكرر التنبيه
         val warm = AlertEvaluator.snapshot(points("2026-10-28 20:55:00") + Point("Inverter heat sink temperature", "78"))
         val again = AlertEvaluator.evaluate(warm, cfg, out.flags, now)
