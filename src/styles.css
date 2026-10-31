@@ -394,9 +394,6 @@ bdi { unicode-bidi: isolate; }
 .fold > summary svg { width: 20px; height: 20px; color: var(--mute); transition: transform .2s; }
 .fold[open] > summary { margin-bottom: 8px; }
 .fold[open] > summary svg { transform: rotate(-90deg); }
-.chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.chip { padding: 6px 12px; border-radius: 999px; background: var(--card); border: 1px solid var(--line); font-size: calc(12.5px * var(--fs, 1)); color: var(--mute); }
-.chip b { color: var(--txt); }
 .tip-banner { width: 100%; text-align: start; cursor: pointer; font: inherit; }
 button.banner { background-clip: padding-box; }
 
