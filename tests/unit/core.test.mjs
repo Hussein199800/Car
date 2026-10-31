@@ -360,3 +360,44 @@ test('الوحدات بالعربية في المخطط أيضاً', () => {
   assert.equal(fmt.wShort(4230), '4.2 ك.واط');
   assert.equal(fmt.wShort(null), '—');
 });
+
+// ---------- السجل الموحّد ----------
+import { toEvents, migrateLog, addEvents, catOf, LOG_CAP } from '../../src/log.js';
+
+test('ترحيل السجلين القديمين: كل حدث مرة واحدة والتنبيه غير المقروء يبقى كذلك', () => {
+  const t = 1_800_000_000_000;
+  const faults = [
+    { kind: 'grid', title: 'انقطاع الكهرباء الوطنية', body: 'جهد الشبكة 0 فولت', at: t },
+    { kind: 'offline', title: 'انقطع اتصال الرافع', body: 'آخر قراءة', at: t + 60_000 },
+    { kind: 'info', title: 'تغيير إعداد', body: 'أولوية مصدر الخرج ← SBU', at: t + 120_000 },
+    { kind: 'comm', title: 'تعذّر الاتصال بالخادم', body: 'تعذّر الاتصال', at: t + 180_000 },
+  ];
+  const alerts = [
+    { kind: 'warn', title: 'انقطعت الكهرباء الوطنية', body: 'المنظومة تعمل على البطارية', at: t + 3, read: false },
+    { kind: 'bad', title: 'الرافع غير متصل', body: 'لم تصل قراءات جديدة', at: t + 60_002, read: true },
+    { kind: 'bad', title: 'البطارية منخفضة', body: 'نسبة الشحن 25%', at: t + 4, read: false },
+  ];
+  const log = migrateLog(alerts, faults);
+  assert.equal(log.length, 5, 'التنبيهان التوأمان لا يتكرران، وتنبيه البطارية يبقى مستقلاً');
+  const grid = log.find((e) => e.cat === 'grid');
+  assert.equal(grid.title, 'انقطعت الكهرباء الوطنية', 'نص الإشعار أوضح من نص الحدث');
+  assert.equal(grid.read, false);
+  assert.equal(log.find((e) => e.cat === 'conn' && /غير متصل/.test(e.title)).read, true);
+  assert.deepEqual(log.map((e) => e.cat).sort(), ['bat', 'conn', 'conn', 'grid', 'set']);
+  assert.ok(log.every((e, i) => i === 0 || log[i - 1].at >= e.at), 'الأحدث أولاً');
+});
+
+test('أحداث الخلفية من Kotlin تُوحَّد عند الاستلام وتبقى غير مقروءة', () => {
+  const at = 1_800_000_500_000;
+  const fresh = toEvents(
+    [{ title: 'انقطعت كهرباء الشبكة', body: 'المنظومة تعمل على البطارية', kind: 'warn', at }, { title: 'البطارية ممتلئة', body: '100%', kind: 'ok', at }],
+    [{ title: 'انقطاع كهرباء الشبكة', body: 'جهد الشبكة 0 فولت', kind: 'grid', at }, { title: 'حمل زائد', body: '85%', kind: 'warn', at }],
+  );
+  assert.equal(fresh.length, 3);
+  assert.equal(fresh.filter((e) => e.read === false).length, 2, 'التنبيهان غير مقروءين، والحدث بلا إشعار مقروء');
+  assert.equal(catOf({ title: 'حمل زائد', kind: 'warn' }), 'fault');
+  assert.equal(catOf({ title: 'عادت كهرباء الشبكة', kind: 'ok' }), 'grid');
+  const many = Array.from({ length: LOG_CAP + 50 }, (_, i) => ({ cat: 'conn', level: 'info', title: 'x', body: '', at: i, read: true }));
+  assert.equal(addEvents(many, fresh).length, LOG_CAP);
+  assert.equal(addEvents(many, fresh)[0].at, at, 'الحدث الجديد في أول السجل');
+});

@@ -203,8 +203,8 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.waitForSelector('.flow-card');
       await page.waitForTimeout(11500);
       check('اكتشاف فرق التوقيت تلقائياً', (await text(page, '.dev-sub')).includes('آخر قراءة') && !(await page.$('.banner.off')));
-      const alerts = await page.evaluate(() => JSON.parse(localStorage.getItem('taqati.alerts') || '[]').length);
-      check('لا تنبيه انقطاع كاذب بسبب التوقيت', alerts === 0);
+      const offline = await page.evaluate(() => JSON.parse(localStorage.getItem('taqati.log') || '[]').filter((e) => e.cat === 'conn').length);
+      check('لا تنبيه انقطاع كاذب بسبب التوقيت', offline === 0);
       await page.context().close();
     }
 
@@ -384,6 +384,30 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await plain.evaluate(() => window.__nav('alerts', 'rules'));
       check('شروط التنبيه توضّح أن الجهاز لا يرسل الحرارة', (await text(plain, '#view')).includes('لا يرسل قراءات الحرارة'));
       await plain.context().close();
+    }
+
+    // 15) السجل الموحّد: ترحيل سجلّي الإصدارات السابقة بلا تكرار
+    {
+      const t = Date.now() - 3600e3;
+      const page = await newPage(browser, {
+        api: lastData(2),
+        storage: {
+          faults: [{ kind: 'grid', title: 'انقطاع الكهرباء الوطنية', body: 'جهد الشبكة 0 فولت', at: t }, { kind: 'info', title: 'تغيير إعداد', body: 'أولوية مصدر الخرج ← SBU', at: t - 60e3 }],
+          alerts: [{ kind: 'warn', title: 'انقطعت الكهرباء الوطنية', body: 'المنظومة تعمل على البطارية', at: t + 2, read: false }, { kind: 'bad', title: 'البطارية منخفضة', body: 'نسبة الشحن 25%', at: t - 120e3, read: true }],
+        },
+      });
+      await page.waitForSelector('.flow-card');
+      check('شارة التنبيهات تعدّ غير المقروء بعد الترحيل', (await text(page, '#alertBadge')) === '1');
+      await page.click('[data-tab=alerts]');
+      check('السجل الموحّد: كل حدث مرة واحدة', (await page.$$('.alerts .alert')).length === 3 && (await page.$$('.alert.new')).length === 1);
+      const chips = await page.$$eval('.log-filter button', (e) => e.map((x) => x.textContent.replace(/\s+/g, ' ').trim()));
+      check('فلاتر بعدّادات للفئات الموجودة فقط', chips.join('|') === 'الكل 3|الكهرباء 1|البطارية 1|الإعدادات 1', chips.join('|'));
+      await page.click('.log-filter [data-filter=grid]');
+      check('الفلتر يعرض فئته فقط', (await page.$$('.alerts .alert')).length === 1 && (await text(page, '.alerts')).includes('انقطعت'));
+      const stored = await page.evaluate(() => ({ alerts: localStorage.getItem('taqati.alerts'), faults: localStorage.getItem('taqati.faults') }));
+      check('المفاتيح القديمة تُحذف بعد الترحيل', stored.alerts === null && stored.faults === null);
+      check('بلا أخطاء JavaScript (السجل)', page.errors.length === 0, page.errors.join(' | '));
+      await page.context().close();
     }
 
     // 14) تبديل الجهاز أثناء جلب قراءته: لا تظهر قراءة الجهاز السابق باسم الجهاز الجديد

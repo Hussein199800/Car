@@ -18,6 +18,7 @@ import { icons } from './icons.js';
 import { isNative, secure, migrateSession, monitor, deviceTools, APPS, updater } from './native.js';
 import { fetchLatest, isNewer } from './update.js';
 import { analyze } from './advisor.js';
+import { CATS, catOf, levelOf, toEvents, migrateLog, addEvents } from './log.js';
 import { settingInfo, optionAr, hintRange } from './settings-info.js';
 import { viewCalc, bindCalc, defaultsCalc } from './calc.js';
 import { TIP_SECTIONS, smartTips, tipOfDay } from './tips.js';
@@ -46,14 +47,22 @@ const DEFAULT_PREFS = {
   fontScale: 1,
 };
 
+// سجل الأحداث الموحّد؛ أول تشغيل بعد التحديث يدمج سجلّي «التنبيهات» و«الأعطال» القديمين مرة واحدة
+function loadLog() {
+  const saved = store.get('log', null);
+  if (Array.isArray(saved)) return saved;
+  const log = migrateLog(store.get('alerts', []), store.get('faults', []));
+  if (store.set('log', log)) { store.del('alerts'); store.del('faults'); }
+  return log;
+}
+
 const state = {
   session: null, // تُحمّل من التخزين المشفّر في boot()
   demo: store.get('demo', false),
   devices: store.get('devices', []),
   devSn: store.get('devSn', null),
   prefs: { ...DEFAULT_PREFS, ...store.get('prefs', {}) },
-  alerts: store.get('alerts', []),
-  faults: store.get('faults', []),
+  log: loadLog(),
   flags: store.get('flags', {}),
   tab: 'home',
   page: null,
@@ -336,7 +345,7 @@ function renderHeader() {
   if (dp) dp.onclick = pickDevice;
   const rb = $('#refreshBtn');
   if (rb) rb.onclick = () => refresh(true);
-  const unread = state.alerts.filter((a) => !a.read).length;
+  const unread = state.log.filter((e) => e.read === false).length;
   const badge = $('#alertBadge');
   if (badge) { badge.textContent = unread > 99 ? '99+' : unread || ''; badge.style.display = unread ? '' : 'none'; }
 }
@@ -488,7 +497,7 @@ async function refresh(manual = false) {
     if (sn() !== d.sn) { state.switched = true; return; }
     state.fails++;
     state.netError = err.message;
-    if (state.fails === 3) addFault('comm', 'تعذّر الاتصال بالخادم', err.message);
+    if (state.fails === 3) logEvent('conn', 'warn', 'تعذّر الاتصال بالخادم', err.message);
     if (manual) toast(err.message, 'bad');
   } finally {
     state.loading = false;
@@ -533,14 +542,15 @@ async function takeOverFromBackground() {
   if (!isNative || state.demo) return;
   try {
     const r = await monitor.takeOver();
-    (r.alerts || []).forEach((a) => state.alerts.unshift({ ...a, read: false }));
     // رسائل الخادم في الخلفية تصل برموزها الإنجليزية (ERR_...)، فنترجمها بنفس جدول الواجهة
-    (r.faults || []).forEach((f) => state.faults.unshift(f.kind === 'comm' ? { ...f, body: errorAr(f.body) } : f));
-    state.alerts = state.alerts.slice(0, 200);
-    state.faults = state.faults.slice(0, 300);
+    const faults = (r.faults || []).map((f) => (f.kind === 'comm' ? { ...f, body: errorAr(f.body) } : f));
+    // Kotlin يرسل التنبيه والحدث منفصلين، فيوحّدهما toEvents حتى لا يظهر الحدث مرتين
+    const fresh = toEvents(r.alerts || [], faults);
+    if (fresh.length) {
+      state.log = addEvents(state.log, fresh);
+      store.set('log', state.log);
+    }
     if (r.flags && Object.keys(r.flags).length) state.flags = { ...state.flags, ...r.flags };
-    store.set('alerts', state.alerts);
-    store.set('faults', state.faults);
     store.set('flags', state.flags);
     // قد يكون الفحص في الخلفية جدّد رمز الدخول
     const s = await secure.get('session');
@@ -556,17 +566,12 @@ async function notify(title, body) {
   } catch { /* تجاهل */ }
 }
 
-function raise(title, body, kind = 'warn') {
-  state.alerts.unshift({ title, body, kind, at: Date.now(), read: false });
-  state.alerts = state.alerts.slice(0, 200);
-  store.set('alerts', state.alerts);
-  notify(title, body);
-}
-
-function addFault(kind, title, body) {
-  state.faults.unshift({ kind, title, body, at: Date.now() });
-  state.faults = state.faults.slice(0, 300);
-  store.set('faults', state.faults);
+// كل حدث يُسجَّل مرة واحدة. alert: يرسل إشعاراً ويبقى «غير مقروء» حتى يُفتح تبويب التنبيهات،
+// وإن أوقف المستخدم تنبيه هذا النوع يُسجَّل الحدث مقروءاً بلا إشعار
+function logEvent(cat, level, title, body, alert = false) {
+  state.log = addEvents(state.log, [{ cat, level, title, body, at: Date.now(), read: !alert }]);
+  store.set('log', state.log);
+  if (alert) notify(title, body);
 }
 
 // يُطلق التنبيه مرة واحدة عند تجاوز الحد، ويُعاد تسليحه عند العودة للوضع الطبيعي
@@ -587,13 +592,11 @@ function checkAlerts(m) {
     if (first) state.flags.offline = 'silent';
     else {
       state.flags.offline = true;
-      addFault('offline', 'انقطع اتصال الإنفرتر', `آخر قراءة ${fmt.dateTime(m.ts)}`);
-      if (p.alertOffline) raise('الإنفرتر غير متصل', `لم تصل قراءات جديدة منذ ${fmt.ago(m.age).replace('قبل ', '')}. قد يكون الإنفرتر مطفأً أو مفصولاً.`, 'bad');
+      logEvent('conn', 'bad', 'الإنفرتر غير متصل', `لم تصل قراءات جديدة منذ ${fmt.ago(m.age).replace('قبل ', '')}. قد يكون الإنفرتر مطفأً أو مفصولاً.`, p.alertOffline);
     }
   } else if (!m.stale && state.flags.offline) {
     if (state.flags.offline === true) {
-      addFault('online', 'عاد اتصال الإنفرتر', `قراءة جديدة ${fmt.dateTime(m.ts)}`);
-      if (p.alertOffline) raise('عاد اتصال الإنفرتر', 'وصلت قراءات جديدة من الجهاز', 'ok');
+      logEvent('conn', 'ok', 'عاد اتصال الإنفرتر', `وصلت قراءة جديدة ${fmt.dateTime(m.ts)}`, p.alertOffline);
     }
     state.flags.offline = false;
   }
@@ -603,12 +606,11 @@ function checkAlerts(m) {
   const fault = m.fault || (/fault/i.test(m.mode || '') ? trValue(m.mode) : null);
   if (fault !== (state.flags.faultCode || null)) {
     if (fault) {
-      addFault('fault', 'عطل في الإنفرتر', `الرمز/الحالة: ${fault}`);
-      raise('عطل في الإنفرتر', `أبلغ الجهاز عن عطل: ${fault}`, 'bad');
-    } else if (state.flags.faultCode) addFault('online', 'زال العطل', `العطل السابق: ${state.flags.faultCode}`);
+      logEvent('fault', 'bad', 'عطل في الإنفرتر', `أبلغ الجهاز عن عطل: ${fault}`, true);
+    } else if (state.flags.faultCode) logEvent('fault', 'ok', 'زال العطل', `العطل السابق: ${state.flags.faultCode}`);
     state.flags.faultCode = fault;
   }
-  if (m.warning && m.warning !== state.flags.warnCode) addFault('warn', 'تحذير من الإنفرتر', `الرمز: ${m.warning}`);
+  if (m.warning && m.warning !== state.flags.warnCode) logEvent('fault', 'warn', 'تحذير من الإنفرتر', `الرمز: ${m.warning}`);
   state.flags.warnCode = m.warning;
 
   // هامش رجوع (hysteresis): التنبيه لا يُعاد تسليحه إلا بعد ابتعاد واضح عن الحد،
@@ -616,33 +618,28 @@ function checkAlerts(m) {
   const hold = (key, on, stillOn) => (state.flags[key] === true ? stillOn : on);
   if (m.soc !== null) {
     edge('lowSoc', hold('lowSoc', m.soc <= p.lowSoc && (m.batW ?? 0) <= 0, m.soc < p.lowSoc + 5),
-      () => raise('البطارية منخفضة', `نسبة الشحن ${m.soc}% — يُنصح بتقليل الأحمال.${eta(m).known ? ' ' + eta(m).text : ''}`, 'bad'));
-    if (p.alertFull) edge('full', hold('full', m.soc >= 100, m.soc >= 95), () => raise('البطارية ممتلئة', 'وصل الشحن إلى 100% — وقت مناسب لتشغيل الأحمال الكبيرة', 'ok'));
+      () => logEvent('bat', 'bad', 'البطارية منخفضة', `نسبة الشحن ${m.soc}% — يُنصح بتقليل الأحمال.${eta(m).known ? ' ' + eta(m).text : ''}`, true));
+    if (p.alertFull) edge('full', hold('full', m.soc >= 100, m.soc >= 95), () => logEvent('bat', 'ok', 'البطارية ممتلئة', 'وصل الشحن إلى 100% — وقت مناسب لتشغيل الأحمال الكبيرة', true));
   }
   if (m.loadPct !== null) {
     edge('overload', hold('overload', m.loadPct >= p.overloadPct, m.loadPct >= p.overloadPct - 10), () => {
-      raise('حمل زائد', `الحمل وصل إلى ${m.loadPct}% (${fmt.w(m.outW)})`, 'bad');
-      addFault('warn', 'حمل زائد', `${m.loadPct}% (${fmt.w(m.outW)})`);
+      logEvent('fault', 'bad', 'حمل زائد', `الحمل وصل إلى ${m.loadPct}% (${fmt.w(m.outW)})`, true);
     });
   }
   // الحرارة: فقط إن كان الجهاز يرسلها، مع هامش رجوع 5 درجات
   if (p.alertTemp) {
     if (m.batTemp !== null) edge('hotBat', hold('hotBat', m.batTemp >= p.tempBat, m.batTemp > p.tempBat - 5), () => {
-      raise('حرارة البطارية مرتفعة', `${numAr(m.batTemp)}° — الحد ${p.tempBat}°. خفّف الحمل وتأكد من تهوية مكان البطارية.`, 'bad');
-      addFault('warn', 'حرارة البطارية مرتفعة', `${numAr(m.batTemp)}°`);
+      logEvent('fault', 'bad', 'حرارة البطارية مرتفعة', `${numAr(m.batTemp)}° — الحد ${p.tempBat}°. خفّف الحمل وتأكد من تهوية مكان البطارية.`, true);
     });
     if (m.invTemp !== null) edge('hotInv', hold('hotInv', m.invTemp >= p.tempInv, m.invTemp > p.tempInv - 5), () => {
-      raise('حرارة الإنفرتر مرتفعة', `${numAr(m.invTemp)}° — الحد ${p.tempInv}°. خفّف الحمل وتأكد أن فتحات التهوية والمراوح تعمل.`, 'bad');
-      addFault('warn', 'حرارة الإنفرتر مرتفعة', `${numAr(m.invTemp)}°`);
+      logEvent('fault', 'bad', 'حرارة الإنفرتر مرتفعة', `${numAr(m.invTemp)}° — الحد ${p.tempInv}°. خفّف الحمل وتأكد أن فتحات التهوية والمراوح تعمل.`, true);
     });
   }
   if (p.alertGrid && m.gridV !== null) {
     edge('gridOff', !m.gridOn, () => {
-      raise('انقطعت كهرباء الشبكة', `المنظومة تعمل على البطارية${m.soc !== null ? ` (${fmt.pct(m.soc)})` : ''}`, 'warn');
-      addFault('grid', 'انقطاع كهرباء الشبكة', `جهد الشبكة ${numAr(m.gridV)} فولت`);
+      logEvent('grid', 'warn', 'انقطعت كهرباء الشبكة', `المنظومة تعمل على البطارية${m.soc !== null ? ` (${fmt.pct(m.soc)})` : ''}`, true);
     }, () => {
-      raise('عادت كهرباء الشبكة', `الجهد ${numAr(m.gridV)} فولت`, 'ok');
-      addFault('online', 'عودة كهرباء الشبكة', `جهد الشبكة ${numAr(m.gridV)} فولت`);
+      logEvent('grid', 'ok', 'عادت كهرباء الشبكة', `الجهد ${numAr(m.gridV)} فولت`, true);
     });
   }
   store.set('flags', state.flags);
@@ -1339,48 +1336,48 @@ async function exportSummaries(name, sums) {
   ));
 }
 
-// ================= تبويب التنبيهات: سجل التنبيهات وسجل الأعطال في صفحة واحدة =================
+// ================= تبويب التنبيهات: سجل واحد بفلاتر =================
 function viewAlerts() {
   if (state.page === 'rules') return pageRules();
-  const seg = state.alertSeg || 'alerts';
-  const unread = state.alerts.filter((a) => !a.read).length;
-  const list = seg === 'alerts' ? state.alerts : state.faults;
-  const counts = state.faults.reduce((o, f) => ((o[f.kind] = (o[f.kind] || 0) + 1), o), {});
+  const counts = state.log.reduce((o, e) => { const c = catOf(e); o[c] = (o[c] || 0) + 1; return o; }, {});
+  if (state.logFilter && !counts[state.logFilter]) state.logFilter = null;
+  const filter = state.logFilter || 'all';
+  const list = filter === 'all' ? state.log : state.log.filter((e) => catOf(e) === filter);
+  const chips = [['all', 'الكل', state.log.length], ...Object.entries(CATS).filter(([k]) => counts[k]).map(([k, label]) => [k, label, counts[k]])];
   const html = `
   ${listCards([{ page: 'rules', title: 'شروط التنبيه', sub: `البطارية ${state.prefs.lowSoc}% · الحمل ${state.prefs.overloadPct}% · ${state.prefs.bgMonitor && Capacitor.isNativePlatform() ? 'المراقبة في الخلفية مفعّلة' : 'المراقبة في الخلفية متوقفة'}`, icon: icons.sliders, color: 'c-violet' }])}
-  <div class="seg"><button data-seg="alerts" class="${seg === 'alerts' ? 'on' : ''}">التنبيهات${unread ? ` (${unread})` : ''}</button><button data-seg="faults" class="${seg === 'faults' ? 'on' : ''}">الأعطال والانقطاعات</button></div>
-  ${seg === 'faults' && state.faults.length ? `<div class="chips">
-    <span class="chip">أعطال الإنفرتر: <b>${counts.fault || 0}</b></span><span class="chip">انقطاع الإنفرتر: <b>${counts.offline || 0}</b></span>
-    <span class="chip">انقطاع الكهرباء: <b>${counts.grid || 0}</b></span><span class="chip">تعذّر الاتصال: <b>${counts.comm || 0}</b></span></div>` : ''}
-  ${list.length ? '<div class="row-end"><button class="link" id="clearList">مسح السجل</button></div>' : ''}
-  ${eventList(list, seg === 'alerts'
-    ? 'لا توجد تنبيهات بعد. ستظهر هنا عند انقطاع الكهرباء أو انخفاض البطارية أو انقطاع الإنفرتر.'
-    : 'لم يُسجّل أي عطل أو انقطاع حتى الآن.')}`;
-  if (seg === 'alerts' && unread) { state.alerts.forEach((a) => { a.read = true; }); store.set('alerts', state.alerts); }
+  ${state.log.length ? `<div class="chips-sel log-filter">${chips.map(([k, label, n]) => `<button data-filter="${k}" class="${filter === k ? 'on' : ''}">${label} <b>${n}</b></button>`).join('')}</div>
+  <div class="row-end"><button class="link" id="clearList">مسح السجل</button></div>` : ''}
+  ${eventList(list, 'لا توجد أحداث بعد. ستظهر هنا عند انقطاع الكهرباء أو انخفاض البطارية أو انقطاع الإنفرتر أو أي عطل.')}`;
+  // تُعلَّم مقروءة بعد بناء الصفحة حتى يظهر الجديد مميّزاً هذه المرة
+  if (state.log.some((e) => e.read === false)) { state.log.forEach((e) => { e.read = true; }); store.set('log', state.log); }
   return html;
 }
 AFTER.alerts = () => {
-  document.querySelectorAll('[data-seg]').forEach((b) => { b.onclick = () => { state.alertSeg = b.dataset.seg; render(); }; });
+  document.querySelectorAll('[data-filter]').forEach((b) => { b.onclick = () => { state.logFilter = b.dataset.filter === 'all' ? null : b.dataset.filter; render(); }; });
   const c = $('#clearList');
   if (c) c.onclick = async () => {
-    const faults = (state.alertSeg || 'alerts') === 'faults';
-    if (!(await confirmDialog('مسح السجل', faults ? 'هل تريد حذف سجل الأعطال والانقطاعات؟' : 'هل تريد حذف كل التنبيهات؟'))) return;
-    if (faults) { state.faults = []; store.set('faults', []); } else { state.alerts = []; store.set('alerts', []); }
+    if (!(await confirmDialog('مسح السجل', 'هل تريد حذف كل الأحداث من السجل؟'))) return;
+    state.log = [];
+    store.set('log', []);
     render();
   };
   setTimeout(renderHeader, 0);
 };
 
-const KIND_IC = { bad: icons.warn, warn: icons.warn, ok: icons.check, info: icons.info, fault: icons.warn, offline: icons.offline, online: icons.check, grid: icons.grid, comm: icons.offline };
-const KIND_CLS = { fault: 'bad', offline: 'bad', comm: 'warn', grid: 'warn', online: 'ok', warn: 'warn' };
+const CAT_IC = { grid: icons.grid, conn: icons.offline, bat: icons.battery, fault: icons.warn, set: icons.wrench };
 
 function eventList(list, empty) {
   if (!list.length) return `<div class="empty">${esc(empty)}</div>`;
-  return `<ul class="alerts">${list.map((a) => `
-    <li class="alert ${KIND_CLS[a.kind] || a.kind} ${a.read === false ? 'new' : ''}">
-      <div class="a-ic">${KIND_IC[a.kind] || icons.info}</div>
-      <div><b>${esc(a.title)}</b><p>${esc(a.body)}</p><time>${esc(fmt.dateTime(a.at))}</time></div>
-    </li>`).join('')}</ul>`;
+  return `<ul class="alerts">${list.map((e) => {
+    const level = levelOf(e);
+    const ic = level === 'ok' && catOf(e) !== 'grid' ? icons.check : CAT_IC[catOf(e)] || icons.info;
+    return `
+    <li class="alert ${level} ${e.read === false ? 'new' : ''}">
+      <div class="a-ic">${ic}</div>
+      <div><b>${esc(e.title)}</b><p>${esc(e.body)}</p><time>${esc(fmt.dateTime(e.at))}</time></div>
+    </li>`;
+  }).join('')}</ul>`;
 }
 
 function toggle(key, label, sub = '') {
@@ -1617,7 +1614,7 @@ async function sendSetting(li, f, val, shown) {
   try {
     await api.setCtrl(device(), f.id, val);
     toast('تم إرسال الإعداد إلى الإنفرتر', 'ok');
-    addFault('info', 'تغيير إعداد', `${trS(f.name)} ← ${shown}`);
+    logEvent('set', 'info', 'تغيير إعداد', `${trS(f.name)} ← ${shown}`);
     li.classList.remove('open');
     setTimeout(() => openField(li), 1500);
   } catch (e) {
