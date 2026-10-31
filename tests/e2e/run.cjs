@@ -172,7 +172,10 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.click('#backBtn'); await page.click('.n-solar'); await page.waitForTimeout(250);
       check('الضغط على الألواح يفتح تفاصيلها', (await text(page, '.page-title')) === 'الألواح الشمسية');
       await page.click('#backBtn');
-      check('ملاحظة عاجلة من النصائح لا تظهر بلا داعٍ', !(await page.$('.tip-banner')));
+      // بيانات الاختبار إنتاجها صفر: بين 10 و2 ظهراً بتوقيت الجهاز يكون تنبيه «لا إنتاج وقت الظهر» صحيحاً
+      const hr = new Date().getHours();
+      const tipB = await page.$('.tip-banner');
+      check('ملاحظة عاجلة من النصائح لا تظهر بلا داعٍ', !tipB || (hr >= 10 && hr <= 14 && (await text(page, '.tip-banner')).includes('وقت الظهر')), tipB ? await text(page, '.tip-banner') : '');
       check('أربعة تبويبات فقط', (await page.$$('.tabbar button')).length === 4);
       const cards = await page.$$eval('.gcard', (e) => e.map((x) => x.dataset.page));
       check('بطاقات الرئيسية: الحمل والألواح والكهرباء والإنفرتر (البطارية في المخطط والحلقة)', cards.join() === 'load,solar,grid,device', cards.join());
@@ -351,12 +354,21 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
     {
       const page = await newPage(browser, { loggedIn: false, viewport: { width: 320, height: 640 } });
       await page.click('#demoBtn'); await page.waitForSelector('.flow-card');
-      await page.evaluate(() => window.__nav('reports', 'advisor'));
-      await page.waitForSelector('.adv-ind', { timeout: 15000 }).catch(() => null);
+      // مؤشر الاستقلالية في رأس تبويب التقارير، والضغط عليه يفتح الملاحظات
+      await page.click('[data-tab=reports]');
+      await page.waitForSelector('#view .adv-big', { timeout: 15000 }).catch(() => null);
+      const first = await page.$eval('#view > div > :first-child', (e) => e.className).catch(() => '');
+      check('مؤشر الاستقلالية أول ما في تبويب التقارير', first.includes('adv-ind') && /\d+%/.test(await text(page, '.adv-big b')), first);
+      await page.click('#view button.adv-ind');
+      await page.waitForSelector('.adv-tip', { timeout: 15000 }).catch(() => null);
       const adv = await text(page, '#view');
-      check('مستشار الطاقة: مؤشر الاستقلالية واستخدام البطارية والتوصيات', /\d+%/.test(await text(page, '.adv-big b')) && adv.includes('استخدام البطارية') && (await page.$$('.adv-tip')).length > 0, adv.slice(0, 200));
+      check('مستشار الطاقة: الضغط على المؤشر يفتح استخدام البطارية والتوصيات', (await text(page, '.page-title')) === 'ملاحظات على منظومتك' && adv.includes('استخدام البطارية') && (await page.$$('.adv-tip')).length > 0, adv.slice(0, 200));
+      // شريط التبويبات بلا خانة فارغة: الهامشان على الطرفين متساويان
+      const gaps = await page.evaluate(() => { const bar = document.querySelector('.tabbar').getBoundingClientRect(); const bs = [...document.querySelectorAll('.tabbar button')].map((b) => b.getBoundingClientRect()); return [Math.min(...bs.map((r) => r.left)) - bar.left, bar.right - Math.max(...bs.map((r) => r.right)), bs.length]; });
+      check('شريط التبويبات متوازن بلا مكان فارغ', Math.abs(gaps[0] - gaps[1]) < 2 && gaps[2] === 4, gaps.join(','));
       check('المستشار لا يخترع حالة صحة البطارية', adv.includes('لا يرسل حالة صحة البطارية'));
       check('ملاحظات الآن وآخر 7 أيام في صفحة واحدة', adv.includes('الآن') && adv.includes('آخر 7 أيام') && (await page.$$('#view .alerts .alert')).length > 0);
+      check('المؤشر لم يعد مكرراً داخل صفحة الملاحظات', !(await page.$('#view .adv-ind')));
       await page.evaluate(() => window.__nav('more', 'tips'));
       await page.click('[data-page="reports:advisor"]'); await page.waitForTimeout(300);
       check('بطاقة ملاحظات الجهاز في النصائح تفتح صفحة التقارير', (await text(page, '.page-title')) === 'ملاحظات على منظومتك' && !!(await page.$('.tabbar [data-tab=reports].on')));
