@@ -241,42 +241,9 @@ test('طلبات متزامنة بعد انتهاء الرمز تسجّل الد
   assert.equal(logins, 2, 'بعد انتهاء المحاولة يمكن تسجيل الدخول من جديد');
 });
 
-// ---------- الإصدار 3.4: النسخة الاحتياطية والتحديثات ----------
-import { encryptBackup, decryptBackup, makePayload, cleanPrefs, cleanCalc, BackupError } from '../../src/backup.js';
+// ---------- التحديثات من داخل التطبيق ----------
 import { isNewer, parseVer, fetchLatest } from '../../src/update.js';
 import { readFileSync } from 'node:fs';
-
-const SESSION = { usr: 'tester', pwdHash: 'e5e9fa1ba31ecd1ae84f75caaa474f3a663f05f4', profile: 'shine', token: 'T', secret: 'S' };
-
-test('النسخة الاحتياطية تُشفَّر وتُستعاد بالرمز الصحيح فقط', async () => {
-  const text = await encryptBackup(makePayload({ session: SESSION, prefs: { batteryAh: 200 }, calc: { list: [] }, devSn: 'SN1' }), 'abc123');
-  assert.ok(!text.includes('tester') && !text.includes(SESSION.pwdHash), 'لا يظهر الحساب أو البصمة في الملف');
-  assert.ok(!text.includes('"T"') && !JSON.parse(text).data.includes('secret'));
-  const b = await decryptBackup(text, 'abc123');
-  assert.equal(b.account.usr, 'tester');
-  assert.equal(b.account.pwdHash, SESSION.pwdHash);
-  assert.equal(b.account.profile, 'shine');
-  assert.equal(b.account.token, undefined, 'رمز الجلسة المؤقت لا يُحفظ');
-  assert.equal(b.prefs.batteryAh, 200);
-  await assert.rejects(decryptBackup(text, 'abc124'), (e) => e instanceof BackupError && /الرمز غير صحيح/.test(e.message));
-  const f = JSON.parse(text); f.data = f.data.slice(0, -4) + (f.data.endsWith('AAAA') ? 'BBBB' : 'AAAA');
-  await assert.rejects(decryptBackup(JSON.stringify(f), 'abc123'), BackupError, 'أي تعديل في الملف يُرفض');
-  await assert.rejects(decryptBackup('{"x":1}', 'abc123'), /ليس نسخة احتياطية/);
-  await assert.rejects(encryptBackup({}, '123'), /6 أحرف/);
-});
-
-test('الاستعادة لا تقبل إلا إعدادات معروفة ضمن حدودها', () => {
-  const defs = { pollSec: 30, batteryAh: null, theme: 'auto', notify: true };
-  const p = cleanPrefs(defs, { pollSec: 0, batteryAh: 99999, theme: 'dark', notify: 'yes', evil: '<script>' });
-  assert.deepEqual(p, { pollSec: 10, batteryAh: 5000, theme: 'dark' });
-  const c = cleanCalc({ mode: 'ac', eff: 90, list: [] }, { mode: 'hack', eff: 500, list: [{ e: '<img src=x onerror=alert(1)>', name: 'x'.repeat(200), w: -5, qty: 3.6, hours: 99 }, null, 'bad'] });
-  assert.equal(c.mode, undefined);
-  assert.equal(c.eff, 99);
-  assert.equal(c.list.length, 1);
-  assert.equal(c.list[0].e.length <= 8, true);
-  assert.equal(c.list[0].name.length, 60);
-  assert.deepEqual([c.list[0].w, c.list[0].qty, c.list[0].hours], [1, 4, 24]);
-});
 
 test('مقارنة الإصدارات', () => {
   assert.deepEqual(parseVer('v3.4.0'), [3, 4, 0]);
@@ -310,7 +277,7 @@ test('رقم الإصدار موحّد في package.json والتطبيق وأن
 });
 
 // ---------- الإصدار 3.5: مستشار الطاقة والاستقلالية والحرارة ----------
-import { analyze, answers, openingNotice, productionDrop } from '../../src/advisor.js';
+import { analyze, productionDrop } from '../../src/advisor.js';
 
 const sampleDay = (date, { pv = 0, load = 500, chg = 0, mode = 'Battery Mode', socs = null } = {}) => {
   const t0 = new Date(date + 'T00:00:00').getTime();
@@ -369,10 +336,6 @@ test('مستشار الطاقة: توصيات من بيانات فعلية فق�
   assert.ok(titles.includes('انخفاض في الإنتاج'), 'إنتاج آخر يوم أقل بكثير من المعتاد');
   assert.ok(!titles.includes('شحن من كهرباء الشبكة'), 'لا شحن من الكهرباء في وضع البطارية');
   assert.equal(r.battery.soh, null, 'لا نخترع حالة صحة غير مرسلة');
-  const qa = answers(r, null, { todayKey: '2026-10-27', sums });
-  assert.equal(qa.length, 5);
-  assert.match(qa.find((x) => x.q.includes('الحرارة')).a, /لا يرسل/);
-  assert.match(qa.find((x) => x.q.includes('البطارية')).a, /لا يرسل حالة صحة/);
 });
 
 test('انخفاض الإنتاج بسبب امتلاء البطارية يُشرح', () => {
@@ -383,20 +346,6 @@ test('انخفاض الإنتاج بسبب امتلاء البطارية يُش�
   assert.equal(productionDrop(days.slice(0, 3)), null, 'تحتاج 4 أيام على الأقل');
 });
 
-test('رسالة الحالة عند الفتح: سطر واحد حسب أهم ما يحدث', () => {
-  const base = { stale: false, fault: null, soc: 60, gridOn: true, mode: 'Battery Mode', outW: 400, loadPct: 6 };
-  assert.match(openingNotice({ ...base, pvW: 1500, batW: 900 }).text, /الألواح تغذّي البيت وتشحن البطارية/);
-  assert.match(openingNotice({ ...base, pvW: 900, batW: 800, outW: 0 }).text, /^الألواح تشحن البطارية/);
-  const dis = openingNotice({ ...base, pvW: 0, batW: -450 }).text;
-  assert.match(dis.replace(/[\u2066-\u2069]/g, ''), /البيت يعمل على البطارية \(60%\)/);
-  assert.ok(dis.includes('\u206660%\u2069'), 'النسبة معزولة اتجاهياً حتى لا تظهر (%60)');
-  assert.match(openingNotice({ ...base, mode: 'Line Mode', pvW: 0, batW: 0 }).text, /كهرباء الشبكة تغذّي البيت/);
-  assert.match(openingNotice({ ...base, mode: 'Line Mode', pvW: 700, batW: 600 }).text, /والألواح تشحن البطارية/);
-  assert.equal(openingNotice({ ...base, loadPct: 92, outW: 6000 }).kind, 'bad');
-  assert.equal(openingNotice({ ...base, stale: true }), null, 'لا رسالة على قراءة قديمة');
-});
-
-// ---------- الإصدار 3.6: التدقيق الشامل ----------
 test('التواريخ والأوقات بالأرقام 0-9 دائماً', () => {
   const t = new Date(2026, 9, 30, 13, 5).getTime();
   for (const v of [fmt.time(t), fmt.dateTime(t), fmt.day('2026-10-30', { weekday: 'long', day: 'numeric', month: 'long' })]) {

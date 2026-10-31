@@ -16,9 +16,8 @@ import {
 import { demoPoints, demoHistory } from './demo.js';
 import { icons } from './icons.js';
 import { isNative, secure, migrateSession, monitor, deviceTools, APPS, updater } from './native.js';
-import { encryptBackup, decryptBackup, makePayload, cleanPrefs, cleanCalc, backupName, BackupError, MIN_CODE } from './backup.js';
 import { fetchLatest, isNewer } from './update.js';
-import { analyze, answers, openingNotice } from './advisor.js';
+import { analyze } from './advisor.js';
 import { settingInfo, optionAr, hintRange } from './settings-info.js';
 import { viewCalc, bindCalc, defaultsCalc } from './calc.js';
 import { TIP_SECTIONS, smartTips, tipOfDay } from './tips.js';
@@ -30,7 +29,6 @@ const VERSION = '3.5.1';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
-  pollSec: 30,
   staleMin: 15,
   batteryAh: null,
   cutoffSoc: 20,
@@ -45,7 +43,6 @@ const DEFAULT_PREFS = {
   alertTemp: true,
   tempBat: 50,
   tempInv: 75,
-  openNotice: true,
   fontScale: 1,
 };
 
@@ -179,13 +176,11 @@ function renderLogin(msg = '') {
     <div class="login-links">
       <button class="btn ghost" type="button" data-guide="register">${icons.user} إنشاء حساب جديد</button>
       <button class="btn ghost" type="button" data-guide="wifi">${icons.wifi} إعداد وحدة الواي فاي</button>
-      <button class="btn ghost wide" type="button" id="restoreBtn">${icons.shield} استعادة حسابي من نسخة احتياطية</button>
     </div>
     <p class="foot">تطوير: حسين محمد علي الطويل · لا تنسونا من صالح دعائكم</p>
   </div>`;
 
   document.querySelectorAll('[data-guide]').forEach((b) => { b.onclick = () => renderGuideStandalone(b.dataset.guide); });
-  $('#restoreBtn').onclick = renderRestoreStandalone;
   $('#pwdEye').onclick = () => {
     const i = $('[name=pwd]');
     const show = i.type === 'password';
@@ -285,18 +280,8 @@ function startApp(quiet = false) {
   navigate(state.tab, state.page);
   startPolling();
   if (quiet) return;
-  state.noticePending = true;
   takeOverFromBackground().then(() => { refresh(); syncMonitor(); });
   autoCheckUpdate();
-}
-
-// رسالة صغيرة داخل التطبيق فقط عند فتحه: أهم ما يحدث الآن في سطر واحد
-function showOpeningNotice() {
-  if (!state.noticePending || !state.model) return;
-  state.noticePending = false;
-  if (!state.prefs.openNotice) return;
-  const n = openingNotice(state.model, state.prefs);
-  if (n) setTimeout(() => toast(n.text, 'notice ' + n.kind), 400);
 }
 
 function navigate(tab, page) {
@@ -311,7 +296,7 @@ function navigate(tab, page) {
 function back() {
   // قبل تسجيل الدخول: زر الرجوع في دليل الربط يعيد لشاشة الدخول بدل إغلاق التطبيق
   if (!state.session && !state.demo) {
-    if (state.screen === 'guide' || state.screen === 'restore') renderLogin();
+    if (state.screen === 'guide') renderLogin();
     else CapApp.minimizeApp().catch(() => {});
     return;
   }
@@ -367,8 +352,8 @@ function banner() {
 
 const PAGE_TITLES = {
   load: 'الحمل', battery: 'البطارية', solar: 'الألواح الشمسية', grid: 'كهرباء الشبكة', all: 'كل القراءات',
-  day: 'التقرير اليومي', week: 'التقرير الأسبوعي', month: 'التقرير الشهري', compare: 'مقارنة الأداء', export: 'تصدير البيانات',
-  rules: 'شروط التنبيه', advisor: 'مستشار الطاقة', device: 'الإنفرتر', update: 'التحديثات', backup: 'النسخة الاحتياطية', edit: 'إعدادات الإنفرتر', setup: 'ربط الجهاز والحساب',
+  day: 'التقرير اليومي', week: 'التقرير الأسبوعي', month: 'التقرير الشهري', compare: 'مقارنة الأداء',
+  rules: 'شروط التنبيه', advisor: 'مستشار الطاقة', device: 'الإنفرتر', update: 'التحديثات', edit: 'إعدادات الإنفرتر', setup: 'ربط الجهاز والحساب',
   tips: 'النصائح', smart: 'نصائح لجهازك الآن', ...Object.fromEntries(TIP_SECTIONS.map((t) => [t.id, t.title])),
   custom: 'المظهر والمصطلحات', monitor: 'المراقبة والبطارية', account: 'الحساب', about: 'حول التطبيق',
 };
@@ -466,7 +451,6 @@ async function refresh(manual = false) {
       recordSample(d.sn, state.model);
     }
     checkAlerts(state.model);
-    showOpeningNotice();
     if (manual) toast(state.model.stale ? 'تم التحديث — الإنفرتر ما زال غير متصل' : 'تم التحديث', state.model.stale ? 'bad' : 'ok');
   } catch (err) {
     if (sn() !== d.sn) { state.switched = true; return; }
@@ -488,9 +472,12 @@ async function refresh(manual = false) {
   }
 }
 
+// وحدة الواي فاي ترفع قراءة جديدة كل بضع دقائق، فلا فائدة من سؤال الخادم أكثر من مرة في الدقيقة.
+// في المتصفح فقط يمكن للاختبارات تقصير المدة عبر devPollSec
+const pollMs = () => (isNative ? 60 : Math.max(5, store.get('devPollSec', 60))) * 1000;
 function startPolling() {
   stopPolling();
-  pollTimer = setInterval(() => refresh(), Math.max(10, state.prefs.pollSec) * 1000);
+  pollTimer = setInterval(() => refresh(), pollMs());
 }
 function stopPolling() { if (pollTimer) clearInterval(pollTimer); pollTimer = null; }
 
@@ -924,7 +911,7 @@ function chartOpts(legend, opts) {
 
 // ================= التقارير =================
 function viewReports() {
-  const pages = { day: pageDay, week: () => pageRange('week'), month: () => pageRange('month'), compare: pageCompare, export: pageExport, advisor: pageAdvisor };
+  const pages = { day: pageDay, week: () => pageRange('week'), month: () => pageRange('month'), compare: pageCompare, advisor: pageAdvisor };
   if (state.page && pages[state.page]) return pages[state.page]();
   return `
   <section class="intro"><h2>التقارير والتحليلات</h2><p>إنتاج الألواح واستهلاك المنزل وحالة البطارية عبر الأيام.</p></section>
@@ -934,7 +921,6 @@ function viewReports() {
     { page: 'week', title: 'التقرير الأسبوعي', sub: 'الإنتاج والاستهلاك لكل يوم خلال أسبوع', icon: icons.week, color: 'c-sky' },
     { page: 'month', title: 'التقرير الشهري', sub: 'مجموع الشهر وأفضل يوم ومتوسط الإنتاج', icon: icons.month, color: 'c-green' },
     { page: 'compare', title: 'مقارنة الأداء', sub: 'هذا الأسبوع أو الشهر مقابل السابق', icon: icons.compare, color: 'c-violet' },
-    { page: 'export', title: 'تصدير البيانات', sub: 'ملفات CSV تفتح في Excel ويمكن مشاركتها', icon: icons.download, color: 'c-pink' },
   ])}
   <p class="hint center">تُجلب البيانات من سجل خادم WatchPower، وعند تعذّره تُستخدم القراءات التي حفظها التطبيق على هاتفك.</p>`;
 }
@@ -1227,7 +1213,6 @@ function pageAdvisor() {
   const m = state.model;
   const ctx = { todayKey: today(), prefs: state.prefs, ratedW: m?.ratedW || null, volts: m?.ratedV || nominalV(m), model: m };
   const r = analyze(a.sums, ctx);
-  const qa = answers(r, m, { todayKey: today(), sums: a.sums });
   const b = r.battery;
   const ind = r.independence;
   const lvl = { ok: 'ok', warn: 'warn', bad: 'bad', info: 'info' };
@@ -1264,9 +1249,7 @@ function pageAdvisor() {
   <h3 class="sec-h">توصيات</h3>
   ${r.tips.length ? r.tips.map((t) => `<section class="card adv-tip ${lvl[t.level]}"><b>${esc(t.title)}</b><p>${esc(t.text)}</p></section>`).join('') : '<div class="empty">لا توجد أيام كاملة كافية للتحليل بعد. يحتاج المستشار إلى سجل يوم كامل على الأقل.</div>'}
 
-  <h3 class="sec-h">اسأل عن منظومتك</h3>
-  ${qa.map((x) => `<details class="card fold qa"><summary><h2>${esc(x.q)}</h2>${icons.chevL}</summary><p>${esc(x.a)}</p></details>`).join('')}
-  <p class="hint">كل الأرقام هنا من سجل جهازك الفعلي أو محسوبة منه مباشرة. الأجوبة مبنية على قواعد ثابتة وليست ذكاءً اصطناعياً.</p>
+  <p class="hint">كل الأرقام هنا من سجل جهازك الفعلي أو محسوبة منه مباشرة، والتوصيات مبنية على قواعد ثابتة وليست ذكاءً اصطناعياً.</p>
   <button class="btn ghost wide" id="advReload">${icons.refresh} إعادة التحليل</button>`;
 }
 AFTER.advisor = () => {
@@ -1310,36 +1293,6 @@ AFTER.compare = () => {
     { label: 'الحالية', data: [r.cur.pv, r.cur.load].map((x) => +x.toFixed(2)), color: '#6366f1' },
     { label: 'السابقة', data: [r.prev.pv, r.prev.load].map((x) => +x.toFixed(2)), color: '#94a3b8' },
   ], { y: { beginAtZero: true } });
-};
-
-function pageExport() {
-  return `
-  <section class="intro"><p>تُصدَّر الملفات بصيغة CSV (تفتح في Excel وGoogle Sheets) ويمكنك مشاركتها عبر واتساب أو البريد.</p></section>
-  ${listCards([
-    { page: 'x-today', title: 'قراءات اليوم', sub: 'كل القراءات المسجّلة اليوم', icon: icons.calendar, color: 'c-amber' },
-    { page: 'x-month', title: 'ملخص آخر 30 يوماً', sub: 'الإنتاج والاستهلاك والبطارية لكل يوم', icon: icons.month, color: 'c-green' },
-    { page: 'x-alerts', title: 'سجل التنبيهات', sub: countAr(state.alerts.length, ['تنبيه واحد', 'تنبيهان', 'تنبيهات', 'تنبيه']), icon: icons.bell, color: 'c-sky' },
-    { page: 'x-faults', title: 'سجل الأعطال والانقطاعات', sub: countAr(state.faults.length, ['حدث واحد', 'حدثان', 'أحداث', 'حدث']), icon: icons.warn, color: 'c-pink' },
-  ])}`;
-}
-AFTER.export = () => {
-  // نعترض النقر هنا لأن هذه البطاقات تنفّذ إجراءً بدل فتح صفحة
-  document.querySelectorAll('[data-page^="x-"]').forEach((b) => {
-    b.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const what = b.dataset.page;
-      b.classList.add('busy');
-      try {
-        if (what === 'x-today') { const { samples } = await daySamples(today()); await exportSamples(today(), samples); }
-        if (what === 'x-month') { const dates = Array.from({ length: 30 }, (_, i) => today(i - 29)); await exportSummaries('30days-' + today(), await loadSummaries(dates)); }
-        if (what === 'x-alerts') await shareFile(`taqati-alerts-${today()}.csv`, toCsv(['الوقت', 'التنبيه', 'التفاصيل'], state.alerts.map((a) => [fmt.iso(a.at), a.title, a.body])));
-        if (what === 'x-faults') await shareFile(`taqati-faults-${today()}.csv`, toCsv(['الوقت', 'الحدث', 'التفاصيل'], state.faults.map((a) => [fmt.iso(a.at), a.title, a.body])));
-      } catch (err) {
-        toast('تعذّر التصدير: ' + err.message, 'bad');
-      }
-      b.classList.remove('busy');
-    }, true);
-  });
 };
 
 async function exportSamples(date, samples) {
@@ -1422,10 +1375,9 @@ function pageRules() {
     ${toggle('alertTemp', 'ارتفاع الحرارة', state.model?.temps?.length ? 'يرسل جهازك: ' + state.model.temps.map((t) => t.ar).join('، ') : 'جهازك الحالي لا يرسل قراءات الحرارة، فلن يعمل هذا التنبيه')}
     ${numField('tempBat', 'حد حرارة البطارية', '°م', 30, 80)}
     ${numField('tempInv', 'حد حرارة الإنفرتر', '°م', 40, 110)}
-    ${toggle('openNotice', 'رسالة الحالة عند فتح التطبيق', 'سطر قصير داخل التطبيق فقط، مثل: الألواح تشحن البطارية')}
   </div></section>
   <button class="btn ghost wide" id="testNotif">${icons.bell} إرسال إشعار تجريبي</button>
-  <p class="hint">والتطبيق مفتوح يُفحص الإنفرتر كل ${countAr(state.prefs.pollSec, ['ثانية', 'ثانيتين', 'ثوانٍ', 'ثانية'])}. ${isNative
+  <p class="hint">والتطبيق مفتوح يُفحص الإنفرتر كل دقيقة. ${isNative
     ? (state.prefs.bgMonitor
       ? 'وبعد إغلاقه يتولى نظام أندرويد الفحص كل 15 دقيقة تقريباً (أقل مدة يسمح بها النظام)، وقد يتأخر الفحص عند تفعيل توفير البطارية الشديد. لأفضل نتيجة اجعل «طاقتي» غير مقيّد في إعدادات البطارية بالهاتف.'
       : 'المراقبة بعد الإغلاق متوقفة، فلن تصل التنبيهات حتى تفتح التطبيق.')
@@ -1461,7 +1413,6 @@ function bindPrefs(root) {
         const r = await LocalNotifications.requestPermissions().catch(() => ({}));
         if (r.display !== 'granted') toast('لم يُسمح بالإشعارات من إعدادات الهاتف', 'bad');
       }
-      if (k === 'pollSec') startPolling();
       syncMonitor();
       if (k === 'staleMin' && state.model) state.model = normalize(state.model.raw.map((r) => ({ title: r.title, val: r.val, unit: r.unit })), state.prefs.staleMin, tzOffset());
       if (k === 'theme') { applyTheme(); render(); }
@@ -1760,7 +1711,7 @@ function renderGuideStandalone(which) {
 // ================= تبويب المزيد =================
 function viewMore() {
   if (state.page?.startsWith('tips')) return viewTips();
-  const pages = { setup: () => setupGuide(true), edit: pageEdit, custom: pageCustom, monitor: pageMonitor, account: pageAccount, about: pageAbout, update: pageUpdate, backup: pageBackup };
+  const pages = { setup: () => setupGuide(true), edit: pageEdit, custom: pageCustom, monitor: pageMonitor, account: pageAccount, about: pageAbout, update: pageUpdate };
   if (state.page && pages[state.page]) return pages[state.page]();
   const themeName = { auto: 'تلقائي', dark: 'ليلي', light: 'نهاري' }[state.prefs.theme];
   const urgent = smartTips(state.model, state.prefs).filter((t) => t.level === 'bad' || t.level === 'warn').length;
@@ -1774,10 +1725,9 @@ function viewMore() {
     { page: 'edit', title: 'إعدادات الإنفرتر', sub: 'تغيير الأولويات وتيارات الشحن عن بُعد', icon: icons.wrench, color: 'c-pink' },
     { page: 'setup', title: 'ربط الجهاز والحساب', sub: 'إنشاء حساب، إعداد الواي فاي (Wi-Fi Config)، البلوتوث', icon: icons.wifi, color: 'c-sky' },
     { page: 'tips', title: 'النصائح', sub: 'نصائح لجهازك، واستخدام الإنفرتر وبطاريات الليثيوم والسلامة', icon: icons.bulb, color: 'c-amber', badge: urgent ? `${urgent} مهم` : '' },
-    { page: 'monitor', title: 'المراقبة والبطارية', sub: `${state.prefs.batteryAh ? `البطارية ${state.prefs.batteryAh} أمبير ساعة` : 'أدخل سعة البطارية'} · تحديث كل ${countAr(state.prefs.pollSec, ['ثانية', 'ثانيتين', 'ثوانٍ', 'ثانية'])}`, icon: icons.gauge, color: 'c-green' },
+    { page: 'monitor', title: 'المراقبة والبطارية', sub: `${state.prefs.batteryAh ? `البطارية ${state.prefs.batteryAh} أمبير ساعة` : 'أدخل سعة البطارية'}`, icon: icons.gauge, color: 'c-green' },
     { page: 'custom', title: 'المظهر والمصطلحات', sub: themeName, icon: icons.moon, color: 'c-violet' },
     { page: 'account', title: 'الحساب', sub: state.demo ? 'وضع تجريبي' : state.session?.usr || '', icon: icons.user, color: 'c-sky' },
-    { page: 'backup', title: 'النسخة الاحتياطية', sub: 'احفظ حسابك وإعداداتك في ملف مشفّر واستعدها بعد إعادة التثبيت', icon: icons.shield, color: 'c-green' },
     { page: 'update', title: 'التحقق من التحديثات', sub: updateAvailable() ? `يتوفر الإصدار ${state.update.version}` : 'الإصدار الحالي ' + VERSION, icon: icons.upgrade, color: 'c-amber', badge: updateAvailable() ? 'جديد' : '' },
     { page: 'about', title: 'حول التطبيق', sub: 'طاقتي · الإصدار ' + VERSION, icon: icons.info, color: 'c-slate' },
   ])}
@@ -1833,7 +1783,6 @@ function pageBatCfg() {
 
 function pageConn() {
   return `<div class="form">
-      ${numField('pollSec', 'تحديث البيانات كل', 'ثانية', 10, 600)}
       ${numField('staleMin', 'اعتبار الإنفرتر غير متصل بعد', 'دقيقة', 5, 180)}
     </div>
     <p class="hint">يرسل الإنفرتر قراءة جديدة إلى الخادم كل بضع دقائق. إذا مرّت المدة أعلاه دون قراءة جديدة يُعرض الإنفرتر «غير متصل» وتتوقف الحسابات المبنية على القيم الحية.</p>
@@ -1871,22 +1820,6 @@ function pageAbout() {
     <div class="dev-av">${icons.user}</div>
     <div><small>مطوّر التطبيق</small><b>حسين محمد علي الطويل</b>
       <p class="dua">اللهم اجعل هذا العمل خالصاً لوجهك الكريم، ونافعاً لكل من يستخدمه.<br>لا تنسونا من صالح دعائكم 🤲</p></div>
-  </section>
-  <section class="card"><div class="card-h"><h2>ماذا يقدّم التطبيق؟</h2></div>
-    <ul class="feat">
-      <li>${icons.flash}<span>لوحة حيّة لتدفق الطاقة بين الألواح والبطارية والكهرباء والحمل</span></li>
-      <li>${icons.chart}<span>تقارير يومية وأسبوعية وشهرية مع مقارنة الأداء وتصديرها</span></li>
-      <li>${icons.bell}<span>تنبيهات لانقطاع الإنفرتر والكهرباء وانخفاض البطارية والأعطال</span></li>
-      <li>${icons.wrench}<span>عرض إعدادات الإنفرتر وتعديلها عن بُعد بعد التأكيد</span></li>
-      <li>${icons.offline}<span>حفظ آخر البيانات على الهاتف وعرضها بدون إنترنت</span></li>
-      <li>${icons.clock}<span>مراقبة في الخلفية كل ربع ساعة تقريباً حتى والتطبيق مغلق</span></li>
-      <li>${icons.calc}<span>حاسبة أحمال: تحويل الأمبير والواط وتقدير مدة البطارية والألواح المناسبة</span></li>
-      <li>${icons.bulb}<span>نصائح لاستخدام الإنفرتر وبطاريات الليثيوم، ونصائح ذكية حسب قراءات جهازك</span></li>
-      <li>${icons.wifi}<span>دليل ربط الجهاز بالواي فاي وإنشاء الحساب خطوة بخطوة</span></li>
-      <li>${icons.sun}<span>مستشار الطاقة: الاستقلالية عن الكهرباء، واستخدام البطارية، وتوصيات من قراءاتك</span></li>
-      <li>${icons.shield}<span>نسخة احتياطية مشفّرة للحساب والإعدادات تُستعاد بعد إعادة التثبيت</span></li>
-      <li>${icons.upgrade}<span>تحديث التطبيق من داخله عند صدور إصدار جديد</span></li>
-    </ul>
   </section>
   <section class="card"><div class="card-h"><h2>الخصوصية</h2></div>
     <p class="hint">«طاقتي» تطبيق مستقل غير تابع لشركة WatchPower أو الشركات المصنّعة للأجهزة، ويعتمد على خدمة WatchPower السحابية، لذا قد يتأثر إذا غيّرت الشركة خدمتها.</p>
@@ -1985,102 +1918,6 @@ AFTER.update = () => {
   };
 };
 
-// ================= النسخة الاحتياطية =================
-function restoreForm() {
-  return `<section class="card"><div class="card-h"><h2>${icons.shield} استعادة من نسخة احتياطية</h2></div>
-    <div class="bk-form">
-      <label class="file-in"><input type="file" id="bkFile" accept=".json,application/json,text/plain,application/octet-stream"><span id="bkFileName">اختر ملف النسخة الاحتياطية</span></label>
-      <label>رمز النسخة الاحتياطية<input type="password" id="bkCodeIn" dir="ltr" autocomplete="off"></label>
-      <div class="err" id="bkErr" hidden></div>
-      <button class="btn primary wide" id="bkRestore">استعادة وتسجيل الدخول</button>
-    </div>
-    <p class="hint">يعيد التطبيق حسابك وإعداداتك ويدخل مباشرة دون كتابة كلمة المرور.</p></section>`;
-}
-
-function bindRestore() {
-  const file = $('#bkFile');
-  file.onchange = () => { $('#bkFileName').textContent = file.files[0]?.name || 'اختر ملف النسخة الاحتياطية'; };
-  $('#bkRestore').onclick = async () => {
-    const btn = $('#bkRestore'), err = $('#bkErr');
-    const fail = (m) => { err.textContent = m; err.hidden = false; btn.disabled = false; btn.textContent = 'استعادة وتسجيل الدخول'; };
-    err.hidden = true;
-    if (!file.files[0]) return fail('اختر ملف النسخة الاحتياطية أولاً');
-    btn.disabled = true;
-    btn.textContent = 'جارٍ فك التشفير…';
-    try {
-      const b = await decryptBackup(await file.files[0].text(), $('#bkCodeIn').value);
-      btn.textContent = 'جارٍ تسجيل الدخول…';
-      const fresh = new WatchPowerApi();
-      const session = await fresh.loginWithHash(b.account.usr, b.account.pwdHash, b.account.profile);
-      // نطبّق الإعدادات بعد التأكد من صحة الحساب فقط
-      state.prefs = { ...DEFAULT_PREFS, ...cleanPrefs(DEFAULT_PREFS, b.prefs) };
-      savePrefs();
-      state.calc = { ...defaultsCalc(), ...cleanCalc(defaultsCalc(), b.calc) };
-      store.set('calc', state.calc);
-      applyTheme();
-      stopPolling();
-      resetAlertState();
-      Object.assign(state, { model: null, fields: null, tab: 'home', page: null });
-      state.rep = { ...state.rep, day: null, week: null, month: null, cmpData: null, adv: null };
-      api = fresh;
-      await finishLogin(session, typeof b.devSn === 'string' ? b.devSn : null, (t) => { btn.textContent = t; });
-      toast('تمت استعادة حسابك وإعداداتك', 'ok');
-    } catch (e) {
-      fail(e instanceof BackupError || e instanceof ApiError ? e.message : 'تعذّرت قراءة الملف');
-    }
-  };
-}
-
-function renderRestoreStandalone() {
-  state.screen = 'restore';
-  document.getElementById('app').innerHTML = `
-    <header class="topbar"><button class="icon-btn" id="restoreBack" aria-label="رجوع">${icons.arrowBack}</button><div class="page-title">استعادة حسابي</div><span></span></header>
-    <main id="view"><div class="page-anim">${restoreForm()}</div></main>`;
-  $('#restoreBack').onclick = () => renderLogin();
-  bindRestore();
-}
-
-function pageBackup() {
-  const can = !state.demo && state.session?.pwdHash;
-  return `<section class="card"><div class="card-h"><h2>${icons.download} إنشاء نسخة احتياطية</h2></div>
-    ${can ? `<div class="bk-form">
-      <label>رمز للنسخة (${MIN_CODE} أحرف أو أرقام على الأقل)<input type="password" id="bkCode" dir="ltr" autocomplete="new-password"></label>
-      <label>أعد كتابة الرمز<input type="password" id="bkCode2" dir="ltr" autocomplete="new-password"></label>
-      <button class="btn primary wide" id="bkMake">إنشاء الملف ومشاركته</button>
-    </div>
-    <p class="hint">يحفظ الملف حسابك (${esc(state.session.usr)}) وكل الإعدادات: سعة البطارية، شروط التنبيه، المصطلحات، المظهر، وأجهزة الحاسبة. احفظه في Drive أو أرسله لنفسك على واتساب.</p>`
-    : '<p class="hint">سجّل الدخول بحسابك أولاً لإنشاء نسخة احتياطية.</p>'}
-  </section>
-  ${restoreForm()}
-  <section class="card"><div class="card-h"><h2>${icons.warn} مهم</h2></div>
-    <p class="hint">الملف مشفّر بالكامل بالرمز الذي تختاره، ولا يحتوي كلمة المرور نفسها بل بصمتها. <b>إذا نسيت الرمز لا يمكن استرجاع النسخة</b>، لكن يبقى بإمكانك الدخول بكلمة المرور العادية.</p>
-    <p class="hint">من يملك الملف والرمز معاً يستطيع الدخول إلى حسابك، فلا تشاركهما مع أحد. إذا غيّرت كلمة مرور WatchPower أنشئ نسخة جديدة.</p></section>`;
-}
-AFTER.backup = () => {
-  bindRestore();
-  const mk = $('#bkMake');
-  if (!mk) return;
-  mk.onclick = async () => {
-    const a = $('#bkCode').value, b = $('#bkCode2').value;
-    if (a.length < MIN_CODE) { toast(`الرمز يجب أن يكون ${MIN_CODE} أحرف أو أرقام على الأقل`, 'bad'); return; }
-    if (a !== b) { toast('الرمزان غير متطابقين', 'bad'); return; }
-    mk.disabled = true;
-    mk.textContent = 'جارٍ التشفير…';
-    try {
-      const text = await encryptBackup(makePayload({ session: state.session, prefs: state.prefs, calc: state.calc, devSn: state.devSn }), a);
-      await shareFile(backupName(), text, { mime: 'application/json', dialog: 'حفظ النسخة الاحتياطية' });
-      store.set('backupAt', Date.now());
-      toast('أُنشئت النسخة الاحتياطية — احفظ الرمز في مكان آمن', 'ok');
-      $('#bkCode').value = ''; $('#bkCode2').value = '';
-    } catch (e) {
-      // إغلاق نافذة المشاركة دون اختيار ليس خطأ
-      if (!/cancel/i.test(e?.message || '')) toast(e.message || 'تعذّر إنشاء النسخة الاحتياطية', 'bad');
-    }
-    mk.disabled = false;
-    mk.textContent = 'إنشاء الملف ومشاركته';
-  };
-};
-
 // ================= التشغيل =================
 async function boot() {
   applyTheme();
@@ -2088,8 +1925,6 @@ async function boot() {
   if (Capacitor.isNativePlatform()) {
     CapApp.addListener('resume', async () => {
       if (!state.session && !state.demo) return;
-      // عودة بعد غياب أكثر من دقيقتين تُعامل كفتح جديد للتطبيق
-      if (Date.now() - (state.pausedAt || 0) > 120000) state.noticePending = true;
       await takeOverFromBackground();
       renderHeader();
       refresh();
@@ -2097,7 +1932,6 @@ async function boot() {
     });
     // في الخلفية نوقف المراقبة من الواجهة ونسلّمها للفحص الأصلي حتى لا تتكرر التنبيهات
     CapApp.addListener('pause', () => {
-      state.pausedAt = Date.now();
       stopPolling();
       if (state.session && !state.demo) syncMonitor();
     });
