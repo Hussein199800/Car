@@ -384,11 +384,13 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       check('صفحة الإنفرتر تعرض الحرارة المرسلة', (await text(page, '#view')).includes('حرارة المبدّد الحراري'));
       await page.click('[data-tab=alerts]');
       check('تنبيه ارتفاع حرارة الإنفرتر', /حرارة الإنفرتر مرتفعة/.test(await text(page, '#view')));
+      await page.evaluate(() => window.__nav('alerts', 'rules'));
+      check('إعدادات الحرارة تظهر لما يرسله الجهاز فقط', !!(await page.$('[data-pref=alertTemp]')) && !!(await page.$('[data-pref=tempInv]')) && !(await page.$('[data-pref=tempBat]')));
       await page.context().close();
       const plain = await newPage(browser, { api: lastData(2) });
       await plain.waitForSelector('.flow-card');
       await plain.evaluate(() => window.__nav('alerts', 'rules'));
-      check('شروط التنبيه توضّح أن الجهاز لا يرسل الحرارة', (await text(plain, '#view')).includes('لا يرسل قراءات الحرارة'));
+      check('شروط التنبيه تخفي الحرارة وتوضّح السبب', (await text(plain, '#view')).includes('لا يرسل قراءات الحرارة') && !(await plain.$('[data-pref=alertTemp]')));
       await plain.context().close();
     }
 

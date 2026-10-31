@@ -27,7 +27,7 @@ import { TIP_SECTIONS, smartTips, tipOfDay } from './tips.js';
 Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, CategoryScale, Filler, Tooltip, Legend);
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '3.5.1';
+const VERSION = '3.6.0';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -1340,6 +1340,9 @@ function numField(key, label, unit, min, max, placeholder = '') {
 }
 
 function pageRules() {
+  // إعدادات الحرارة تظهر فقط لما يرسله الجهاز فعلاً؛ أغلب الأجهزة لا ترسل الحرارة أبداً
+  const m = state.model;
+  const temps = m?.temps || [];
   return `
   <section class="card"><div class="form">
     ${toggle('notify', 'إشعارات على الهاتف', 'تظهر في شريط الإشعارات')}
@@ -1349,17 +1352,18 @@ function pageRules() {
     ${toggle('alertOffline', 'انقطاع اتصال الإنفرتر وعودته')}
     ${toggle('alertGrid', 'انقطاع كهرباء الشبكة وعودتها')}
     ${toggle('alertFull', 'اكتمال شحن البطارية')}
-    ${toggle('alertTemp', 'ارتفاع الحرارة', state.model?.temps?.length ? 'يرسل جهازك: ' + state.model.temps.map((t) => t.ar).join('، ') : 'جهازك الحالي لا يرسل قراءات الحرارة، فلن يعمل هذا التنبيه')}
-    ${numField('tempBat', 'حد حرارة البطارية', '°م', 30, 80)}
-    ${numField('tempInv', 'حد حرارة الإنفرتر', '°م', 40, 110)}
+    ${temps.length ? toggle('alertTemp', 'ارتفاع الحرارة', 'يرسل جهازك: ' + temps.map((t) => t.ar).join('، ')) : ''}
+    ${m?.batTemp != null ? numField('tempBat', 'حد حرارة البطارية', '°م', 30, 80) : ''}
+    ${m?.invTemp != null ? numField('tempInv', 'حد حرارة الإنفرتر', '°م', 40, 110) : ''}
   </div></section>
+  ${m && !temps.length ? '<p class="hint">جهازك لا يرسل قراءات الحرارة، لذلك أُخفيت إعدادات تنبيه الحرارة.</p>' : ''}
   <button class="btn ghost wide" id="testNotif">${icons.bell} إرسال إشعار تجريبي</button>
   <p class="hint">والتطبيق مفتوح يُفحص الإنفرتر كل دقيقة. ${isNative
     ? (state.prefs.bgMonitor
       ? 'وبعد إغلاقه يتولى نظام أندرويد الفحص كل 15 دقيقة تقريباً (أقل مدة يسمح بها النظام)، وقد يتأخر الفحص عند تفعيل توفير البطارية الشديد. لأفضل نتيجة اجعل «طاقتي» غير مقيّد في إعدادات البطارية بالهاتف.'
       : 'المراقبة بعد الإغلاق متوقفة، فلن تصل التنبيهات حتى تفتح التطبيق.')
     : 'المراقبة بعد إغلاق التطبيق متاحة في تطبيق الهاتف فقط.'}</p>
-  <p class="hint">الأعطال والانقطاعات تُسجّل دائماً في «الأعطال والانقطاعات» حتى لو أوقفت إشعارها.</p>`;
+  <p class="hint">كل الأحداث تُسجّل في سجل التنبيهات حتى لو أوقفت إشعارها.</p>`;
 }
 AFTER.rules = () => {
   bindPrefs($('#view'));
