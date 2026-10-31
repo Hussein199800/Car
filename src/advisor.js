@@ -72,14 +72,14 @@ function tips(r, days, { prefs, ratedW, model }) {
   // 1) الإنتاج مقابل الاستهلاك
   if (r.avgPv != null && r.avgLoad != null && r.avgLoad > 0) {
     if (r.avgPv >= r.avgLoad) add('ok', 'الألواح تغطي استهلاكك', `متوسط إنتاجك ${kwh(r.avgPv)} يومياً مقابل استهلاك ${kwh(r.avgLoad)}.`);
-    else add('warn', 'الإنتاج أقل من الاستهلاك', `متوسط إنتاجك ${kwh(r.avgPv)} يومياً واستهلاكك ${kwh(r.avgLoad)}، والفرق يأتي من الكهرباء الوطنية. تقليل الاستهلاك الليلي أو زيادة الألواح يرفع استقلاليتك.`);
+    else add('warn', 'الإنتاج أقل من الاستهلاك', `متوسط إنتاجك ${kwh(r.avgPv)} يومياً واستهلاكك ${kwh(r.avgLoad)}، والفرق يأتي من كهرباء الشبكة. تقليل الاستهلاك الليلي أو زيادة الألواح يرفع استقلاليتك.`);
   }
 
   // 2) الشحن من الكهرباء
   if (r.gridChg >= 0.5) {
     const prio = (model?.raw || []).find((x) => /charger (source )?priority/i.test(x.title))?.val || '';
     const utilityToo = /utility|grid|mains/i.test(prio) && !/only/i.test(prio);
-    add('info', 'شحن من الكهرباء الوطنية', `شُحنت البطارية من الكهرباء ${kwh(r.gridChg)} خلال ${n === 1 ? 'اليوم الماضي' : lastDays(n)}، ومن الألواح ${kwh(r.solarChg)}.${utilityToo ? ' إذا كانت الشمس تكفي لشحنها، اجعل «أولوية مصدر الشحن» على الألواح أولاً من إعدادات الرافع لتوفير الكهرباء.' : ''}`);
+    add('info', 'شحن من كهرباء الشبكة', `شُحنت البطارية من الكهرباء ${kwh(r.gridChg)} خلال ${n === 1 ? 'اليوم الماضي' : lastDays(n)}، ومن الألواح ${kwh(r.solarChg)}.${utilityToo ? ' إذا كانت الشمس تكفي لشحنها، اجعل «أولوية مصدر الشحن» على الألواح أولاً من إعدادات الإنفرتر لتوفير الكهرباء.' : ''}`);
   }
 
   // 3) انخفاض البطارية
@@ -108,7 +108,7 @@ function tips(r, days, { prefs, ratedW, model }) {
 
   // 7) الاستهلاك الليلي مقابل ما تخزنه البطارية
   if (r.usable && r.avgNight != null && r.avgNight > 0) {
-    if (r.avgNight > r.usable) add('warn', 'البطارية لا تكفي الليل', `تستهلك ${kwh(r.avgNight)} يومياً حين لا تنتج الألواح، بينما تخزن بطاريتك فعلياً قرابة ${kwh(r.usable)} (حتى ${prefs.cutoffSoc ?? 20}%). الباقي يأتي من الكهرباء الوطنية.`);
+    if (r.avgNight > r.usable) add('warn', 'البطارية لا تكفي الليل', `تستهلك ${kwh(r.avgNight)} يومياً حين لا تنتج الألواح، بينما تخزن بطاريتك فعلياً قرابة ${kwh(r.usable)} (حتى ${prefs.cutoffSoc ?? 20}%). الباقي يأتي من كهرباء الشبكة.`);
     else add('ok', 'البطارية تكفي الليل', `تستهلك ${kwh(r.avgNight)} حين لا تنتج الألواح، وبطاريتك تخزن قرابة ${kwh(r.usable)}، أي بهامش ${pct((1 - r.avgNight / r.usable) * 100)}.`);
   }
   return out;
@@ -155,7 +155,7 @@ export function answers(r, model, { todayKey, sums = [] } = {}) {
     if (b.lowest) parts.push(`أدنى نسبة في الفترة ${b.lowest.soc}%.`);
     if (r.days) parts.push(`امتلأت إلى 100% في ${ofDays(b.fullDays, r.days)}.`);
     if (b.cyclesPerDay != null) parts.push(`تقوم بقرابة ${b.cyclesPerDay.toFixed(2)} دورة كاملة يومياً (محسوبة من طاقة التفريغ وسعة البطارية التي أدخلتها).`);
-    if (b.soh == null) parts.push('الرافع لا يرسل حالة صحة البطارية، لذلك لا يمكن قياس نسبة التدهور بدقة من التطبيق. علامات تستحق الانتباه: انخفاض النسبة بسرعة أكبر من المعتاد بنفس الحمل، أو هبوط كبير في الجهد عند تشغيل حمل كبير.');
+    if (b.soh == null) parts.push('الإنفرتر لا يرسل حالة صحة البطارية، لذلك لا يمكن قياس نسبة التدهور بدقة من التطبيق. علامات تستحق الانتباه: انخفاض النسبة بسرعة أكبر من المعتاد بنفس الحمل، أو هبوط كبير في الجهد عند تشغيل حمل كبير.');
     out.push({ q: 'هل البطارية تعمل بكفاءة؟', a: parts.join(' ') || 'لا توجد بيانات كافية بعد.' });
   }
 
@@ -163,7 +163,7 @@ export function answers(r, model, { todayKey, sums = [] } = {}) {
   {
     const t = model?.temps || [];
     let a;
-    if (!t.length) a = 'جهازك لا يرسل قراءات الحرارة إلى خادم WatchPower، لذلك لا يمكن متابعتها من التطبيق. تأكد بنفسك من تهوية الرافع وأن مراوحه تعمل، وأن البطارية بعيدة عن الشمس المباشرة.';
+    if (!t.length) a = 'جهازك لا يرسل قراءات الحرارة إلى خادم WatchPower، لذلك لا يمكن متابعتها من التطبيق. تأكد بنفسك من تهوية الإنفرتر وأن مراوحه تعمل، وأن البطارية بعيدة عن الشمس المباشرة.';
     else {
       a = `القراءات الآن: ${t.map((x) => `${x.ar} ${x.v}°`).join('، ')}.`;
       if (model.loadPct != null) a += ` الحمل ${model.loadPct}% من قدرة الإنفرتر${model.loadPct >= 70 ? '، وهو مرتفع ويرفع الحرارة' : ''}.`;
@@ -197,12 +197,12 @@ export function openingNotice(m, prefs = {}) {
   const line = /line|utility|bypass/i.test(m.mode || '');
   if (m.loadPct != null && m.loadPct >= (prefs.overloadPct ?? 80)) return { kind: 'bad', text: `حمل البيت مرتفع: ${m.loadPct}% (${w(m.outW)})` };
   if (line && m.gridOn) {
-    if (!chg) return { kind: 'info', text: `الكهرباء الوطنية تغذّي البيت بـ ${w(m.outW)}` };
-    return { kind: 'info', text: pv ? 'الكهرباء الوطنية تغذّي البيت والألواح تشحن البطارية' : `الكهرباء الوطنية تغذّي البيت وتشحن البطارية (${fmt.pct(m.soc ?? '—')})` };
+    if (!chg) return { kind: 'info', text: `كهرباء الشبكة تغذّي البيت بـ ${w(m.outW)}` };
+    return { kind: 'info', text: pv ? 'كهرباء الشبكة تغذّي البيت والألواح تشحن البطارية' : `كهرباء الشبكة تغذّي البيت وتشحن البطارية (${fmt.pct(m.soc ?? '—')})` };
   }
   if (pv && chg) return { kind: 'ok', text: (m.outW ?? 0) > 30 ? `الألواح تغذّي البيت وتشحن البطارية بـ ${w(m.batW)}` : `الألواح تشحن البطارية بـ ${w(m.batW)}` };
   if (pv && !dis) return { kind: 'ok', text: `الألواح تغذّي البيت بـ ${w(m.pvW)}` };
   if (dis) return { kind: m.soc != null && m.soc <= (prefs.lowSoc ?? 30) ? 'warn' : 'info', text: `البيت يعمل على البطارية (${fmt.pct(m.soc ?? '—')}) بسحب ${w(m.batW)}` };
-  if (m.outW != null) return { kind: 'info', text: `الرافع يعمل والحمل ${w(m.outW)}` };
+  if (m.outW != null) return { kind: 'info', text: `الإنفرتر يعمل والحمل ${w(m.outW)}` };
   return null;
 }

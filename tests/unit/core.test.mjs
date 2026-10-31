@@ -1,9 +1,9 @@
-// اختبارات وحدة للمنطق الأساسي (بدون متصفح): التوقيع، تحليل القراءات، كشف الانقطاع، المصطلحات، الملخصات
+// اختبارات وحدة للمنطق الأساسي (بدون متصفح): التوقيع، تحليل القراءات، كشف الانقطاع، المصطلحات الثابتة، الملخصات
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { sha1, quotePlus } from '../../src/api.js';
 import { normalize, parseTs, countAr, fmt, rowsToSamples } from '../../src/model.js';
-import { makeLocalizer } from '../../src/terms.js';
+import fs from 'node:fs';
 import { trTitle, trValue } from '../../src/i18n.js';
 import { summarize } from '../../src/data.js';
 import { smartTips } from '../../src/tips.js';
@@ -26,7 +26,7 @@ test('التوقيع والترميز مطابقان لـ Kotlin وبايثون'
     'e246ea2b10e9d70d26173b2e13a8b6ad0f779846');
 });
 
-test('قراءة قديمة تعني أن الرافع غير متصل، والحديثة متصلة', () => {
+test('قراءة قديمة تعني أن الإنفرتر غير متصل، والحديثة متصلة', () => {
   const stale = normalize(device(99), 15);
   assert.equal(stale.stale, true);
   assert.equal(stale.mode, 'Battery Mode');
@@ -65,13 +65,13 @@ test('ترجمة الحقول والقيم', () => {
   assert.equal(trValue('Lib'), 'ليثيوم');
 });
 
-test('المصطلحات تتغير بكل صيغها ولا تمس «إنفرتر» بين قوسين', () => {
-  const L = makeLocalizer({ invTerm: 'akis', gridTerm: 'grid' });
-  assert.equal(L('إعدادات الرافع للرافع'), 'إعدادات العاكس للعاكس');
-  assert.equal(L('انقطعت الكهرباء الوطنية'), 'انقطعت كهرباء الشبكة');
-  assert.equal(L('للكهرباء الوطنية'), 'لكهرباء الشبكة');
-  assert.equal(L('مكيفات «إنفرتر»'), 'مكيفات «إنفرتر»');
-  assert.equal(makeLocalizer({ invTerm: 'rafe', gridTerm: 'watani' })('عطل في الإنفرتر'), 'عطل في الرافع');
+test('المصطلحات ثابتة: «الإنفرتر» و«كهرباء الشبكة» في كل النصوص', () => {
+  const dirs = ['src', 'android/app/src/main/java/com/taqati/solar'];
+  const files = dirs.flatMap((d) => fs.readdirSync(d).filter((f) => /\.(js|kt)$/.test(f)).map((f) => `${d}/${f}`));
+  const old = files.filter((f) => /رافع|الكهرباء الوطنية|العاكس/.test(fs.readFileSync(f, 'utf8')));
+  assert.deepEqual(old, [], 'بقايا مصطلحات قديمة');
+  assert.ok(fs.readFileSync('src/calc.js', 'utf8').includes("'مكيف 1 طن إنفرتر'"), 'نوع المكيف يبقى «إنفرتر»');
+  assert.equal(trTitle('Grid Voltage'), 'جهد كهرباء الشبكة');
 });
 
 test('ملخص اليوم يتجاهل الفجوات الطويلة ويأخذ الإنتاج من عدّاد الجهاز', () => {
@@ -367,7 +367,7 @@ test('مستشار الطاقة: توصيات من بيانات فعلية فق�
   const titles = r.tips.map((t) => t.title);
   assert.ok(titles.includes('البطارية تنخفض كثيراً'), titles.join('|'));
   assert.ok(titles.includes('انخفاض في الإنتاج'), 'إنتاج آخر يوم أقل بكثير من المعتاد');
-  assert.ok(!titles.includes('شحن من الكهرباء الوطنية'), 'لا شحن من الكهرباء في وضع البطارية');
+  assert.ok(!titles.includes('شحن من كهرباء الشبكة'), 'لا شحن من الكهرباء في وضع البطارية');
   assert.equal(r.battery.soh, null, 'لا نخترع حالة صحة غير مرسلة');
   const qa = answers(r, null, { todayKey: '2026-10-27', sums });
   assert.equal(qa.length, 5);
@@ -390,7 +390,7 @@ test('رسالة الحالة عند الفتح: سطر واحد حسب أهم �
   const dis = openingNotice({ ...base, pvW: 0, batW: -450 }).text;
   assert.match(dis.replace(/[\u2066-\u2069]/g, ''), /البيت يعمل على البطارية \(60%\)/);
   assert.ok(dis.includes('\u206660%\u2069'), 'النسبة معزولة اتجاهياً حتى لا تظهر (%60)');
-  assert.match(openingNotice({ ...base, mode: 'Line Mode', pvW: 0, batW: 0 }).text, /الكهرباء الوطنية تغذّي البيت/);
+  assert.match(openingNotice({ ...base, mode: 'Line Mode', pvW: 0, batW: 0 }).text, /كهرباء الشبكة تغذّي البيت/);
   assert.match(openingNotice({ ...base, mode: 'Line Mode', pvW: 700, batW: 600 }).text, /والألواح تشحن البطارية/);
   assert.equal(openingNotice({ ...base, loadPct: 92, outW: 6000 }).kind, 'bad');
   assert.equal(openingNotice({ ...base, stale: true }), null, 'لا رسالة على قراءة قديمة');

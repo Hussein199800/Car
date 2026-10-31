@@ -141,7 +141,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.context().close();
     }
 
-    // 3) الرافع مطفأ: آخر قراءة قبل 99 دقيقة
+    // 3) الإنفرتر مطفأ: آخر قراءة قبل 99 دقيقة
     {
       const page = await newPage(browser, { api: lastData(99), scheme: 'dark' });
       await page.waitForSelector('.banner.off');
@@ -218,7 +218,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.context().close();
     }
 
-    // 8) تعديل إعداد في الرافع مع التأكيد
+    // 8) تعديل إعداد في الإنفرتر مع التأكيد
     {
       const page = await newPage(browser, {
         api: (a) => ({
@@ -326,9 +326,8 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.evaluate(() => window.__nav('more', 'custom'));
       await page.click('[data-theme=dark]');
       check('التبديل للوضع الليلي', (await page.getAttribute('html', 'data-theme')) === 'dark');
-      await page.click('[data-term="invTerm:akis"]');
       await page.evaluate(() => window.__nav('home', null));
-      check('تغيير المصطلح يظهر في الواجهة', (await text(page, '#view')).includes('العاكس'));
+      check('المصطلحات الثابتة في الواجهة', (await text(page, '#view')).includes('الإنفرتر') && !(await text(page, 'body')).includes('الرافع'));
       check('بلا أخطاء JavaScript أو مخالفات CSP (تجريبي)', page.errors.length === 0, page.errors.join(' | '));
       await page.context().close();
     }
@@ -367,9 +366,9 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       const page = await newPage(browser, { api: lastData(2, { 'Inverter heat sink temperature': '85' }) });
       await page.waitForSelector('.flow-card');
       await page.evaluate(() => window.__nav('home', 'device'));
-      check('صفحة الرافع تعرض الحرارة المرسلة', (await text(page, '#view')).includes('حرارة المبدّد الحراري'));
+      check('صفحة الإنفرتر تعرض الحرارة المرسلة', (await text(page, '#view')).includes('حرارة المبدّد الحراري'));
       await page.click('[data-tab=alerts]');
-      check('تنبيه ارتفاع حرارة الرافع (بالمصطلح المختار)', /حرارة (الرافع|الإنفرتر) مرتفعة/.test(await text(page, '#view')));
+      check('تنبيه ارتفاع حرارة الإنفرتر', /حرارة الإنفرتر مرتفعة/.test(await text(page, '#view')));
       await page.context().close();
       const plain = await newPage(browser, { api: lastData(2) });
       await plain.waitForSelector('.flow-card');
