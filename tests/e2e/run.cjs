@@ -173,6 +173,15 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       check('الضغط على الألواح يفتح تفاصيلها', (await text(page, '.page-title')) === 'الألواح الشمسية');
       await page.click('#backBtn');
       check('ملاحظة عاجلة من النصائح لا تظهر بلا داعٍ', !(await page.$('.tip-banner')));
+      check('أربعة تبويبات فقط', (await page.$$('.tabbar button')).length === 4);
+      const cards = await page.$$eval('.gcard', (e) => e.map((x) => x.dataset.page));
+      check('بطاقات الرئيسية: الحمل والألواح والكهرباء والإنفرتر (البطارية في المخطط والحلقة)', cards.join() === 'load,solar,grid,device', cards.join());
+      check('لا يوجد اختيار جهاز لحساب بجهاز واحد', !(await page.$('#devPick')));
+      await page.click('.battery-card .ring'); await page.waitForTimeout(250);
+      check('الضغط على حلقة البطارية يفتح صفحتها', (await text(page, '.page-title')) === 'البطارية');
+      await page.click('#backBtn'); await page.click('.gcard[data-page=device]'); await page.waitForTimeout(250);
+      check('كل القراءات داخل صفحة الإنفرتر', (await text(page, '#view')).includes('كل القراءات الحيّة'));
+      await page.click('#backBtn');
       await page.context().close();
     }
 
@@ -284,11 +293,10 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.click('#demoBtn'); await page.waitForSelector('.flow-card');
       const mixed = [];
       const PAGES = {
-        home: [null, 'load', 'battery', 'solar', 'grid', 'device', 'all'],
+        home: [null, 'load', 'battery', 'solar', 'grid', 'device'],
         reports: [null, 'advisor', 'day', 'week', 'month', 'compare'],
-        calc: [null],
         alerts: [null, 'rules'],
-        more: [null, 'setup', 'edit', 'tips', 'tips/smart', 'tips/lithium', 'monitor', 'custom', 'account', 'update', 'about'],
+        more: [null, 'setup', 'edit', 'calc', 'tips', 'tips/smart', 'tips/lithium', 'settings', 'update', 'about'],
       };
       for (const [tab, pages] of Object.entries(PAGES)) {
         for (const pg of pages) {
@@ -301,7 +309,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       }
       check('نظام أرقام واحد (0-9) في كل الصفحات حتى على هاتف بلغة عربية', mixed.length === 0, mixed.join(', '));
       // الحاسبة
-      await page.evaluate(() => window.__nav('calc', null));
+      await page.evaluate(() => window.__nav('more', 'calc'));
       await page.fill('#calcInput', '1'); await page.waitForTimeout(150);
       const res = await page.$$eval('.res-main b', (e) => e.map((x) => x.textContent));
       const bat = await page.$$eval('.bat-v b', (e) => e.map((x) => x.textContent));
@@ -324,7 +332,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       check('تصدير CSV بترميز يفتح في Excel', csv.startsWith('﻿') && csv.includes('الوقت'));
       check('وقت القراءات في CSV بصيغة ثابتة يفهمها Excel', /\n"?\d{4}-\d\d-\d\d \d\d:\d\d:\d\d/.test(csv), csv.slice(0, 160));
       // المظهر
-      await page.evaluate(() => window.__nav('more', 'custom'));
+      await page.evaluate(() => window.__nav('more', 'settings'));
       await page.click('[data-theme=dark]');
       check('التبديل للوضع الليلي', (await page.getAttribute('html', 'data-theme')) === 'dark');
       await page.evaluate(() => window.__nav('home', null));
@@ -346,7 +354,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.waitForTimeout(1500);
       const day = await text(page, '#view');
       check('التقرير اليومي: أدنى وأعلى نسبة مع الوقت والشحن من الألواح والكهرباء والاستقلالية', ['أدنى نسبة للبطارية', 'الساعة', 'شحن من الألواح', 'شحن من الكهرباء', 'الاستقلالية'].every((w) => day.includes(w)));
-      await page.evaluate(() => window.__nav('more', 'custom'));
+      await page.evaluate(() => window.__nav('more', 'settings'));
       await page.click('[data-fs="1.2"]');
       const fs = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--fs').trim());
       const h1 = await page.$eval('.page-title', (e) => parseFloat(getComputedStyle(e).fontSize));
@@ -387,8 +395,8 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
         },
       });
       await page.waitForTimeout(300);
-      await page.evaluate(() => window.__nav('more', 'account'));
-      await page.selectOption('#devSel', B.sn);
+      await page.click('#devPick');
+      await page.click(`.modal [data-sn="${B.sn}"]`);
       await page.waitForTimeout(2500);
       await page.evaluate(() => window.__nav('home', null));
       await page.waitForSelector('.ring-txt');

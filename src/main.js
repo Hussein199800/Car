@@ -249,11 +249,10 @@ function logout() {
 }
 
 // ================= الهيكل والتنقل =================
-// خمسة تبويبات، والوظائف المتقاربة مجمّعة داخلها
+// أربعة تبويبات للاستخدام اليومي، والأدوات الأخرى داخل «المزيد»
 const TABS = [
   ['home', 'الرئيسية', icons.flash],
   ['reports', 'التقارير', icons.chart],
-  ['calc', 'الحاسبة', icons.calc],
   ['alerts', 'التنبيهات', icons.bell],
   ['more', 'المزيد', icons.gear],
 ];
@@ -319,21 +318,51 @@ function renderHeader() {
   if (!bar) return;
   const c = connState();
   const title = state.page ? PAGE_TITLES[leaf()] || '' : null;
+  const multi = state.devices.length > 1;
   bar.innerHTML = (state.page
     ? `<button class="icon-btn" id="backBtn" aria-label="رجوع">${icons.arrowBack}</button>
        <div class="page-title">${esc(title)}</div>
        <span class="dot ${c.cls}" title="${esc(c.text)}"></span>`
-    : `<div class="dev"><span class="dot ${c.cls}"></span><div>
-         <div class="dev-name">${esc(device()?.alias || 'جهازي')}</div>
-         <div class="dev-sub">${esc(c.text)}</div></div></div>
+    : `<${multi ? 'button class="dev dev-pick" id="devPick" aria-label="اختيار الجهاز"' : 'div class="dev"'}><span class="dot ${c.cls}"></span><div>
+         <div class="dev-name">${esc(device()?.alias || 'جهازي')}${multi ? ' <span class="dev-caret">▾</span>' : ''}</div>
+         <div class="dev-sub">${esc(c.text)}</div></div></${multi ? 'button' : 'div'}>
        <button class="icon-btn ${state.loading ? 'spin' : ''}" id="refreshBtn" aria-label="تحديث">${icons.refresh}</button>`);
   const bb = $('#backBtn');
   if (bb) bb.onclick = back;
+  const dp = $('#devPick');
+  if (dp) dp.onclick = pickDevice;
   const rb = $('#refreshBtn');
   if (rb) rb.onclick = () => refresh(true);
   const unread = state.alerts.filter((a) => !a.read).length;
   const badge = $('#alertBadge');
   if (badge) { badge.textContent = unread > 99 ? '99+' : unread || ''; badge.style.display = unread ? '' : 'none'; }
+}
+
+// عند وجود أكثر من جهاز في الحساب: الضغط على اسم الجهاز يفتح قائمة للتبديل
+function pickDevice() {
+  const el = document.createElement('div');
+  el.className = 'modal';
+  el.innerHTML = `<div class="sheet"><h3>اختر الجهاز</h3><div class="dev-list">${state.devices.map((x) => `
+    <button class="btn ${x.sn === device()?.sn ? 'primary' : 'ghost'} wide" data-sn="${esc(x.sn)}">${esc(x.alias)}</button>`).join('')}</div></div>`;
+  el.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-sn]');
+    if (b || e.target === el) { el.remove(); if (b) switchDevice(b.dataset.sn); }
+  });
+  document.body.appendChild(el);
+}
+
+function switchDevice(snv) {
+  if (snv === device()?.sn) return;
+  state.devSn = snv;
+  store.set('devSn', snv);
+  state.model = null;
+  state.fields = null;
+  resetAlertState();
+  state.rep = { ...state.rep, day: null, week: null, month: null, cmpData: null, adv: null };
+  loadCache();
+  refresh();
+  render();
+  syncMonitor();
 }
 
 // شريط الحالة: يوضّح متى تكون البيانات غير حيّة
@@ -351,11 +380,11 @@ function banner() {
 }
 
 const PAGE_TITLES = {
-  load: 'الحمل', battery: 'البطارية', solar: 'الألواح الشمسية', grid: 'كهرباء الشبكة', all: 'كل القراءات',
+  load: 'الحمل', battery: 'البطارية', solar: 'الألواح الشمسية', grid: 'كهرباء الشبكة',
   day: 'التقرير اليومي', week: 'التقرير الأسبوعي', month: 'التقرير الشهري', compare: 'مقارنة الأداء',
   rules: 'شروط التنبيه', advisor: 'مستشار الطاقة', device: 'الإنفرتر', update: 'التحديثات', edit: 'إعدادات الإنفرتر', setup: 'ربط الجهاز والحساب',
   tips: 'النصائح', smart: 'نصائح لجهازك الآن', ...Object.fromEntries(TIP_SECTIONS.map((t) => [t.id, t.title])),
-  custom: 'المظهر والمصطلحات', monitor: 'المراقبة والبطارية', account: 'الحساب', about: 'حول التطبيق',
+  settings: 'الإعدادات', calc: 'حاسبة الأحمال', about: 'حول التطبيق',
 };
 
 function render() {
@@ -363,7 +392,7 @@ function render() {
   renderHeader();
   const v = $('#view');
   if (!v) return;
-  const views = { home: viewHome, reports: viewReports, calc: () => viewCalc(calcHelpers()), alerts: viewAlerts, more: viewMore };
+  const views = { home: viewHome, reports: viewReports, alerts: viewAlerts, more: viewMore };
   // التحديث الدوري يعيد رسم الصفحة نفسها: نحافظ على الأقسام التي فتحها المستخدم بدل طيّها كل 30 ثانية
   const key = state.tab + '/' + (state.page || '');
   const opened = v.dataset.key === key ? [...v.querySelectorAll('details')].map((d) => d.open) : null;
@@ -671,7 +700,7 @@ function viewHome() {
       ? `<div class="empty">${icons.offline.replace('<svg', '<svg class="empty-ic"')}<b>تعذّر جلب بيانات الإنفرتر</b><p>${esc(state.netError)}</p><button class="btn primary" id="retryBtn">إعادة المحاولة</button></div>`
       : '<div class="empty"><div class="spinner"></div>جارٍ جلب بيانات الإنفرتر…</div>';
   }
-  const pages = { load: pageLoad, battery: pageBattery, solar: pageSolar, grid: pageGrid, all: pageAll, device: pageDevice };
+  const pages = { load: pageLoad, battery: pageBattery, solar: pageSolar, grid: pageGrid, device: pageDevice };
   if (state.page && pages[state.page]) return banner() + pages[state.page](m);
 
   const isBat = /battery/i.test(m.mode || '') || (m.batW ?? 0) < -10;
@@ -704,7 +733,7 @@ function viewHome() {
   </section>
   <p class="flow-hint">اضغط على أي عنصر في المخطط لعرض تفاصيله</p>
 
-  <section class="card battery-card ${live ? '' : 'stale'}">
+  <section class="card battery-card ${live ? '' : 'stale'}" data-page="battery">
     <div class="ring">
       <svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="52" class="ring-bg"/>
         <circle cx="60" cy="60" r="52" class="ring-fg" style="stroke-dasharray:${(soc / 100) * C} ${C};stroke:${soc < 25 ? 'var(--bad)' : soc < 50 ? 'var(--warn)' : 'var(--bat)'}"/></svg>
@@ -712,7 +741,7 @@ function viewHome() {
     </div>
     <div class="bat-info">
       <div class="bat-state ${live && m.batW > 10 ? 'chg' : live && m.batW < -10 ? 'dis' : ''}">${esc(batState(m))}</div>
-      <div class="bat-eta">${e.known ? esc(e.text) : `<button class="link" data-goto="more:monitor">${esc(e.text)}</button>`}</div>
+      <div class="bat-eta">${e.known ? esc(e.text) : `<button class="link" data-goto="more:settings">${esc(e.text)}</button>`}</div>
       <div class="bat-sub"><bdi>${fmt.v(m.batV)}</bdi>${e.sub ? ' · ' + esc(e.sub) : ''}</div>
     </div>
   </section>
@@ -720,15 +749,15 @@ function viewHome() {
   </div><div class="col-b">
   <h3 class="sec-h">التفاصيل</h3>
   ${gridCards([
-    { page: 'load', title: 'الحمل', icon: icons.home, color: 'c-sky', value: fmt.w(m.outW), sub: m.loadPct !== null ? `${m.loadPct}% من قدرة الإنفرتر` : 'استهلاك المنزل' },
-    { page: 'battery', title: 'البطارية', icon: icons.battery, color: 'c-green', value: m.soc !== null ? m.soc + '%' : '—', sub: batState(m) },
-    { page: 'solar', title: 'الألواح الشمسية', icon: icons.panel, color: 'c-amber', value: fmt.w(m.pvW), sub: m.todayWh !== null ? `إنتاج اليوم ${fmt.kwh(m.todayWh / 1000)} ك.و.س` : 'الإنتاج الحالي' },
-    { page: 'grid', title: 'كهرباء الشبكة', icon: icons.grid, color: 'c-violet', value: m.gridV === null ? '—' : m.gridOn ? `${numAr(m.gridV, 1)} فولت` : 'مقطوعة', sub: m.gridOn ? (isLine ? 'تغذّي الحمل الآن' : 'متوفرة كاحتياط') : 'لا يوجد تيار' },
-  ].map((c) => (live ? c : { ...c, sub: 'آخر قيمة مسجّلة' })), live ? '' : 'stale')}
-  ${listCards([
-    { page: 'device', title: 'الإنفرتر', sub: m.stale ? 'غير متصل' : `${m.fault ? 'يوجد عطل' : 'يعمل'} · الحالة والمعلومات والإعدادات الحالية`, icon: icons.inverter, color: m.stale ? 'c-slate' : m.fault ? 'c-pink' : 'c-sky' },
-    { page: 'all', title: 'كل القراءات', sub: `${countAr(m.raw.filter((r) => r.group === 'live').length, READINGS)} حيّة مترجمة`, icon: icons.list, color: 'c-slate' },
-  ])}
+    ...[
+      { page: 'load', title: 'الحمل', icon: icons.home, color: 'c-sky', value: fmt.w(m.outW), sub: m.loadPct !== null ? `${m.loadPct}% من قدرة الإنفرتر` : 'استهلاك المنزل' },
+      { page: 'solar', title: 'الألواح الشمسية', icon: icons.panel, color: 'c-amber', value: fmt.w(m.pvW), sub: m.todayWh !== null ? `إنتاج اليوم ${fmt.kwh(m.todayWh / 1000)} ك.و.س` : 'الإنتاج الحالي' },
+      { page: 'grid', title: 'كهرباء الشبكة', icon: icons.grid, color: 'c-violet', value: m.gridV === null ? '—' : m.gridOn ? `${numAr(m.gridV, 1)} فولت` : 'مقطوعة', sub: m.gridOn ? (isLine ? 'تغذّي الحمل الآن' : 'متوفرة كاحتياط') : 'لا يوجد تيار' },
+    ].map((c) => (live ? c : { ...c, sub: 'آخر قيمة مسجّلة' })),
+    // البطارية ظاهرة في المخطط والحلقة، فمكانها هنا للإنفرتر نفسه
+    { page: 'device', title: 'الإنفرتر', icon: icons.inverter, color: m.stale ? 'c-slate' : m.fault ? 'c-pink' : 'c-green',
+      value: m.stale ? 'غير متصل' : m.fault ? 'يوجد عطل' : 'يعمل', sub: m.stale ? fmt.ago(m.age) : m.mode ? trValue(m.mode) : 'الحالة والإعدادات' },
+  ], live ? '' : 'stale')}
   </div></div>`;
 }
 
@@ -801,7 +830,7 @@ function pageBattery(m) {
   ${hero(icons.battery, 'c-green', 'نسبة الشحن', m.soc !== null ? m.soc + '%' : '—', batState(m))}
   <section class="card">
     <div class="card-h"><h2>المدة المتوقعة</h2></div>
-    <div class="big-line">${e.known ? esc(e.text) : `<button class="link" data-goto="more:monitor">${esc(e.text)}</button>`}</div>
+    <div class="big-line">${e.known ? esc(e.text) : `<button class="link" data-goto="more:settings">${esc(e.text)}</button>`}</div>
     ${e.sub ? `<p class="hint">${esc(e.sub)}</p>` : ''}
     ${state.prefs.batteryAh ? `<p class="hint">مبنية على سعة ${state.prefs.batteryAh} أمبير ساعة وجهد ${nominalV(m)} فولت. التقدير تقريبي ويتغير مع الحمل.</p>` : ''}
   </section>
@@ -850,13 +879,6 @@ function pageGrid(m) {
   ${miniChart('cGridToday', 'جهد كهرباء الشبكة خلال اليوم')}`;
 }
 AFTER.grid = () => drawToday('cGridToday', 'gridV', '#a78bfa', 'فولت', { y: { beginAtZero: true } });
-
-function pageAll(m) {
-  const live = m.raw.filter((r) => r.group === 'live');
-  return `<section class="card"><div class="card-h"><h2>القراءات الحيّة</h2><small class="muted">${m.ts ? esc(fmt.dateTime(m.ts)) : ''}</small></div>
-    ${kv(live.map((r) => [r.ar, isEmptyVal(r.val) ? val(null) : val(r.valAr, trUnit(r.unit))]))}</section>
-    <p class="hint center">المعلومات المقنّنة والإعدادات ومعلومات الجهاز موجودة في صفحة «الإنفرتر»: اضغط مربع الإنفرتر في المخطط بالرئيسية.</p>`;
-}
 
 // ================= الرسوم =================
 function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
@@ -1242,7 +1264,7 @@ function pageAdvisor() {
       r.avgNight != null ? ['الاستهلاك حين لا تنتج الألواح', val(fmt.kwh(r.avgNight), 'ك.و.س / يوم')] : null,
       r.usable != null ? ['ما تخزنه البطارية فعلياً', val(fmt.kwh(r.usable), 'ك.و.س')] : null,
     ])}
-    ${b.cyclesPerDay == null ? '<p class="hint">أدخل سعة البطارية من «المزيد ← المراقبة والبطارية» لحساب الدورات وكفاية البطارية لليل.</p>' : ''}
+    ${b.cyclesPerDay == null ? '<p class="hint">أدخل سعة البطارية من «المزيد ← الإعدادات» لحساب الدورات وكفاية البطارية لليل.</p>' : ''}
     ${b.soh == null ? '<p class="hint">جهازك لا يرسل حالة صحة البطارية (SOH)، لذلك لا نعرض نسبة تدهور مقدّرة حتى لا تكون مضلّلة.</p>' : ''}
   </section>
 
@@ -1439,6 +1461,7 @@ function pageDevice(m) {
     ['جهد الناقل الداخلي', val(m.busV === null ? null : numAr(m.busV), 'فولت')],
     ...m.temps.map((t) => [t.ar, val(numAr(t.v), '°م')]),
   ]), true)}
+  ${section('كل القراءات الحيّة', kv(group('live').map((r) => [r.ar, isEmptyVal(r.val) ? val(null) : val(r.valAr, trUnit(r.unit))])))}
   ${section('معلومات الجهاز', kv([['اسم الجهاز', val(d?.alias)], ['رقم الجهاز في الحساب', val(d?.sn)], ['رقم وحدة الواي فاي', val(d?.pn)], ...rows(product)]))}
   ${group('rated').length ? section('القيم المقنّنة', kv(rows(group('rated')))) : ''}
   ${group('config').length ? section('الإعدادات الحالية', kv(rows(group('config'))) + '<p class="hint">للعرض فقط. لتغييرها: «المزيد ← إعدادات الإنفرتر».</p>') : ''}
@@ -1711,7 +1734,7 @@ function renderGuideStandalone(which) {
 // ================= تبويب المزيد =================
 function viewMore() {
   if (state.page?.startsWith('tips')) return viewTips();
-  const pages = { setup: () => setupGuide(true), edit: pageEdit, custom: pageCustom, monitor: pageMonitor, account: pageAccount, about: pageAbout, update: pageUpdate };
+  const pages = { setup: () => setupGuide(true), edit: pageEdit, calc: () => viewCalc(calcHelpers()), settings: pageSettings, about: pageAbout, update: pageUpdate };
   if (state.page && pages[state.page]) return pages[state.page]();
   const themeName = { auto: 'تلقائي', dark: 'ليلي', light: 'نهاري' }[state.prefs.theme];
   const urgent = smartTips(state.model, state.prefs).filter((t) => t.level === 'bad' || t.level === 'warn').length;
@@ -1723,11 +1746,10 @@ function viewMore() {
   </section>
   ${listCards([
     { page: 'edit', title: 'إعدادات الإنفرتر', sub: 'تغيير الأولويات وتيارات الشحن عن بُعد', icon: icons.wrench, color: 'c-pink' },
-    { page: 'setup', title: 'ربط الجهاز والحساب', sub: 'إنشاء حساب، إعداد الواي فاي (Wi-Fi Config)، البلوتوث', icon: icons.wifi, color: 'c-sky' },
+    { page: 'calc', title: 'حاسبة الأحمال', sub: 'تحويل الأمبير والواط، وهل يتحمّل الإنفرتر أجهزة بيتك', icon: icons.calc, color: 'c-green' },
     { page: 'tips', title: 'النصائح', sub: 'نصائح لجهازك، واستخدام الإنفرتر وبطاريات الليثيوم والسلامة', icon: icons.bulb, color: 'c-amber', badge: urgent ? `${urgent} مهم` : '' },
-    { page: 'monitor', title: 'المراقبة والبطارية', sub: `${state.prefs.batteryAh ? `البطارية ${state.prefs.batteryAh} أمبير ساعة` : 'أدخل سعة البطارية'}`, icon: icons.gauge, color: 'c-green' },
-    { page: 'custom', title: 'المظهر والمصطلحات', sub: themeName, icon: icons.moon, color: 'c-violet' },
-    { page: 'account', title: 'الحساب', sub: state.demo ? 'وضع تجريبي' : state.session?.usr || '', icon: icons.user, color: 'c-sky' },
+    { page: 'setup', title: 'ربط الجهاز والحساب', sub: 'إنشاء حساب، إعداد الواي فاي (Wi-Fi Config)، البلوتوث', icon: icons.wifi, color: 'c-sky' },
+    { page: 'settings', title: 'الإعدادات', sub: `${themeName} · ${state.prefs.batteryAh ? `البطارية ${state.prefs.batteryAh} أمبير ساعة` : 'أدخل سعة البطارية'}`, icon: icons.gauge, color: 'c-violet' },
     { page: 'update', title: 'التحقق من التحديثات', sub: updateAvailable() ? `يتوفر الإصدار ${state.update.version}` : 'الإصدار الحالي ' + VERSION, icon: icons.upgrade, color: 'c-amber', badge: updateAvailable() ? 'جديد' : '' },
     { page: 'about', title: 'حول التطبيق', sub: 'طاقتي · الإصدار ' + VERSION, icon: icons.info, color: 'c-slate' },
   ])}
@@ -1754,11 +1776,17 @@ AFTER.custom = () => {
   });
 };
 
-function pageMonitor() {
-  return `<section class="card"><div class="card-h"><h2>البطارية</h2></div>${pageBatCfg()}</section>
-    <section class="card"><div class="card-h"><h2>الاتصال والتحديث</h2></div>${pageConn()}</section>`;
+// صفحة إعدادات واحدة: المظهر، البطارية، الاتصال، والحساب
+function pageSettings() {
+  const d = device();
+  return `${pageCustom()}
+    <section class="card"><div class="card-h"><h2>البطارية</h2></div>${pageBatCfg()}</section>
+    <section class="card"><div class="card-h"><h2>الاتصال</h2></div>${pageConn()}</section>
+    <section class="card"><div class="card-h"><h2>الحساب</h2></div>
+      ${kv([['الحساب', val(state.demo ? 'وضع تجريبي' : state.session?.usr)], ['الجهاز المعروض', val(d?.alias)], ['عدد الأجهزة', val(String(state.devices.length))], ['الخادم', val(state.demo ? '—' : state.session?.profile === 'shine' ? 'ShineMonitor' : 'DessMonitor')]])}
+      ${state.devices.length > 1 ? '<p class="hint">للتبديل بين أجهزتك اضغط اسم الجهاز أعلى الرئيسية.</p>' : ''}</section>`;
 }
-AFTER.monitor = () => bindPrefs($('#view'));
+AFTER.settings = () => { AFTER.custom(); bindPrefs($('#view')); };
 
 function pageTheme() {
   const opt = (v, label, ic) => `<button class="theme-opt ${state.prefs.theme === v ? 'on' : ''}" data-theme="${v}">${ic}<b>${label}</b></button>`;
@@ -1788,25 +1816,6 @@ function pageConn() {
     <p class="hint">يرسل الإنفرتر قراءة جديدة إلى الخادم كل بضع دقائق. إذا مرّت المدة أعلاه دون قراءة جديدة يُعرض الإنفرتر «غير متصل» وتتوقف الحسابات المبنية على القيم الحية.</p>
     <p class="hint">آخر بيانات تُحفظ على الهاتف وتظهر حتى بدون إنترنت، مع توضيح وقتها.</p>`;
 }
-
-function pageAccount() {
-  const d = device();
-  return `<section class="card">
-    ${state.devices.length > 1 ? `<label class="num-row"><span>الجهاز المعروض</span><select id="devSel">${state.devices.map((x) => `<option value="${esc(x.sn)}" ${x.sn === d?.sn ? 'selected' : ''}>${esc(x.alias)}</option>`).join('')}</select></label>` : ''}
-    ${kv([['الحساب', val(state.demo ? 'وضع تجريبي' : state.session?.usr)], ['الجهاز', val(d?.alias)], ['عدد الأجهزة', val(String(state.devices.length))], ['الخادم', val(state.demo ? '—' : state.session?.profile === 'shine' ? 'ShineMonitor' : 'DessMonitor')]])}
-  </section>
-  <p class="hint">لتسجيل الخروج ارجع إلى صفحة «المزيد» واضغط الزر الأحمر في آخرها.</p>`;
-}
-AFTER.account = () => {
-  const sel = $('#devSel');
-  if (sel) sel.onchange = () => {
-    state.devSn = sel.value; store.set('devSn', sel.value);
-    state.model = null; state.fields = null;
-    resetAlertState();
-    state.rep = { ...state.rep, day: null, week: null, month: null, cmpData: null, adv: null };
-    loadCache(); refresh(); render();
-  };
-};
 
 function pageAbout() {
   return `

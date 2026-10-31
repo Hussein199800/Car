@@ -144,6 +144,10 @@ bdi { unicode-bidi: isolate; }
 .dev { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .dev-name { font-weight: 800; font-size: calc(17px * var(--fs, 1)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dev-sub { color: var(--mute); font-size: calc(12px * var(--fs, 1)); }
+.dev-pick { background: none; border: 0; padding: 0; color: inherit; font: inherit; text-align: start; cursor: pointer; }
+.dev-caret { color: var(--mute); font-size: .8em; }
+.dev-list { display: grid; gap: 8px; margin-top: 12px; }
+.dev-list .btn { justify-content: center; }
 .page-title { flex: 1; font-weight: 800; font-size: calc(18px * var(--fs, 1)); }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: #94a3b8; flex: none; }
 .dot.on { background: #22c55e; box-shadow: 0 0 0 4px #22c55e30; animation: pulse 2s infinite; }
@@ -245,7 +249,7 @@ bdi { unicode-bidi: isolate; }
 .stale .node, .stale .ring { filter: grayscale(1); opacity: .45; }
 .stale .n-inv { opacity: .45; }
 
-.battery-card { display: flex; align-items: center; gap: 16px; }
+.battery-card { display: flex; align-items: center; gap: 16px; cursor: pointer; }
 .ring { position: relative; width: 112px; height: 112px; flex: none; }
 .ring svg { transform: rotate(-90deg); }
 .ring-bg { fill: none; stroke: var(--line); stroke-width: 10; }
