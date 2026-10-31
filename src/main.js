@@ -273,7 +273,10 @@ function startApp(quiet = false) {
   };
   $('#view').addEventListener('click', (e) => {
     const card = e.target.closest('[data-page]');
-    if (card) navigate(state.tab, card.dataset.page.includes(':') ? card.dataset.page.split(':')[1] : card.dataset.page);
+    if (!card) return;
+    // «tab:page» تفتح صفحة في تبويب آخر، مثل ملاحظات الجهاز من صفحة النصائح
+    const [t, p] = card.dataset.page.includes(':') ? card.dataset.page.split(':') : [state.tab, card.dataset.page];
+    navigate(t, p);
   });
   loadCache();
   navigate(state.tab, state.page);
@@ -382,8 +385,8 @@ function banner() {
 const PAGE_TITLES = {
   load: 'الحمل', battery: 'البطارية', solar: 'الألواح الشمسية', grid: 'كهرباء الشبكة',
   day: 'التقرير اليومي', week: 'التقرير الأسبوعي', month: 'التقرير الشهري', compare: 'مقارنة الأداء',
-  rules: 'شروط التنبيه', advisor: 'مستشار الطاقة', device: 'الإنفرتر', update: 'التحديثات', edit: 'إعدادات الإنفرتر', setup: 'ربط الجهاز والحساب',
-  tips: 'النصائح', smart: 'نصائح لجهازك الآن', ...Object.fromEntries(TIP_SECTIONS.map((t) => [t.id, t.title])),
+  rules: 'شروط التنبيه', advisor: 'ملاحظات على منظومتك', device: 'الإنفرتر', update: 'التحديثات', edit: 'إعدادات الإنفرتر', setup: 'ربط الجهاز والحساب',
+  tips: 'النصائح', ...Object.fromEntries(TIP_SECTIONS.map((t) => [t.id, t.title])),
   settings: 'الإعدادات', calc: 'حاسبة الأحمال', about: 'حول التطبيق',
 };
 
@@ -496,7 +499,7 @@ async function refresh(manual = false) {
     }
     if (state.model) state.model = { ...state.model, age: state.model.ts ? Date.now() - state.model.ts : null };
     // نعيد الرسم فقط للصفحات التي تعرض القراءة الحية حتى لا تُفقد حالة الصفحات الأخرى
-    if (state.tab === 'home' || (state.tab === 'more' && ['tips', 'tips/smart'].includes(state.page))) render();
+    if (state.tab === 'home' || (state.tab === 'reports' && state.page === 'advisor')) render();
     else renderHeader();
   }
 }
@@ -765,7 +768,7 @@ function viewHome() {
 function urgentTip(m) {
   if (!m || m.stale || state.demo) return '';
   const t = smartTips(m, state.prefs).find((x) => x.level === 'bad' || x.level === 'warn');
-  return t ? `<button class="banner warn tip-banner" data-goto="more:tips/smart">${icons.bulb}<span><b>${esc(t.title)}</b>${esc(t.body)}</span></button>` : '';
+  return t ? `<button class="banner warn tip-banner" data-goto="reports:advisor">${icons.bulb}<span><b>${esc(t.title)}</b>${esc(t.body)}</span></button>` : '';
 }
 AFTER.home = () => {
   bindGoto();
@@ -932,13 +935,17 @@ function chartOpts(legend, opts) {
 }
 
 // ================= التقارير =================
+// عدد الملاحظات المهمة الآن (تحذير أو خطر) من قراءة حيّة فقط
+const urgentCount = () => (state.model && !state.model.stale ? smartTips(state.model, state.prefs).filter((t) => t.level === 'bad' || t.level === 'warn').length : 0);
+
 function viewReports() {
   const pages = { day: pageDay, week: () => pageRange('week'), month: () => pageRange('month'), compare: pageCompare, advisor: pageAdvisor };
   if (state.page && pages[state.page]) return pages[state.page]();
+  const urgent = urgentCount();
   return `
   <section class="intro"><h2>التقارير والتحليلات</h2><p>إنتاج الألواح واستهلاك المنزل وحالة البطارية عبر الأيام.</p></section>
   ${listCards([
-    { page: 'advisor', title: 'مستشار الطاقة', sub: 'استقلاليتك عن الكهرباء، استخدام البطارية، توصيات وأسئلة عن منظومتك', icon: icons.bulb, color: 'c-green' },
+    { page: 'advisor', title: 'ملاحظات على منظومتك', sub: 'ما يحتاج انتباهك الآن، ثم الاستقلالية واستخدام البطارية وتوصيات آخر 7 أيام', icon: icons.bulb, color: urgent ? 'c-pink' : 'c-green', badge: urgent ? `${urgent} مهم` : '' },
     { page: 'day', title: 'التقرير اليومي', sub: 'رسوم القدرة والبطارية والكهرباء ليوم محدد', icon: icons.calendar, color: 'c-amber' },
     { page: 'week', title: 'التقرير الأسبوعي', sub: 'الإنتاج والاستهلاك لكل يوم خلال أسبوع', icon: icons.week, color: 'c-sky' },
     { page: 'month', title: 'التقرير الشهري', sub: 'مجموع الشهر وأفضل يوم ومتوسط الإنتاج', icon: icons.month, color: 'c-green' },
@@ -1220,25 +1227,32 @@ async function loadAdvisor() {
   state.rep.adv = { loading: true, token, done: 0 };
   render();
   const sums = await loadSummaries(dates, (done, total) => {
+    if (state.rep.adv?.token !== token) return;
+    state.rep.adv.pct = (done / total) * 100;
     const p = $('#advProg');
-    if (p && state.rep.adv?.token === token) p.style.width = (done / total) * 100 + '%';
+    if (p) p.style.width = state.rep.adv.pct + '%';
   });
   if (state.rep.adv?.token !== token) return;
   state.rep.adv = { sums, at: Date.now() };
   if (leaf() === 'advisor') render();
 }
 
+// «ملاحظات على منظومتك»: ما يحتاج انتباهك الآن من القراءة الحيّة، ثم تحليل آخر 7 أيام من السجل
 function pageAdvisor() {
-  const a = state.rep.adv;
-  if (!a || a.loading) return `<div class="card"><p class="center">جارٍ تحليل آخر 7 أيام…</p><div class="bar"><i id="advProg" style="width:0%"></i></div>
-    <p class="hint center">الأيام المكتملة تُحفظ، فيصبح التحليل أسرع في المرات القادمة.</p></div>`;
   const m = state.model;
+  const live = smartTips(m, state.prefs);
+  const now = `${state.demo ? banner() : ''}<h3 class="sec-h">الآن</h3>
+    ${live.length ? smartList(live) : '<div class="empty">لا توجد بيانات من الجهاز بعد.</div>'}
+    <h3 class="sec-h">آخر 7 أيام</h3>`;
+  const a = state.rep.adv;
+  if (!a || a.loading) return now + `<div class="card"><p class="center">جارٍ تحليل آخر 7 أيام…</p><div class="bar"><i id="advProg" style="width:${a?.pct || 0}%"></i></div>
+    <p class="hint center">الأيام المكتملة تُحفظ، فيصبح التحليل أسرع في المرات القادمة.</p></div>`;
   const ctx = { todayKey: today(), prefs: state.prefs, ratedW: m?.ratedW || null, volts: m?.ratedV || nominalV(m), model: m };
   const r = analyze(a.sums, ctx);
   const b = r.battery;
   const ind = r.independence;
   const lvl = { ok: 'ok', warn: 'warn', bad: 'bad', info: 'info' };
-  return `
+  return `${now}
   <section class="card adv-ind">
     <div class="card-h"><h2>${icons.sun} مؤشر الاستقلالية عن الكهرباء</h2><small class="muted">${r.days ? 'آخر ' + countAr(r.days, DAY) + ' مكتملة' : ''}</small></div>
     ${ind == null ? '<p class="hint">يحتاج المؤشر إلى وضع التشغيل (شبكة/بطارية) في سجل الجهاز ليوم كامل على الأقل.</p>' : `
@@ -1246,13 +1260,6 @@ function pageAdvisor() {
     <div class="bar"><i style="width:${Math.round(ind)}%"></i></div>
     <div class="adv-days">${r.independenceDays.map((d) => `<span title="${Math.round(d.v)}%"><i style="height:${Math.max(4, Math.round(d.v))}%"></i><small>${Number(d.date.slice(8))}</small></span>`).join('')}</div>`}
   </section>
-
-  <div class="stats">
-    ${stat('متوسط الإنتاج', fmt.kwh(r.avgPv), 'ك.و.س / يوم', 'c-amber')}
-    ${stat('متوسط الاستهلاك', fmt.kwh(r.avgLoad), 'ك.و.س / يوم', 'c-sky')}
-    ${stat('شحن من الألواح', fmt.kwh(r.solarChg), 'ك.و.س في الفترة', 'c-green')}
-    ${stat('شحن من الكهرباء', fmt.kwh(r.gridChg), 'ك.و.س في الفترة', 'c-violet')}
-  </div>
 
   <section class="card"><div class="card-h"><h2>${icons.battery} استخدام البطارية</h2></div>
     ${kv([
@@ -1268,10 +1275,9 @@ function pageAdvisor() {
     ${b.soh == null ? '<p class="hint">جهازك لا يرسل حالة صحة البطارية (SOH)، لذلك لا نعرض نسبة تدهور مقدّرة حتى لا تكون مضلّلة.</p>' : ''}
   </section>
 
-  <h3 class="sec-h">توصيات</h3>
-  ${r.tips.length ? r.tips.map((t) => `<section class="card adv-tip ${lvl[t.level]}"><b>${esc(t.title)}</b><p>${esc(t.text)}</p></section>`).join('') : '<div class="empty">لا توجد أيام كاملة كافية للتحليل بعد. يحتاج المستشار إلى سجل يوم كامل على الأقل.</div>'}
+  ${r.tips.length ? r.tips.map((t) => `<section class="card adv-tip ${lvl[t.level]}"><b>${esc(t.title)}</b><p>${esc(t.text)}</p></section>`).join('') : '<div class="empty">لا توجد أيام كاملة كافية للتحليل بعد. يلزم سجل يوم كامل على الأقل.</div>'}
 
-  <p class="hint">كل الأرقام هنا من سجل جهازك الفعلي أو محسوبة منه مباشرة، والتوصيات مبنية على قواعد ثابتة وليست ذكاءً اصطناعياً.</p>
+  <p class="hint">كل الأرقام من سجل جهازك الفعلي أو محسوبة منه مباشرة، والملاحظات مبنية على قواعد ثابتة وليست ذكاءً اصطناعياً. هي إرشادات عامة، وتبقى مواصفات الشركة المصنعة لجهازك وبطاريتك هي المرجع.</p>
   <button class="btn ghost wide" id="advReload">${icons.refresh} إعادة التحليل</button>`;
 }
 AFTER.advisor = () => {
@@ -1632,11 +1638,6 @@ function smartList(list) {
 }
 
 function viewTips() {
-  if (state.page === 'tips/smart') {
-    const list = smartTips(state.model, state.prefs);
-    return `${state.demo ? banner() : ''}${list.length ? smartList(list) : '<div class="empty">لا توجد بيانات من الجهاز بعد.</div>'}
-      <p class="hint">هذه النصائح مبنية على قراءات جهازك وإعداداته الحالية وتتحدّث تلقائياً. هي إرشادات عامة، وتبقى مواصفات الشركة المصنعة لجهازك وبطاريتك هي المرجع.</p>`;
-  }
   const sec = TIP_SECTIONS.find((x) => 'tips/' + x.id === state.page);
   if (sec) {
     return `<section class="hero ${sec.color}"><span class="g-deco">${icons[sec.icon]}</span><div class="h-ic">${icons[sec.icon]}</div>
@@ -1645,14 +1646,12 @@ function viewTips() {
         <article class="tip ${sec.color}"><span class="tip-n">${i + 1}</span>
           <div><h3>${esc(title)}</h3><p>${esc(body).replace(/\n/g, '<br>')}</p></div></article>`).join('')}</div>`;
   }
-  const smart = smartTips(state.model, state.prefs);
-  const urgent = smart.filter((t) => t.level === 'bad' || t.level === 'warn').length;
   const tod = tipOfDay();
   return `
   <section class="intro"><h2>نصائح وإرشادات</h2><p>لتستفيد من منظومتك بأمان وتطيل عمر الإنفرتر والبطارية.</p></section>
   <section class="tod"><div class="tod-h">${icons.star}<span>نصيحة اليوم · ${esc(tod.section)}</span></div>
     <b>${esc(tod.title)}</b><p>${esc(tod.body).replace(/\n/g, '<br>')}</p></section>
-  ${listCards([{ page: 'tips/smart', title: 'نصائح لجهازك الآن', sub: state.model ? `${smart.length} ملاحظة من قراءات جهازك وإعداداته` : 'تظهر بعد وصول بيانات الجهاز', icon: icons.bulb, color: urgent ? 'c-pink' : 'c-violet', badge: urgent ? `${urgent} مهم` : '' }])}
+  ${listCards([{ page: 'reports:advisor', title: 'ملاحظات على جهازك الآن', sub: 'نصائح من قراءات جهازك وإعداداته في «التقارير»', icon: icons.bulb, color: 'c-violet' }])}
   ${gridCards(TIP_SECTIONS.map((t) => ({ page: 'tips/' + t.id, title: t.title, sub: t.sub, icon: icons[t.icon], color: t.color, value: '', badge: countAr(t.tips.length, ['نصيحة واحدة', 'نصيحتان', 'نصائح', 'نصيحة']) })))}`;
 }
 
@@ -1737,7 +1736,6 @@ function viewMore() {
   const pages = { setup: () => setupGuide(true), edit: pageEdit, calc: () => viewCalc(calcHelpers()), settings: pageSettings, about: pageAbout, update: pageUpdate };
   if (state.page && pages[state.page]) return pages[state.page]();
   const themeName = { auto: 'تلقائي', dark: 'ليلي', light: 'نهاري' }[state.prefs.theme];
-  const urgent = smartTips(state.model, state.prefs).filter((t) => t.level === 'bad' || t.level === 'warn').length;
   return `
   <section class="dev-card dev-top">
     <div class="dev-av">${icons.user}</div>
@@ -1747,7 +1745,7 @@ function viewMore() {
   ${listCards([
     { page: 'edit', title: 'إعدادات الإنفرتر', sub: 'تغيير الأولويات وتيارات الشحن عن بُعد', icon: icons.wrench, color: 'c-pink' },
     { page: 'calc', title: 'حاسبة الأحمال', sub: 'تحويل الأمبير والواط، وهل يتحمّل الإنفرتر أجهزة بيتك', icon: icons.calc, color: 'c-green' },
-    { page: 'tips', title: 'النصائح', sub: 'نصائح لجهازك، واستخدام الإنفرتر وبطاريات الليثيوم والسلامة', icon: icons.bulb, color: 'c-amber', badge: urgent ? `${urgent} مهم` : '' },
+    { page: 'tips', title: 'النصائح', sub: 'استخدام الإنفرتر وبطاريات الليثيوم والتوفير والسلامة', icon: icons.bulb, color: 'c-amber' },
     { page: 'setup', title: 'ربط الجهاز والحساب', sub: 'إنشاء حساب، إعداد الواي فاي (Wi-Fi Config)، البلوتوث', icon: icons.wifi, color: 'c-sky' },
     { page: 'settings', title: 'الإعدادات', sub: `${themeName} · ${state.prefs.batteryAh ? `البطارية ${state.prefs.batteryAh} أمبير ساعة` : 'أدخل سعة البطارية'}`, icon: icons.gauge, color: 'c-violet' },
     { page: 'update', title: 'التحقق من التحديثات', sub: updateAvailable() ? `يتوفر الإصدار ${state.update.version}` : 'الإصدار الحالي ' + VERSION, icon: icons.upgrade, color: 'c-amber', badge: updateAvailable() ? 'جديد' : '' },

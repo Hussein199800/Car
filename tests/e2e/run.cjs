@@ -296,7 +296,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
         home: [null, 'load', 'battery', 'solar', 'grid', 'device'],
         reports: [null, 'advisor', 'day', 'week', 'month', 'compare'],
         alerts: [null, 'rules'],
-        more: [null, 'setup', 'edit', 'calc', 'tips', 'tips/smart', 'tips/lithium', 'settings', 'update', 'about'],
+        more: [null, 'setup', 'edit', 'calc', 'tips', 'tips/lithium', 'settings', 'update', 'about'],
       };
       for (const [tab, pages] of Object.entries(PAGES)) {
         for (const pg of pages) {
@@ -350,6 +350,10 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       const adv = await text(page, '#view');
       check('مستشار الطاقة: مؤشر الاستقلالية واستخدام البطارية والتوصيات', /\d+%/.test(await text(page, '.adv-big b')) && adv.includes('استخدام البطارية') && (await page.$$('.adv-tip')).length > 0, adv.slice(0, 200));
       check('المستشار لا يخترع حالة صحة البطارية', adv.includes('لا يرسل حالة صحة البطارية'));
+      check('ملاحظات الآن وآخر 7 أيام في صفحة واحدة', adv.includes('الآن') && adv.includes('آخر 7 أيام') && (await page.$$('#view .alerts .alert')).length > 0);
+      await page.evaluate(() => window.__nav('more', 'tips'));
+      await page.click('[data-page="reports:advisor"]'); await page.waitForTimeout(300);
+      check('بطاقة ملاحظات الجهاز في النصائح تفتح صفحة التقارير', (await text(page, '.page-title')) === 'ملاحظات على منظومتك' && !!(await page.$('.tabbar [data-tab=reports].on')));
       await page.evaluate(() => window.__nav('reports', 'day'));
       await page.waitForTimeout(1500);
       const day = await text(page, '#view');
