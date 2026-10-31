@@ -48,7 +48,10 @@ const ERROR_AR = {
 // الخادم يضيف أحياناً تفاصيل بعد الرمز مثل «ERR_UNSUPPORTED(cmd is null!!)»
 export function errorAr(desc, code) {
   const key = String(desc || '').match(/^ERR_[A-Z_]+/)?.[0];
-  return ERROR_AR[desc] || (key && ERROR_AR[key]) || desc || `خطأ ${code}`;
+  if (ERROR_AR[desc] || (key && ERROR_AR[key])) return ERROR_AR[desc] || ERROR_AR[key];
+  // رمز غير معروف: رسالة عربية مع الرمز للمساعدة في التشخيص بدل عرض الرمز الإنجليزي وحده
+  if (key) return `رفض خادم WatchPower الطلب (${desc})`;
+  return desc || `خطأ من الخادم (${code})`;
 }
 
 export class WatchPowerApi {
@@ -67,11 +70,16 @@ export class WatchPowerApi {
   }
 
   async login(usr, password) {
+    return this.loginWithHash(usr, await sha1(password));
+  }
+
+  // الدخول ببصمة كلمة المرور (من النسخة الاحتياطية) دون معرفة كلمة المرور نفسها
+  async loginWithHash(usr, pwdHash, preferred = 'dess') {
     this.usr = usr.trim();
-    this.pwdHash = await sha1(password);
+    this.pwdHash = pwdHash;
     let lastErr;
     // بعض الحسابات تعمل على خادم DessMonitor وأخرى على ShineMonitor
-    for (const profile of ['dess', 'shine']) {
+    for (const profile of preferred === 'shine' ? ['shine', 'dess'] : ['dess', 'shine']) {
       this.profile = profile;
       try {
         await this.authenticate();

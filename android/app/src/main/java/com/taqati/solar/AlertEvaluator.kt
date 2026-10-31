@@ -19,6 +19,8 @@ data class Snapshot(
     val batW: Double?,
     val mode: String?,
     val fault: String?,
+    val batTemp: Double? = null,
+    val invTemp: Double? = null,
 )
 
 data class MonitorConfig(
@@ -31,8 +33,9 @@ data class MonitorConfig(
     val alertOffline: Boolean = true,
     val alertFull: Boolean = true,
     val notify: Boolean = true,
-    val invLabel: String = "الإنفرتر",
-    val gridLabel: String = "كهرباء الشبكة",
+    val alertTemp: Boolean = true,
+    val tempBat: Int = 50,
+    val tempInv: Int = 75,
 ) {
     companion object {
         fun fromJson(o: JSONObject) = MonitorConfig(
@@ -45,13 +48,13 @@ data class MonitorConfig(
             alertOffline = o.optBoolean("alertOffline", true),
             alertFull = o.optBoolean("alertFull", true),
             notify = o.optBoolean("notify", true),
-            invLabel = o.optString("invLabel", "الإنفرتر"),
-            gridLabel = o.optString("gridLabel", "كهرباء الشبكة"),
+            alertTemp = o.optBoolean("alertTemp", true),
+            tempBat = o.optInt("tempBat", 50),
+            tempInv = o.optInt("tempInv", 75),
         )
     }
 }
 
-/** نص بصيغة التطبيق: «الرافع» و«الكهرباء الوطنية» تُحوّلان عند العرض حسب اختيار المستخدم. */
 data class Event(val title: String, val body: String, val kind: String) {
     fun toJson(at: Long): JSONObject = JSONObject().put("title", title).put("body", body).put("kind", kind).put("at", at)
 }
@@ -85,6 +88,12 @@ object AlertEvaluator {
         val dis = num(find(points, Regex("^battery discharg.* current")))
         val modeRaw = find(points, Regex("^working state$"), Regex("^work mode$"), Regex("^operating mode$"), Regex("^mode$"), Regex("^model$"))
         val fault = find(points, Regex("^inverter fault"), Regex("^fault code"), Regex("^fault$"))
+        // الحرارة كما في extract في model.js: نتجاهل الصفر والقيم غير المنطقية
+        val temps = points.mapNotNull { p ->
+            val t = p.title.trim().lowercase()
+            if (!t.contains("temp")) return@mapNotNull null
+            num(p.value)?.takeIf { it > 0 && it < 150 }?.let { (t.contains("bat")) to it }
+        }
         return Snapshot(
             tsRaw = parseTs(find(points, Regex("^timestamp$"), Regex("^time$"), Regex("^date$"))),
             soc = num(find(points, Regex("^battery capacity"), Regex("^soc$"), Regex("state of charge"))),
@@ -95,6 +104,8 @@ object AlertEvaluator {
             batW = if (batV != null && (chg != null || dis != null)) batV * ((chg ?: 0.0) - (dis ?: 0.0)) else null,
             mode = modeRaw?.takeIf { it.contains("mode", ignoreCase = true) },
             fault = fault?.takeUnless { it.isBlank() || it.trim().all { c -> c == '-' } || it.trim().all { c -> c == '0' } },
+            batTemp = temps.filter { it.first }.maxOfOrNull { it.second },
+            invTemp = temps.filter { !it.first }.maxOfOrNull { it.second },
         )
     }
 
@@ -109,12 +120,12 @@ object AlertEvaluator {
         // في الخلفية لا يوجد «أول قراءة» غامضة: الواجهة سلّمت الحالة الأخيرة قبل الإغلاق
         if (stale && flags.opt("offline") != true) {
             flags.put("offline", true)
-            faults += Event("انقطع اتصال الرافع", "لم تصل قراءات جديدة", "offline")
-            if (cfg.alertOffline) alerts += Event("الرافع غير متصل", "لم تصل قراءات جديدة منذ ${minutesAgo(now - (ts ?: now))}. قد يكون الرافع مطفأً أو مفصولاً.", "bad")
+            faults += Event("انقطع اتصال الإنفرتر", "لم تصل قراءات جديدة", "offline")
+            if (cfg.alertOffline) alerts += Event("الإنفرتر غير متصل", "لم تصل قراءات جديدة منذ ${minutesAgo(now - (ts ?: now))}. قد يكون الإنفرتر مطفأً أو مفصولاً.", "bad")
         } else if (!stale && was("offline")) {
             if (flags.opt("offline") == true) {
-                faults += Event("عاد اتصال الرافع", "وصلت قراءة جديدة", "online")
-                if (cfg.alertOffline) alerts += Event("عاد اتصال الرافع", "وصلت قراءات جديدة من الجهاز", "ok")
+                faults += Event("عاد اتصال الإنفرتر", "وصلت قراءة جديدة", "online")
+                if (cfg.alertOffline) alerts += Event("عاد اتصال الإنفرتر", "وصلت قراءات جديدة من الجهاز", "ok")
             }
             flags.put("offline", false)
         }
@@ -155,14 +166,28 @@ object AlertEvaluator {
                 faults += Event("حمل زائد", "${pct.toInt()}%", "warn")
             })
         }
+        if (cfg.alertTemp) {
+            s.batTemp?.let { t ->
+                edge("hotBat", hold("hotBat", t >= cfg.tempBat, t > cfg.tempBat - 5), {
+                    alerts += Event("حرارة البطارية مرتفعة", "${t.toInt()}° — الحد ${cfg.tempBat}°. خفّف الحمل وتأكد من تهوية مكان البطارية.", "bad")
+                    faults += Event("حرارة البطارية مرتفعة", "${t.toInt()}°", "warn")
+                })
+            }
+            s.invTemp?.let { t ->
+                edge("hotInv", hold("hotInv", t >= cfg.tempInv, t > cfg.tempInv - 5), {
+                    alerts += Event("حرارة الإنفرتر مرتفعة", "${t.toInt()}° — الحد ${cfg.tempInv}°. خفّف الحمل وتأكد أن فتحات التهوية والمراوح تعمل.", "bad")
+                    faults += Event("حرارة الإنفرتر مرتفعة", "${t.toInt()}°", "warn")
+                })
+            }
+        }
         if (cfg.alertGrid && s.gridV != null) {
             val gridOn = s.gridV >= 0.4 * (s.gridRatedV ?: 230.0)
             edge("gridOff", !gridOn, {
-                alerts += Event("انقطعت الكهرباء الوطنية", "المنظومة تعمل على البطارية${s.soc?.let { " (${it.toInt()}%)" } ?: ""}", "warn")
-                faults += Event("انقطاع الكهرباء الوطنية", "جهد الشبكة ${s.gridV.toInt()} فولت", "grid")
+                alerts += Event("انقطعت كهرباء الشبكة", "المنظومة تعمل على البطارية${s.soc?.let { " (\u2066${it.toInt()}%\u2069)" } ?: ""}", "warn")
+                faults += Event("انقطاع كهرباء الشبكة", "جهد الشبكة ${s.gridV.toInt()} فولت", "grid")
             }, {
-                alerts += Event("عادت الكهرباء الوطنية", "الجهد ${s.gridV.toInt()} فولت", "ok")
-                faults += Event("عودة الكهرباء الوطنية", "جهد الشبكة ${s.gridV.toInt()} فولت", "online")
+                alerts += Event("عادت كهرباء الشبكة", "الجهد ${s.gridV.toInt()} فولت", "ok")
+                faults += Event("عودة كهرباء الشبكة", "جهد الشبكة ${s.gridV.toInt()} فولت", "online")
             })
         }
         return Outcome(alerts, faults, flags)
@@ -187,10 +212,6 @@ object AlertEvaluator {
         if (h < 24) return countAr(h, HOUR) + if (m % 60 != 0L) " و" + countAr(m % 60, MIN) else ""
         return countAr(h / 24, DAY)
     }
-
-    /** نص الإشعار بالمصطلحات التي اختارها المستخدم */
-    fun localize(text: String, cfg: MonitorConfig): String =
-        text.replace("الكهرباء الوطنية", cfg.gridLabel).replace("الرافع", cfg.invLabel).replace("الإنفرتر", cfg.invLabel)
 
     fun appendCapped(arr: JSONArray, items: List<JSONObject>, cap: Int): JSONArray {
         val out = JSONArray()

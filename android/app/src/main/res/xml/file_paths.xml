@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- مشاركة ملفات التقارير المصدّرة من مجلد الذاكرة المؤقتة فقط -->
+<!-- مشاركة الملفات المصدّرة وتسليم التحديث المحمّل لمثبّت أندرويد، من مجلد الذاكرة المؤقتة فقط -->
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <cache-path name="exports" path="." />
 </paths>

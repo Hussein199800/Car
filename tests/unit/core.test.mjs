@@ -1,9 +1,9 @@
-// اختبارات وحدة للمنطق الأساسي (بدون متصفح): التوقيع، تحليل القراءات، كشف الانقطاع، المصطلحات، الملخصات
+// اختبارات وحدة للمنطق الأساسي (بدون متصفح): التوقيع، تحليل القراءات، كشف الانقطاع، المصطلحات الثابتة، الملخصات
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { sha1, quotePlus } from '../../src/api.js';
 import { normalize, parseTs, countAr, fmt, rowsToSamples } from '../../src/model.js';
-import { makeLocalizer } from '../../src/terms.js';
+import fs from 'node:fs';
 import { trTitle, trValue } from '../../src/i18n.js';
 import { summarize } from '../../src/data.js';
 import { smartTips } from '../../src/tips.js';
@@ -26,7 +26,7 @@ test('التوقيع والترميز مطابقان لـ Kotlin وبايثون'
     'e246ea2b10e9d70d26173b2e13a8b6ad0f779846');
 });
 
-test('قراءة قديمة تعني أن الرافع غير متصل، والحديثة متصلة', () => {
+test('قراءة قديمة تعني أن الإنفرتر غير متصل، والحديثة متصلة', () => {
   const stale = normalize(device(99), 15);
   assert.equal(stale.stale, true);
   assert.equal(stale.mode, 'Battery Mode');
@@ -65,13 +65,13 @@ test('ترجمة الحقول والقيم', () => {
   assert.equal(trValue('Lib'), 'ليثيوم');
 });
 
-test('المصطلحات تتغير بكل صيغها ولا تمس «إنفرتر» بين قوسين', () => {
-  const L = makeLocalizer({ invTerm: 'akis', gridTerm: 'grid' });
-  assert.equal(L('إعدادات الرافع للرافع'), 'إعدادات العاكس للعاكس');
-  assert.equal(L('انقطعت الكهرباء الوطنية'), 'انقطعت كهرباء الشبكة');
-  assert.equal(L('للكهرباء الوطنية'), 'لكهرباء الشبكة');
-  assert.equal(L('مكيفات «إنفرتر»'), 'مكيفات «إنفرتر»');
-  assert.equal(makeLocalizer({ invTerm: 'rafe', gridTerm: 'watani' })('عطل في الإنفرتر'), 'عطل في الرافع');
+test('المصطلحات ثابتة: «الإنفرتر» و«كهرباء الشبكة» في كل النصوص', () => {
+  const dirs = ['src', 'android/app/src/main/java/com/taqati/solar'];
+  const files = dirs.flatMap((d) => fs.readdirSync(d).filter((f) => /\.(js|kt)$/.test(f)).map((f) => `${d}/${f}`));
+  const old = files.filter((f) => /رافع|الكهرباء الوطنية|العاكس/.test(fs.readFileSync(f, 'utf8')));
+  assert.deepEqual(old, [], 'بقايا مصطلحات قديمة');
+  assert.ok(fs.readFileSync('src/calc.js', 'utf8').includes("'مكيف 1 طن إنفرتر'"), 'نوع المكيف يبقى «إنفرتر»');
+  assert.equal(trTitle('Grid Voltage'), 'جهد كهرباء الشبكة');
 });
 
 test('ملخص اليوم يتجاهل الفجوات الطويلة ويأخذ الإنتاج من عدّاد الجهاز', () => {
@@ -153,7 +153,8 @@ test('نطاق الإعداد من ملاحظة الجهاز', () => {
 test('أخطاء الخادم مترجمة حتى مع التفاصيل الإضافية', () => {
   assert.equal(errorAr('ERR_UNSUPPORTED(cmd is null!!)', 9), 'هذا الإعداد لا يدعم قراءة قيمته الحالية');
   assert.match(errorAr('ERR_SYSTEM_EXCEPTION', 1), /لم يستطع خادم/);
-  assert.equal(errorAr('', 7), 'خطأ 7');
+  assert.equal(errorAr('', 7), 'خطأ من الخادم (7)');
+  assert.equal(errorAr('ERR_NEW_THING', 3), 'رفض خادم WatchPower الطلب (ERR_NEW_THING)', 'رمز غير معروف لا يُعرض وحده بالإنجليزية');
 });
 
 // ---------- مراجعة الإصدار 3.3: أخطاء حسابية ومنطقية ----------
@@ -202,10 +203,12 @@ test('ملخص الأيام الماضية يُخزَّن نهائياً فقط 
   const mem = new Map();
   globalThis.localStorage = { getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, String(v)), removeItem: (k) => mem.delete(k), get length() { return mem.size; }, key: (i) => [...mem.keys()][i] };
   const date = today(-2);
-  cacheSummary('X', { date, count: 10, source: 'local' });
+  cacheSummary('X', { v: 2, date, count: 10, source: 'local' });
   assert.equal(cachedSummary('X', date), null, 'القراءات المحلية قد تكون جزئية');
-  cacheSummary('X', { date, count: 10, source: 'server' });
+  cacheSummary('X', { v: 2, date, count: 10, source: 'server' });
   assert.equal(cachedSummary('X', date).source, 'server');
+  cacheSummary('X', { date: today(-3), count: 10, source: 'server' });
+  assert.equal(cachedSummary('X', today(-3)), null, 'ملخص بصيغة قديمة يُعاد حسابه بالحقول الجديدة');
   delete globalThis.localStorage;
 });
 
@@ -236,4 +239,192 @@ test('طلبات متزامنة بعد انتهاء الرمز تسجّل الد
   assert.equal(logins, 1);
   await api.authenticate();
   assert.equal(logins, 2, 'بعد انتهاء المحاولة يمكن تسجيل الدخول من جديد');
+});
+
+// ---------- التحديثات من داخل التطبيق ----------
+import { isNewer, parseVer, fetchLatest } from '../../src/update.js';
+import { readFileSync } from 'node:fs';
+
+test('مقارنة الإصدارات', () => {
+  assert.deepEqual(parseVer('v3.4.0'), [3, 4, 0]);
+  assert.equal(isNewer('v3.10.0', '3.9.9'), true);
+  assert.equal(isNewer('3.4.0', '3.4.0'), false);
+  assert.equal(isNewer('3.3.9', '3.4.0'), false);
+  assert.equal(isNewer('garbage', '3.4.0'), false);
+});
+
+test('قراءة آخر إصدار من GitHub واختيار ملف APK من المستودع نفسه فقط', async () => {
+  const ok = (body, status = 200) => async () => ({ status, ok: status < 300, json: async () => body });
+  const rel = { tag_name: 'v3.5.0', body: 'ملاحظات', published_at: '2026-11-01T10:00:00Z', assets: [
+    { name: 'taqati-debug.apk', browser_download_url: 'https://github.com/Hussein199800/Car/releases/download/v3.5.0/taqati-debug.apk' },
+    { name: 'taqati-3.5.0.apk', size: 4800000, browser_download_url: 'https://github.com/Hussein199800/Car/releases/download/v3.5.0/taqati-3.5.0.apk' },
+  ] };
+  const r = await fetchLatest(ok(rel));
+  assert.equal(r.version, '3.5.0');
+  assert.match(r.url, /taqati-3\.5\.0\.apk$/);
+  assert.equal(await fetchLatest(ok({}, 404)), null, 'لا يوجد إصدار منشور بعد');
+  assert.equal(await fetchLatest(ok({ ...rel, assets: [{ name: 'x.apk', browser_download_url: 'https://evil.example/x.apk' }] })), null);
+  await assert.rejects(fetchLatest(ok({}, 403)), /مشغول/);
+  await assert.rejects(fetchLatest(async () => { throw new Error('net'); }), /تحقق من الإنترنت/);
+});
+
+test('رقم الإصدار موحّد في package.json والتطبيق وأندرويد (وإلا يظهر تحديث وهمي)', () => {
+  const ver = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url))).version;
+  const main = readFileSync(new URL('../../src/main.js', import.meta.url), 'utf8').match(/const VERSION = '([\d.]+)'/)[1];
+  const gradle = readFileSync(new URL('../../android/app/build.gradle', import.meta.url), 'utf8').match(/versionName "([\d.]+)"/)[1];
+  assert.equal(main, ver);
+  assert.equal(gradle, ver);
+});
+
+// ---------- الإصدار 3.5: مستشار الطاقة والاستقلالية والحرارة ----------
+import { analyze, productionDrop } from '../../src/advisor.js';
+
+const sampleDay = (date, { pv = 0, load = 500, chg = 0, mode = 'Battery Mode', socs = null } = {}) => {
+  const t0 = new Date(date + 'T00:00:00').getTime();
+  return Array.from({ length: 289 }, (_, i) => ({
+    ts: t0 + i * 5 * 60000, outW: load, pvW: pv, batW: chg, gridV: 230, gridRatedV: 230, mode,
+    soc: socs ? socs(i) : 50,
+  }));
+};
+
+test('تقسيم الشحن بين الألواح والكهرباء والاستقلالية', () => {
+  // وضع البطارية: كل الشحن من الألواح ولا شيء من الكهرباء، والاستقلالية 100%
+  const a = summarize('2026-10-20', sampleDay('2026-10-20', { pv: 1500, load: 500, chg: 1000 }), 'server');
+  assert.ok(Math.abs(a.solarChgKwh - 24) < 0.01 && a.gridChgKwh === 0, `${a.solarChgKwh} ${a.gridChgKwh}`);
+  assert.equal(Math.round(a.independence), 100);
+  // وضع الشبكة: الحمل من الكهرباء، والشحن 1000 واط منها 300 من الألواح و700 من الكهرباء
+  const b = summarize('2026-10-21', sampleDay('2026-10-21', { pv: 300, load: 500, chg: 1000, mode: 'Line Mode' }), 'server');
+  assert.ok(Math.abs(b.solarChgKwh - 7.2) < 0.01 && Math.abs(b.gridChgKwh - 16.8) < 0.01);
+  assert.equal(b.independence, 0);
+  // بدون وضع التشغيل لا نحسب الاستقلالية
+  const c = summarize('2026-10-22', sampleDay('2026-10-22', { mode: null }), 'server');
+  assert.equal(c.independence, null);
+  assert.equal(c.gridLoadKwh, null);
+});
+
+test('أدنى وأعلى نسبة للبطارية مع الوقت، ووقت الامتلاء', () => {
+  const socs = (i) => (i < 72 ? 40 - i / 6 : Math.min(100, 28 + (i - 72) / 2));
+  const s = summarize('2026-10-23', sampleDay('2026-10-23', { socs }), 'server');
+  assert.equal(s.socMin, 28);
+  assert.equal(new Date(s.socMinAt).getHours(), 6);
+  assert.equal(s.socMax, 100);
+  assert.equal(new Date(s.fullAt).getHours(), 18);
+  assert.equal(s.socMaxAt, s.fullAt, 'أول وصول لأعلى نسبة');
+});
+
+test('الحرارة تُقرأ فقط إن أرسلها الجهاز، ويُتجاهل الصفر', () => {
+  assert.equal(normalize(device(2)).temps.length, 0);
+  const m = normalize(device(2, { 'Inverter heat sink temperature': '61', 'Battery Temperature': '0' }));
+  assert.equal(m.invTemp, 61);
+  assert.equal(m.batTemp, null);
+  assert.equal(m.temps[0].ar, 'حرارة المبدّد الحراري');
+});
+
+test('مستشار الطاقة: توصيات من بيانات فعلية فقط', () => {
+  const sums = [];
+  for (let d = 20; d <= 27; d++) {
+    const date = `2026-10-${d}`;
+    const low = d === 25;
+    sums.push(summarize(date, sampleDay(date, { pv: d === 26 ? 200 : 1200, load: 600, chg: 300, socs: (i) => (low ? 20 + (i % 50) : Math.min(100, 50 + i / 3)) }), 'server'));
+  }
+  const r = analyze(sums, { todayKey: '2026-10-27', prefs: { lowSoc: 30, batteryAh: 200, cutoffSoc: 20 }, ratedW: 6500, volts: 48 });
+  assert.equal(r.days, 7, 'اليوم الجاري لا يدخل في المتوسطات');
+  assert.equal(Math.round(r.independence), 100);
+  assert.ok(Math.abs(r.cap - 9.6) < 1e-9);
+  const titles = r.tips.map((t) => t.title);
+  assert.ok(titles.includes('البطارية تنخفض كثيراً'), titles.join('|'));
+  assert.ok(titles.includes('انخفاض في الإنتاج'), 'إنتاج آخر يوم أقل بكثير من المعتاد');
+  assert.ok(!titles.includes('شحن من كهرباء الشبكة'), 'لا شحن من الكهرباء في وضع البطارية');
+  assert.equal(r.battery.soh, null, 'لا نخترع حالة صحة غير مرسلة');
+});
+
+test('انخفاض الإنتاج بسبب امتلاء البطارية يُشرح', () => {
+  const days = [5, 5, 5, 5, 2].map((pv, i) => ({ date: `2026-10-1${i}`, pvKwh: pv, fullAt: i === 4 ? new Date(2026, 9, 14, 11, 30).getTime() : null }));
+  const d = productionDrop(days);
+  assert.equal(Math.round(d.by), 60);
+  assert.match(d.text, /امتلأت/);
+  assert.equal(productionDrop(days.slice(0, 3)), null, 'تحتاج 4 أيام على الأقل');
+});
+
+test('التواريخ والأوقات بالأرقام 0-9 دائماً', () => {
+  const t = new Date(2026, 9, 30, 13, 5).getTime();
+  for (const v of [fmt.time(t), fmt.dateTime(t), fmt.day('2026-10-30', { weekday: 'long', day: 'numeric', month: 'long' })]) {
+    assert.ok(!/[\u0660-\u0669\u06F0-\u06F9]/.test(v), v);
+    assert.ok(/[0-9]/.test(v), v);
+  }
+  assert.equal(fmt.iso(t), '2026-10-30 13:05:00');
+});
+
+test('الوحدات بالعربية في المخطط أيضاً', () => {
+  assert.equal(fmt.wShort(408), '408 واط');
+  assert.equal(fmt.wShort(4230), '4.2 ك.واط');
+  assert.equal(fmt.wShort(null), '—');
+});
+
+// ---------- السجل الموحّد ----------
+import { toEvents, migrateLog, addEvents, catOf, LOG_CAP } from '../../src/log.js';
+
+test('ترحيل السجلين القديمين: كل حدث مرة واحدة والتنبيه غير المقروء يبقى كذلك', () => {
+  const t = 1_800_000_000_000;
+  const faults = [
+    { kind: 'grid', title: 'انقطاع الكهرباء الوطنية', body: 'جهد الشبكة 0 فولت', at: t },
+    { kind: 'offline', title: 'انقطع اتصال الرافع', body: 'آخر قراءة', at: t + 60_000 },
+    { kind: 'info', title: 'تغيير إعداد', body: 'أولوية مصدر الخرج ← SBU', at: t + 120_000 },
+    { kind: 'comm', title: 'تعذّر الاتصال بالخادم', body: 'تعذّر الاتصال', at: t + 180_000 },
+  ];
+  const alerts = [
+    { kind: 'warn', title: 'انقطعت الكهرباء الوطنية', body: 'المنظومة تعمل على البطارية', at: t + 3, read: false },
+    { kind: 'bad', title: 'الرافع غير متصل', body: 'لم تصل قراءات جديدة', at: t + 60_002, read: true },
+    { kind: 'bad', title: 'البطارية منخفضة', body: 'نسبة الشحن 25%', at: t + 4, read: false },
+  ];
+  const log = migrateLog(alerts, faults);
+  assert.equal(log.length, 5, 'التنبيهان التوأمان لا يتكرران، وتنبيه البطارية يبقى مستقلاً');
+  const grid = log.find((e) => e.cat === 'grid');
+  assert.equal(grid.title, 'انقطعت الكهرباء الوطنية', 'نص الإشعار أوضح من نص الحدث');
+  assert.equal(grid.read, false);
+  assert.equal(log.find((e) => e.cat === 'conn' && /غير متصل/.test(e.title)).read, true);
+  assert.deepEqual(log.map((e) => e.cat).sort(), ['bat', 'conn', 'conn', 'grid', 'set']);
+  assert.ok(log.every((e, i) => i === 0 || log[i - 1].at >= e.at), 'الأحدث أولاً');
+});
+
+test('أحداث الخلفية من Kotlin تُوحَّد عند الاستلام وتبقى غير مقروءة', () => {
+  const at = 1_800_000_500_000;
+  const fresh = toEvents(
+    [{ title: 'انقطعت كهرباء الشبكة', body: 'المنظومة تعمل على البطارية', kind: 'warn', at }, { title: 'البطارية ممتلئة', body: '100%', kind: 'ok', at }],
+    [{ title: 'انقطاع كهرباء الشبكة', body: 'جهد الشبكة 0 فولت', kind: 'grid', at }, { title: 'حمل زائد', body: '85%', kind: 'warn', at }],
+  );
+  assert.equal(fresh.length, 3);
+  assert.equal(fresh.filter((e) => e.read === false).length, 2, 'التنبيهان غير مقروءين، والحدث بلا إشعار مقروء');
+  assert.equal(catOf({ title: 'حمل زائد', kind: 'warn' }), 'fault');
+  assert.equal(catOf({ title: 'عادت كهرباء الشبكة', kind: 'ok' }), 'grid');
+  const many = Array.from({ length: LOG_CAP + 50 }, (_, i) => ({ cat: 'conn', level: 'info', title: 'x', body: '', at: i, read: true }));
+  assert.equal(addEvents(many, fresh).length, LOG_CAP);
+  assert.equal(addEvents(many, fresh)[0].at, at, 'الحدث الجديد في أول السجل');
+});
+
+// ---------- نسبة التغيّر في التقارير ----------
+import { trendDates, change } from '../../src/trend.js';
+
+test('نسبة التغيّر: الأيام المكتملة فقط مقابل نفس عددها من الفترة السابقة', () => {
+  const week = ['2026-10-25', '2026-10-26', '2026-10-27', '2026-10-28', '2026-10-29', '2026-10-30', '2026-10-31'];
+  const w = trendDates('week', week, '2026-10-31');
+  assert.deepEqual(w.cur, week.slice(0, 6), 'اليوم الجاري لا يدخل');
+  assert.deepEqual(w.prev, ['2026-10-18', '2026-10-19', '2026-10-20', '2026-10-21', '2026-10-22', '2026-10-23']);
+  const march = Array.from({ length: 31 }, (_, i) => `2026-03-${String(i + 1).padStart(2, '0')}`);
+  const m = trendDates('month', march, '2026-04-02');
+  assert.equal(m.prev.length, 28, 'فبراير أقصر فنقارن أول 28 يوماً');
+  assert.equal(m.cur.length, 28);
+  assert.equal(m.prev[0], '2026-02-01');
+  const jan = trendDates('month', ['2026-01-01', '2026-01-02', '2026-01-03'], '2026-01-03');
+  assert.deepEqual(jan.prev, ['2025-12-01', '2025-12-02'], 'يناير يقابله ديسمبر من السنة السابقة');
+  assert.deepEqual(trendDates('week', ['2026-10-31'], '2026-10-31'), { cur: [], prev: [] });
+});
+
+test('اتجاه التغيّر ولونه حسب ما هو أفضل', () => {
+  assert.deepEqual(change(120, 100, 'up'), { pct: 20, cls: 'good', text: '▲ 20%' });
+  assert.equal(change(120, 100, 'down').cls, 'bad', 'زيادة الاستهلاك سيئة');
+  assert.equal(change(80, 100, 'down').text, '▼ 20%');
+  assert.equal(change(100.4, 100).cls, '', 'أقل من 1% بلا لون');
+  assert.equal(change(5, 0), null, 'لا مقارنة مع صفر');
+  assert.equal(change(null, 10), null);
 });

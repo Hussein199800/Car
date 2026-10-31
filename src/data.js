@@ -32,7 +32,8 @@ export function addDays(date, n) {
 }
 
 // ---------- تسجيل القراءات محلياً (يعمل كاحتياط عند تعذّر سجل الخادم) ----------
-const REC_FIELDS = ['ts', 'pvW', 'outW', 'soc', 'batV', 'gridV', 'batW', 'todayWh', 'mode', 'gridRatedV'];
+// تُضاف الحقول الجديدة في آخر القائمة فقط حتى تبقى السجلات القديمة مقروءة
+const REC_FIELDS = ['ts', 'pvW', 'outW', 'soc', 'batV', 'gridV', 'batW', 'todayWh', 'mode', 'gridRatedV', 'temp'];
 const KEEP_DAYS = 62;
 
 export function recordSample(sn, s) {
@@ -57,17 +58,39 @@ function pruneRecords(sn, keepDays) {
 // ---------- ملخص يوم ----------
 const MAX_GAP_H = 0.34; // فجوة أكبر من 20 دقيقة تعني انقطاع البيانات فلا نحسبها
 
+// «Line Mode»: البيت يتغذى من كهرباء الشبكة مباشرة عبر الإنفرتر
+const isLine = (m) => /line|utility|bypass/i.test(m || '');
+
 export function summarize(date, samples, source) {
   const s = samples.filter((x) => x.ts);
   let loadWh = 0, pvWh = 0, gridH = 0, batH = 0, coveredH = 0;
+  let chgWh = 0, disWh = 0, solarChgWh = 0, gridChgWh = 0, gridLoadWh = 0, nightLoadWh = 0, modeH = 0;
   for (let i = 1; i < s.length; i++) {
     const dt = (s[i].ts - s[i - 1].ts) / 36e5;
     if (dt <= 0 || dt > MAX_GAP_H) continue;
+    const x = s[i];
     coveredH += dt;
-    if (s[i].outW != null) loadWh += s[i].outW * dt;
-    if (s[i].pvW != null) pvWh += s[i].pvW * dt;
-    if (gridPresent(s[i].gridV, s[i].gridRatedV)) gridH += dt;
-    if (/battery/i.test(s[i].mode || '') || (s[i].batW != null && s[i].batW < -20)) batH += dt;
+    const grid = gridPresent(x.gridV, x.gridRatedV);
+    if (x.outW != null) loadWh += x.outW * dt;
+    if (x.pvW != null) pvWh += x.pvW * dt;
+    if (grid) gridH += dt;
+    if (/battery/i.test(x.mode || '') || (x.batW != null && x.batW < -20)) batH += dt;
+    // من أين جاء شحن البطارية؟ الألواح تشحن بما لا يتجاوز إنتاجها، والباقي من الكهرباء
+    // ولا يحدث شحن من الكهرباء إلا في وضع الشبكة (Line Mode)
+    if (x.batW != null) {
+      const chg = Math.max(0, x.batW), dis = Math.max(0, -x.batW);
+      chgWh += chg * dt;
+      disWh += dis * dt;
+      const fromGrid = x.mode ? isLine(x.mode) : grid;
+      const solar = fromGrid ? Math.min(chg, Math.max(0, x.pvW || 0)) : chg;
+      solarChgWh += solar * dt;
+      gridChgWh += (chg - solar) * dt;
+    }
+    if (x.mode) {
+      modeH += dt;
+      if (isLine(x.mode) && x.outW != null) gridLoadWh += x.outW * dt;
+    }
+    if ((x.pvW ?? 0) < 20 && x.outW != null) nightLoadWh += x.outW * dt;
   }
   // عدّاد «إنتاج اليوم» في الجهاز قد يحمل قيمة الأمس لدقائق بعد منتصف الليل قبل أن يُصفَّر،
   // فنأخذ القيم بعد آخر تصفير فقط
@@ -78,7 +101,22 @@ export function summarize(date, samples, source) {
   const today = meter;
   const socs = s.map((x) => x.soc).filter((v) => v != null);
   const loads = s.map((x) => x.outW).filter((v) => v != null);
+  // أول وقت لأدنى وأعلى نسبة شحن، ووقت امتلاء البطارية
+  let minAt = null, maxAt = null, fullAt = null;
+  for (const x of s) {
+    if (x.soc == null) continue;
+    if (minAt === null || x.soc < minAt.soc) minAt = x;
+    if (maxAt === null || x.soc > maxAt.soc) maxAt = x;
+    if (fullAt === null && x.soc >= 100) fullAt = x;
+  }
+  const temps = s.map((x) => x.temp).filter((v) => v != null);
+  const kwh = (wh) => (s.length > 1 ? wh / 1000 : null);
+  // الاستقلالية: نسبة استهلاك البيت التي لم تأتِ من كهرباء الشبكة (لا مباشرة ولا عبر شحن البطارية).
+  // نحسبها فقط إذا كان وضع التشغيل معروفاً في معظم الوقت، وإلا لا يمكن الفصل بدقة
+  const modeKnown = coveredH > 0 && modeH / coveredH >= 0.8;
+  const independence = modeKnown && loadWh > 0 ? Math.max(0, Math.min(100, (1 - (gridLoadWh + gridChgWh) / loadWh) * 100)) : null;
   return {
+    v: 2,
     date,
     source,
     count: s.length,
@@ -92,11 +130,24 @@ export function summarize(date, samples, source) {
     gridH,
     batH,
     coveredH,
+    socMinAt: minAt?.ts ?? null,
+    socMaxAt: maxAt?.ts ?? null,
+    fullAt: fullAt?.ts ?? null,
+    chgKwh: kwh(chgWh),
+    disKwh: kwh(disWh),
+    solarChgKwh: kwh(solarChgWh),
+    gridChgKwh: kwh(gridChgWh),
+    gridLoadKwh: modeKnown ? kwh(gridLoadWh) : null,
+    nightLoadKwh: kwh(nightLoadWh),
+    independence,
+    tempMax: temps.length ? Math.max(...temps) : null,
   };
 }
 
+// ملخصات الإصدارات السابقة لا تحتوي الحقول الجديدة (v: 2)، فنعيد حسابها مرة واحدة
 export function cachedSummary(sn, date) {
-  return store.get(`sum.${sn}.${date}`, null);
+  const c = store.get(`sum.${sn}.${date}`, null);
+  return c && c.v === 2 ? c : null;
 }
 export function cacheSummary(sn, sum) {
   // نحفظ ملخص الأيام الماضية نهائياً فقط إذا كان من سجل الخادم الكامل؛ القراءات المحلية
@@ -113,13 +164,13 @@ export function toCsv(header, rows) {
   return '﻿' + [header, ...rows].map((r) => r.map(q).join(',')).join('\r\n');
 }
 
-export async function shareFile(name, text) {
+export async function shareFile(name, text, { mime = 'text/csv;charset=utf-8', dialog = 'مشاركة التقرير' } = {}) {
   if (Capacitor.isNativePlatform()) {
     const res = await Filesystem.writeFile({ path: name, data: text, directory: Directory.Cache, encoding: Encoding.UTF8 });
-    await Share.share({ title: name, url: res.uri, dialogTitle: 'مشاركة التقرير' });
+    await Share.share({ title: name, url: res.uri, dialogTitle: dialog });
     return;
   }
-  const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
+  const url = URL.createObjectURL(new Blob([text], { type: mime }));
   const a = Object.assign(document.createElement('a'), { href: url, download: name });
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
