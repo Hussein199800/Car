@@ -294,7 +294,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       const mixed = [];
       const PAGES = {
         home: [null, 'load', 'battery', 'solar', 'grid', 'device'],
-        reports: [null, 'advisor', 'day', 'week', 'month', 'compare'],
+        reports: [null, 'advisor', 'day', 'week', 'month'],
         alerts: [null, 'rules'],
         more: [null, 'setup', 'edit', 'calc', 'tips', 'tips/lithium', 'settings', 'update', 'about'],
       };
@@ -324,6 +324,12 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.evaluate(() => window.__nav('more', null));
       check('اسم المطوّر ظاهر أعلى المزيد', (await text(page, '.dev-top')).includes('حسين محمد علي الطويل'));
       check('زر تسجيل الخروج أحمر ومنفصل في آخر المزيد', await page.$eval('#logoutBtn', (b) => getComputedStyle(b).backgroundColor === 'rgb(239, 68, 68)' && b.previousElementSibling?.classList.contains('lcards')));
+      // نسبة التغيّر داخل التقرير الأسبوعي بدل صفحة المقارنة
+      await page.evaluate(() => window.__nav('reports', 'week'));
+      await page.waitForSelector('.stat .trend', { timeout: 15000 }).catch(() => null);
+      check('التقرير الأسبوعي يعرض نسبة التغيّر عن الأسبوع السابق', (await page.$$('.stat .trend')).length === 4 && (await text(page, '#view')).includes('الأسبوع السابق'));
+      await page.evaluate(() => window.__nav('reports', null));
+      check('لا توجد صفحة مقارنة منفصلة', !(await page.$('[data-page=compare]')));
       // التصدير من داخل التقرير اليومي
       await page.evaluate(() => window.__nav('reports', 'day'));
       await page.waitForSelector('#expDay', { timeout: 8000 }).catch(() => null);

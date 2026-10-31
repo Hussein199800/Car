@@ -19,6 +19,7 @@ import { isNative, secure, migrateSession, monitor, deviceTools, APPS, updater }
 import { fetchLatest, isNewer } from './update.js';
 import { analyze } from './advisor.js';
 import { CATS, catOf, levelOf, toEvents, migrateLog, addEvents } from './log.js';
+import { trendDates, change } from './trend.js';
 import { settingInfo, optionAr, hintRange } from './settings-info.js';
 import { viewCalc, bindCalc, defaultsCalc } from './calc.js';
 import { TIP_SECTIONS, smartTips, tipOfDay } from './tips.js';
@@ -72,7 +73,7 @@ const state = {
   netError: null,
   loading: false,
   fails: 0,
-  rep: { dayDate: today(), day: null, week: null, month: null, weekOff: 0, monthOff: 0, cmp: 'week', cmpData: null },
+  rep: { dayDate: today(), day: null, week: null, month: null, weekOff: 0, monthOff: 0 },
   fields: null,
   fieldsError: null,
   calc: { ...defaultsCalc(), ...store.get('calc', {}) },
@@ -153,8 +154,8 @@ function listCards(items) {
 const kv = (rows) => `<dl class="kv">${rows.filter(Boolean).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
 const val = (v, unit = '') => (v === null || v === undefined || v === '' ? '<span class="na">غير متوفر</span>' : `<bdi>${esc(v)}</bdi>${unit ? ` <small>${esc(unit)}</small>` : ''}`);
 
-function stat(label, value, unit, color = '') {
-  return `<div class="stat ${color}"><small>${esc(label)}</small><b><bdi>${esc(value ?? '—')}</bdi></b>${unit ? `<span>${esc(unit)}</span>` : ''}</div>`;
+function stat(label, value, unit, color = '', extra = '') {
+  return `<div class="stat ${color}"><small>${esc(label)}</small><b><bdi>${esc(value ?? '—')}</bdi></b>${unit ? `<span>${esc(unit)}</span>` : ''}${extra}</div>`;
 }
 
 // ================= تسجيل الدخول =================
@@ -252,7 +253,7 @@ function logout() {
   secure.del('session');
   monitor.configure({ enabled: false }).catch(() => {});
   Object.assign(state, { session: null, demo: false, devices: [], model: null, fields: null, tab: 'home', page: null });
-  state.rep = { ...state.rep, day: null, week: null, month: null, cmpData: null, adv: null };
+  state.rep = { ...state.rep, day: null, week: null, month: null, adv: null };
   api = new WatchPowerApi();
   renderLogin();
 }
@@ -370,7 +371,7 @@ function switchDevice(snv) {
   state.model = null;
   state.fields = null;
   resetAlertState();
-  state.rep = { ...state.rep, day: null, week: null, month: null, cmpData: null, adv: null };
+  state.rep = { ...state.rep, day: null, week: null, month: null, adv: null };
   loadCache();
   refresh();
   render();
@@ -393,7 +394,7 @@ function banner() {
 
 const PAGE_TITLES = {
   load: 'الحمل', battery: 'البطارية', solar: 'الألواح الشمسية', grid: 'كهرباء الشبكة',
-  day: 'التقرير اليومي', week: 'التقرير الأسبوعي', month: 'التقرير الشهري', compare: 'مقارنة الأداء',
+  day: 'التقرير اليومي', week: 'التقرير الأسبوعي', month: 'التقرير الشهري', 
   rules: 'شروط التنبيه', advisor: 'ملاحظات على منظومتك', device: 'الإنفرتر', update: 'التحديثات', edit: 'إعدادات الإنفرتر', setup: 'ربط الجهاز والحساب',
   tips: 'النصائح', ...Object.fromEntries(TIP_SECTIONS.map((t) => [t.id, t.title])),
   settings: 'الإعدادات', calc: 'حاسبة الأحمال', about: 'حول التطبيق',
@@ -936,7 +937,7 @@ function chartOpts(legend, opts) {
 const urgentCount = () => (state.model && !state.model.stale ? smartTips(state.model, state.prefs).filter((t) => t.level === 'bad' || t.level === 'warn').length : 0);
 
 function viewReports() {
-  const pages = { day: pageDay, week: () => pageRange('week'), month: () => pageRange('month'), compare: pageCompare, advisor: pageAdvisor };
+  const pages = { day: pageDay, week: () => pageRange('week'), month: () => pageRange('month'), advisor: pageAdvisor };
   if (state.page && pages[state.page]) return pages[state.page]();
   const urgent = urgentCount();
   return `
@@ -944,9 +945,8 @@ function viewReports() {
   ${listCards([
     { page: 'advisor', title: 'ملاحظات على منظومتك', sub: 'ما يحتاج انتباهك الآن، ثم الاستقلالية واستخدام البطارية وتوصيات آخر 7 أيام', icon: icons.bulb, color: urgent ? 'c-pink' : 'c-green', badge: urgent ? `${urgent} مهم` : '' },
     { page: 'day', title: 'التقرير اليومي', sub: 'رسوم القدرة والبطارية والكهرباء ليوم محدد', icon: icons.calendar, color: 'c-amber' },
-    { page: 'week', title: 'التقرير الأسبوعي', sub: 'الإنتاج والاستهلاك لكل يوم خلال أسبوع', icon: icons.week, color: 'c-sky' },
-    { page: 'month', title: 'التقرير الشهري', sub: 'مجموع الشهر وأفضل يوم ومتوسط الإنتاج', icon: icons.month, color: 'c-green' },
-    { page: 'compare', title: 'مقارنة الأداء', sub: 'هذا الأسبوع أو الشهر مقابل السابق', icon: icons.compare, color: 'c-violet' },
+    { page: 'week', title: 'التقرير الأسبوعي', sub: 'الإنتاج والاستهلاك لكل يوم، والتغيّر عن الأسبوع السابق', icon: icons.week, color: 'c-sky' },
+    { page: 'month', title: 'التقرير الشهري', sub: 'مجموع الشهر وأفضل يوم، والتغيّر عن الشهر السابق', icon: icons.month, color: 'c-green' },
   ])}
   <p class="hint center">تُجلب البيانات من سجل خادم WatchPower، وعند تعذّره تُستخدم القراءات التي حفظها التطبيق على هاتفك.</p>`;
 }
@@ -1114,16 +1114,22 @@ function totals(sums) {
 async function loadRange(kind) {
   const off = kind === 'week' ? state.rep.weekOff : state.rep.monthOff;
   const dates = rangeDates(kind, off);
+  // أيام الفترة السابقة المقابلة لحساب نسبة التغيّر (الأيام الماضية محفوظة غالباً فتُقرأ فوراً)
+  const td = trendDates(kind, dates, today());
   const token = Symbol(kind);
   serverHistFails = 0;
-  state.rep[kind] = { loading: true, done: 0, total: dates.length, token };
+  state.rep[kind] = { loading: true, done: 0, total: dates.length + td.prev.length, token };
   render();
-  const sums = await loadSummaries(dates, (done, total) => {
+  const all = await loadSummaries([...dates, ...td.prev], (done, total) => {
+    if (state.rep[kind]?.token !== token) return;
+    state.rep[kind].done = done;
     const p = $('#rangeProg');
-    if (p && state.rep[kind]?.token === token) { p.style.width = (done / total) * 100 + '%'; $('#rangeTxt').textContent = `${done} من ${countAr(total, DAY)}`; }
+    if (p) { p.style.width = (done / total) * 100 + '%'; $('#rangeTxt').textContent = `${done} من ${countAr(total, DAY)}`; }
   });
   if (state.rep[kind]?.token !== token) return;
-  state.rep[kind] = { dates, sums };
+  const sums = all.slice(0, dates.length);
+  const trend = { cur: totals(sums.filter((s) => td.cur.includes(s.date))), prev: totals(all.slice(dates.length)) };
+  state.rep[kind] = { dates, sums, trend };
   if (state.page === kind) render();
 }
 
@@ -1149,19 +1155,24 @@ function pageRange(kind) {
   const t = totals(r.sums);
   if (!t.days) return nav + '<div class="empty">لا توجد بيانات لهذه الفترة.</div>';
   const srcs = [...new Set(r.sums.filter((s) => s.count).map((s) => SRC[s.source]))].join('، ');
+  // نسبة التغيّر تظهر فقط إذا كان في الفترتين أيام مكتملة فيها بيانات
+  const tr = r.trend?.cur.days && r.trend?.prev.days ? r.trend : null;
+  const trendTag = (k, better) => { const c = tr && change(tr.cur[k], tr.prev[k], better); return c ? `<em class="trend ${c.cls}">${c.text}</em>` : ''; };
+  const prevName = kind === 'week' ? 'الأسبوع السابق' : 'الشهر السابق';
   return nav + `
   <div class="stats">
-    ${stat('إجمالي الإنتاج', fmt.kwh(t.pv), 'كيلوواط ساعة', 'c-amber')}
-    ${stat('إجمالي الاستهلاك', fmt.kwh(t.load), 'كيلوواط ساعة', 'c-sky')}
+    ${stat('إجمالي الإنتاج', fmt.kwh(t.pv), 'كيلوواط ساعة', 'c-amber', trendTag('pv', 'up'))}
+    ${stat('إجمالي الاستهلاك', fmt.kwh(t.load), 'كيلوواط ساعة', 'c-sky', trendTag('load', 'down'))}
     ${stat('متوسط الإنتاج اليومي', fmt.kwh(t.avgPv), 'ك.و.س / يوم', 'c-green')}
     ${stat('أفضل يوم إنتاج', t.best ? dayName(t.best.date) : '—', t.best ? `${fmt.kwh(t.best.pvKwh)} ك.و.س` : '', 'c-violet')}
-    ${stat('توفر الكهرباء', numAr(t.gridH, 0), 'ساعة', 'c-pink')}
-    ${stat('العمل على البطارية', numAr(t.batH, 0), 'ساعة', 'c-slate')}
+    ${stat('توفر الكهرباء', numAr(t.gridH, 0), 'ساعة', 'c-pink', trendTag('gridH', 'up'))}
+    ${stat('العمل على البطارية', numAr(t.batH, 0), 'ساعة', 'c-slate', trendTag('batH', 'down'))}
     ${stat('شحن من الألواح', fmt.kwh(t.solarChg), 'كيلوواط ساعة', 'c-amber')}
     ${stat('شحن من الكهرباء', fmt.kwh(t.gridChg), 'كيلوواط ساعة', 'c-violet')}
     ${stat('الاستقلالية عن الكهرباء', t.independence == null ? '—' : Math.round(t.independence) + '%', 'من استهلاك البيت', 'c-sky')}
   </div>
   <p class="hint">أيام فيها بيانات: ${t.days} من ${r.sums.length} · المصدر: ${esc(srcs)}</p>
+  ${tr ? `<p class="hint">النسب ▲▼ مقارنة بنفس عدد الأيام المكتملة من ${prevName} (${countAr(tr.cur.days, DAY)} مقابل ${countAr(tr.prev.days, DAY)})، واليوم الجاري لا يدخل فيها.</p>` : ''}
   <section class="card"><div class="card-h"><h2>الإنتاج والاستهلاك اليومي</h2><small class="muted">كيلوواط ساعة</small></div><div class="chart-box"><canvas id="cRange"></canvas></div></section>
   <section class="card"><div class="card-h"><h2>تفاصيل الأيام</h2></div>
     <div class="table"><div class="tr th"><span>اليوم</span><span>الإنتاج</span><span>الاستهلاك</span><span>البطارية</span></div>
@@ -1192,28 +1203,6 @@ function bindRange(kind) {
 }
 AFTER.week = () => bindRange('week');
 AFTER.month = () => bindRange('month');
-
-async function loadCompare() {
-  const kind = state.rep.cmp;
-  state.rep.cmpData = { loading: true };
-  serverHistFails = 0;
-  render();
-  // نقارن أياماً مكتملة فقط: اليوم الجاري ناقص فيظلم الفترة الحالية دائماً
-  let curDates = rangeDates(kind, 0);
-  let prevDates = rangeDates(kind, 1);
-  if (kind === 'week') { curDates = rangeDates('week', 0).map((d) => addDays(d, -1)); prevDates = curDates.map((d) => addDays(d, -7)); }
-  else {
-    const done = curDates.filter((d) => d < today());
-    if (done.length) curDates = done;
-    // نفس عدد الأيام من الشهر السابق حتى تكون المقارنة عادلة
-    prevDates = prevDates.slice(0, curDates.length);
-  }
-  const cur = await loadSummaries(curDates);
-  const prev = await loadSummaries(prevDates);
-  if (state.rep.cmpData?.loading !== true || state.rep.cmp !== kind) return;
-  state.rep.cmpData = { kind, cur: totals(cur), prev: totals(prev), curN: cur.length };
-  if (state.page === 'compare') render();
-}
 
 // ================= مستشار الطاقة =================
 // يحلل آخر 7 أيام كاملة + اليوم من السجل الفعلي، ولا يعرض إلا ما يمكن حسابه من القراءات
@@ -1281,43 +1270,6 @@ AFTER.advisor = () => {
   if (!state.rep.adv || (!state.rep.adv.loading && Date.now() - state.rep.adv.at > 30 * 60000)) { loadAdvisor(); return; }
   const b = $('#advReload');
   if (b) b.onclick = loadAdvisor;
-};
-
-function pageCompare() {
-  const k = state.rep.cmp;
-  const r = state.rep.cmpData;
-  const seg = `<div class="seg"><button data-cmp="week" class="${k === 'week' ? 'on' : ''}">أسبوعي</button><button data-cmp="month" class="${k === 'month' ? 'on' : ''}">شهري</button></div>`;
-  if (!r || r.loading || r.kind !== k) return seg + '<div class="empty"><div class="spinner"></div>جارٍ تجميع البيانات للمقارنة…</div>';
-  const [a, b] = k === 'week' ? ['آخر 7 أيام مكتملة', 'الأسبوع الذي قبله'] : ['هذا الشهر حتى أمس', 'نفس الفترة من الشهر السابق'];
-  const row = (label, x, y, unit, better = 'up') => {
-    const ch = x != null && y ? ((x - y) / y) * 100 : null;
-    const good = ch === null || Math.abs(ch) < 1 ? '' : (ch > 0) === (better === 'up') ? 'good' : 'bad';
-    return `<div class="cmp-row"><div class="cmp-l">${esc(label)}</div>
-      <div class="cmp-v"><b>${x == null ? '—' : unit === 'ساعة' ? numAr(x, 0) : fmt.kwh(x)}</b><small>${esc(unit)}</small></div>
-      <div class="cmp-v prev"><b>${y == null ? '—' : unit === 'ساعة' ? numAr(y, 0) : fmt.kwh(y)}</b><small>${esc(unit)}</small></div>
-      <div class="cmp-ch ${good}">${ch === null ? '—' : (Math.abs(ch) < 1 ? '' : ch > 0 ? '▲ ' : '▼ ') + Math.abs(ch).toFixed(0) + '%'}</div></div>`;
-  };
-  return seg + `
-  <section class="card">
-    <div class="cmp-row head"><div></div><div>${esc(a)}</div><div>${esc(b)}</div><div>التغيّر</div></div>
-    ${row('الإنتاج', r.cur.pv, r.prev.pv, 'ك.و.س')}
-    ${row('الاستهلاك', r.cur.load, r.prev.load, 'ك.و.س', 'down')}
-    ${row('متوسط الإنتاج', r.cur.avgPv, r.prev.avgPv, 'ك.و.س/يوم')}
-    ${row('توفر الكهرباء', r.cur.gridH, r.prev.gridH, 'ساعة')}
-    ${row('العمل على البطارية', r.cur.batH, r.prev.batH, 'ساعة', 'down')}
-  </section>
-  <section class="card"><div class="card-h"><h2>مقارنة بيانية</h2></div><div class="chart-box sm"><canvas id="cCmp"></canvas></div></section>
-  <p class="hint">أيام فيها بيانات: ${r.cur.days} مقابل ${r.prev.days}. إذا كانت أيام إحدى الفترتين أقل، فالمقارنة تقريبية.</p>`;
-}
-AFTER.compare = () => {
-  document.querySelectorAll('[data-cmp]').forEach((b) => { b.onclick = () => { state.rep.cmp = b.dataset.cmp; loadCompare(); }; });
-  const r = state.rep.cmpData;
-  if (!r || r.kind !== state.rep.cmp) { if (!r?.loading) loadCompare(); return; }
-  if (r.loading) return;
-  barChart('cCmp', ['الإنتاج', 'الاستهلاك'], [
-    { label: 'الحالية', data: [r.cur.pv, r.cur.load].map((x) => +x.toFixed(2)), color: '#6366f1' },
-    { label: 'السابقة', data: [r.prev.pv, r.prev.load].map((x) => +x.toFixed(2)), color: '#94a3b8' },
-  ], { y: { beginAtZero: true } });
 };
 
 async function exportSamples(date, samples) {

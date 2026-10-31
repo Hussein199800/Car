@@ -401,3 +401,30 @@ test('أحداث الخلفية من Kotlin تُوحَّد عند الاستلا
   assert.equal(addEvents(many, fresh).length, LOG_CAP);
   assert.equal(addEvents(many, fresh)[0].at, at, 'الحدث الجديد في أول السجل');
 });
+
+// ---------- نسبة التغيّر في التقارير ----------
+import { trendDates, change } from '../../src/trend.js';
+
+test('نسبة التغيّر: الأيام المكتملة فقط مقابل نفس عددها من الفترة السابقة', () => {
+  const week = ['2026-10-25', '2026-10-26', '2026-10-27', '2026-10-28', '2026-10-29', '2026-10-30', '2026-10-31'];
+  const w = trendDates('week', week, '2026-10-31');
+  assert.deepEqual(w.cur, week.slice(0, 6), 'اليوم الجاري لا يدخل');
+  assert.deepEqual(w.prev, ['2026-10-18', '2026-10-19', '2026-10-20', '2026-10-21', '2026-10-22', '2026-10-23']);
+  const march = Array.from({ length: 31 }, (_, i) => `2026-03-${String(i + 1).padStart(2, '0')}`);
+  const m = trendDates('month', march, '2026-04-02');
+  assert.equal(m.prev.length, 28, 'فبراير أقصر فنقارن أول 28 يوماً');
+  assert.equal(m.cur.length, 28);
+  assert.equal(m.prev[0], '2026-02-01');
+  const jan = trendDates('month', ['2026-01-01', '2026-01-02', '2026-01-03'], '2026-01-03');
+  assert.deepEqual(jan.prev, ['2025-12-01', '2025-12-02'], 'يناير يقابله ديسمبر من السنة السابقة');
+  assert.deepEqual(trendDates('week', ['2026-10-31'], '2026-10-31'), { cur: [], prev: [] });
+});
+
+test('اتجاه التغيّر ولونه حسب ما هو أفضل', () => {
+  assert.deepEqual(change(120, 100, 'up'), { pct: 20, cls: 'good', text: '▲ 20%' });
+  assert.equal(change(120, 100, 'down').cls, 'bad', 'زيادة الاستهلاك سيئة');
+  assert.equal(change(80, 100, 'down').text, '▼ 20%');
+  assert.equal(change(100.4, 100).cls, '', 'أقل من 1% بلا لون');
+  assert.equal(change(5, 0), null, 'لا مقارنة مع صفر');
+  assert.equal(change(null, 10), null);
+});
