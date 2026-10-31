@@ -428,3 +428,13 @@ test('اتجاه التغيّر ولونه حسب ما هو أفضل', () => {
   assert.equal(change(5, 0), null, 'لا مقارنة مع صفر');
   assert.equal(change(null, 10), null);
 });
+
+test('نسبة 0% مع جهد بطارية صفر لا تُحسب أدنى نسبة', () => {
+  const t0 = new Date(2026, 9, 29, 20).getTime();
+  const rows = [[60, 51.2], [0, 0], [0, null], [58, 51]].map(([soc, batV], i) => ({ ts: t0 + i * 5 * 60000, soc, batV, outW: 200 }));
+  const s = summarize('2026-10-29', rows, 'server');
+  assert.equal(s.socMin, 58);
+  assert.equal(s.socMax, 60);
+  const real = summarize('2026-10-29', [{ ts: t0, soc: 0, batV: 44, outW: 1 }, { ts: t0 + 3e5, soc: 5, batV: 46, outW: 1 }], 'server');
+  assert.equal(real.socMin, 0, 'بطارية رصاص بجهد مقروء عند 0% تبقى كما هي');
+});

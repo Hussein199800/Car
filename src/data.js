@@ -99,12 +99,14 @@ export function summarize(date, samples, source) {
     if (meter[i] < meter[i - 1]) { meter = meter.slice(i); break; }
   }
   const today = meter;
-  const socs = s.map((x) => x.soc).filter((v) => v != null);
+  // نسبة 0% مع جهد بطارية صفر أو غير مقروء تعني أن الإنفرتر لم يقرأ البطارية (مطفأ أو فاصل)، لا أنها فرغت فعلاً
+  const socOk = (x) => x.soc != null && !(x.soc === 0 && !(x.batV > 5));
+  const socs = s.filter(socOk).map((x) => x.soc);
   const loads = s.map((x) => x.outW).filter((v) => v != null);
   // أول وقت لأدنى وأعلى نسبة شحن، ووقت امتلاء البطارية
   let minAt = null, maxAt = null, fullAt = null;
   for (const x of s) {
-    if (x.soc == null) continue;
+    if (!socOk(x)) continue;
     if (minAt === null || x.soc < minAt.soc) minAt = x;
     if (maxAt === null || x.soc > maxAt.soc) maxAt = x;
     if (fullAt === null && x.soc >= 100) fullAt = x;

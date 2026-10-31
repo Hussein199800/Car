@@ -155,7 +155,7 @@ bdi { unicode-bidi: isolate; }
 .dot.warn { background: var(--warn); }
 .dot.demo { background: #a78bfa; }
 #view { padding: 14px 14px calc(96px + var(--safe-bot)); max-width: 640px; margin: 0 auto; }
-.tabbar { position: fixed; bottom: 0; inset-inline: 0; z-index: 5; display: grid; grid-template-columns: repeat(5, minmax(0, 140px)); justify-content: center;
+.tabbar { position: fixed; bottom: 0; inset-inline: 0; z-index: 5; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 140px); justify-content: center;
   padding: 6px 6px calc(6px + var(--safe-bot)); background: var(--tab); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border-top: 1px solid var(--line); }
 .tabbar button { position: relative; background: none; border: 0; padding: 6px 0; min-height: 56px; display: grid; justify-items: center; gap: 2px; color: var(--mute); font-size: calc(12.5px * var(--fs, 1)); font-weight: 600; cursor: pointer; }
 .tabbar button svg { width: 44px; height: 32px; padding: 4px 11px; border-radius: 12px; transition: all .25s; }
@@ -576,3 +576,5 @@ button.node:focus-visible .ic { outline: 3px solid #6366f1; outline-offset: 3px;
 
 .hero-t { font-size: calc(24px * var(--fs, 1)); }
 .dua { margin: 8px 0 0; font-size: calc(13px * var(--fs, 1)); line-height: 1.9; opacity: .92; }
+button.adv-ind { display: block; width: 100%; text-align: start; font: inherit; color: inherit; cursor: pointer; }
+button.adv-ind:active { transform: scale(.99); }

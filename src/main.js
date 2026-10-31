@@ -27,7 +27,7 @@ import { TIP_SECTIONS, smartTips, tipOfDay } from './tips.js';
 Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, CategoryScale, Filler, Tooltip, Legend);
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '3.6.0';
+const VERSION = '3.6.1';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -936,14 +936,32 @@ function chartOpts(legend, opts) {
 // عدد الملاحظات المهمة الآن (تحذير أو خطر) من قراءة حيّة فقط
 const urgentCount = () => (state.model && !state.model.stale ? smartTips(state.model, state.prefs).filter((t) => t.level === 'bad' || t.level === 'warn').length : 0);
 
+// مؤشر الاستقلالية في رأس تبويب التقارير: من تحليل آخر 7 أيام نفسه، ويفتح الملاحظات عند الضغط
+function independenceCard() {
+  const a = state.rep.adv;
+  const head = (extra) => `<div class="card-h"><h2>${icons.sun} مؤشر الاستقلالية عن الكهرباء</h2>${extra}</div>`;
+  if (!a || a.loading) return `<section class="card adv-ind">${head('')}<div class="bar"><i id="advProg" style="width:${a?.pct || 0}%"></i></div><p class="hint center">جارٍ حساب آخر 7 أيام…</p></section>`;
+  const m = state.model;
+  const r = analyze(a.sums, { todayKey: today(), prefs: state.prefs, ratedW: m?.ratedW || null, volts: m?.ratedV || nominalV(m), model: m });
+  const ind = r.independence;
+  return `<button class="card adv-ind" data-page="advisor" aria-label="مؤشر الاستقلالية، اضغط لعرض الملاحظات">
+    ${head(`<small class="muted">${r.days ? 'آخر ' + countAr(r.days, DAY) + ' مكتملة' : ''}</small>`)}
+    ${ind == null ? '<p class="hint">يحتاج المؤشر إلى وضع التشغيل (شبكة/بطارية) في سجل الجهاز ليوم كامل على الأقل.</p>' : `
+    <div class="adv-big"><b>${Math.round(ind)}%</b><span>من استهلاك بيتك جاء من الألواح والبطارية</span></div>
+    <div class="bar"><i style="width:${Math.round(ind)}%"></i></div>
+    <div class="adv-days">${r.independenceDays.map((d) => `<span title="${Math.round(d.v)}%"><i style="height:${Math.max(4, Math.round(d.v))}%"></i><small>${Number(d.date.slice(8))}</small></span>`).join('')}</div>`}
+  </button>`;
+}
+
 function viewReports() {
   const pages = { day: pageDay, week: () => pageRange('week'), month: () => pageRange('month'), advisor: pageAdvisor };
   if (state.page && pages[state.page]) return pages[state.page]();
   const urgent = urgentCount();
   return `
+  ${independenceCard()}
   <section class="intro"><h2>التقارير والتحليلات</h2><p>إنتاج الألواح واستهلاك المنزل وحالة البطارية عبر الأيام.</p></section>
   ${listCards([
-    { page: 'advisor', title: 'ملاحظات على منظومتك', sub: 'ما يحتاج انتباهك الآن، ثم الاستقلالية واستخدام البطارية وتوصيات آخر 7 أيام', icon: icons.bulb, color: urgent ? 'c-pink' : 'c-green', badge: urgent ? `${urgent} مهم` : '' },
+    { page: 'advisor', title: 'ملاحظات على منظومتك', sub: 'ما يحتاج انتباهك الآن، واستخدام البطارية وتوصيات آخر 7 أيام', icon: icons.bulb, color: urgent ? 'c-pink' : 'c-green', badge: urgent ? `${urgent} مهم` : '' },
     { page: 'day', title: 'التقرير اليومي', sub: 'رسوم القدرة والبطارية والكهرباء ليوم محدد', icon: icons.calendar, color: 'c-amber' },
     { page: 'week', title: 'التقرير الأسبوعي', sub: 'الإنتاج والاستهلاك لكل يوم، والتغيّر عن الأسبوع السابق', icon: icons.week, color: 'c-sky' },
     { page: 'month', title: 'التقرير الشهري', sub: 'مجموع الشهر وأفضل يوم، والتغيّر عن الشهر السابق', icon: icons.month, color: 'c-green' },
@@ -1220,8 +1238,11 @@ async function loadAdvisor() {
   });
   if (state.rep.adv?.token !== token) return;
   state.rep.adv = { sums, at: Date.now() };
-  if (leaf() === 'advisor') render();
+  if (state.tab === 'reports' && (!state.page || leaf() === 'advisor')) render();
 }
+AFTER.reports = () => {
+  if (!state.rep.adv || (!state.rep.adv.loading && Date.now() - state.rep.adv.at > 30 * 60000)) loadAdvisor();
+};
 
 // «ملاحظات على منظومتك»: ما يحتاج انتباهك الآن من القراءة الحيّة، ثم تحليل آخر 7 أيام من السجل
 function pageAdvisor() {
@@ -1236,17 +1257,8 @@ function pageAdvisor() {
   const ctx = { todayKey: today(), prefs: state.prefs, ratedW: m?.ratedW || null, volts: m?.ratedV || nominalV(m), model: m };
   const r = analyze(a.sums, ctx);
   const b = r.battery;
-  const ind = r.independence;
   const lvl = { ok: 'ok', warn: 'warn', bad: 'bad', info: 'info' };
   return `${now}
-  <section class="card adv-ind">
-    <div class="card-h"><h2>${icons.sun} مؤشر الاستقلالية عن الكهرباء</h2><small class="muted">${r.days ? 'آخر ' + countAr(r.days, DAY) + ' مكتملة' : ''}</small></div>
-    ${ind == null ? '<p class="hint">يحتاج المؤشر إلى وضع التشغيل (شبكة/بطارية) في سجل الجهاز ليوم كامل على الأقل.</p>' : `
-    <div class="adv-big"><b>${Math.round(ind)}%</b><span>من استهلاك بيتك جاء من الألواح والبطارية</span></div>
-    <div class="bar"><i style="width:${Math.round(ind)}%"></i></div>
-    <div class="adv-days">${r.independenceDays.map((d) => `<span title="${Math.round(d.v)}%"><i style="height:${Math.max(4, Math.round(d.v))}%"></i><small>${Number(d.date.slice(8))}</small></span>`).join('')}</div>`}
-  </section>
-
   <section class="card"><div class="card-h"><h2>${icons.battery} استخدام البطارية</h2></div>
     ${kv([
       b.soh != null ? ['حالة الصحة (من البطارية)', val(b.soh + '%')] : null,
