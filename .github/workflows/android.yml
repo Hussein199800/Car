@@ -68,9 +68,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           VER=$(node -p "require('./package.json').version")
+          # taqati.apk باسم ثابت لرابط التحميل المباشر: releases/latest/download/taqati.apk
           if gh release view "v$VER" >/dev/null 2>&1; then
             echo "الإصدار v$VER منشور مسبقاً"
+            # إصدار قديم بلا الملف الثابت: نرفع نسخة مطابقة للملف المرقّم المنشور (لا البناء الحالي)
+            if ! gh release view "v$VER" --json assets -q '.assets[].name' | grep -qx taqati.apk; then
+              mkdir -p "$RUNNER_TEMP/rel"
+              gh release download "v$VER" -p "taqati-$VER.apk" -D "$RUNNER_TEMP/rel"
+              cp "$RUNNER_TEMP/rel/taqati-$VER.apk" "$RUNNER_TEMP/rel/taqati.apk"
+              gh release upload "v$VER" "$RUNNER_TEMP/rel/taqati.apk" --clobber
+            fi
           else
             cp taqati.apk "taqati-$VER.apk"
-            gh release create "v$VER" "taqati-$VER.apk" --title "طاقتي $VER" --notes-file release-notes.md --target "$GITHUB_SHA"
+            gh release create "v$VER" "taqati-$VER.apk" taqati.apk --title "طاقتي $VER" --notes-file release-notes.md --target "$GITHUB_SHA"
           fi
