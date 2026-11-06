@@ -231,7 +231,6 @@ bdi { unicode-bidi: isolate; }
 .mode-pill.m-fault, .mode-pill.m-off { background: #ef444420; color: var(--bad); border-color: #ef444460; }
 .flow-card { position: relative; padding: 0; aspect-ratio: 360 / 380; overflow: hidden; }
 .flow-svg { position: absolute; inset: 0; }
-.glow { fill: #6366f1; opacity: .16; filter: blur(18px); }
 .wire { stroke: var(--line); stroke-width: 5; stroke-linecap: round; fill: none; }
 .flow { stroke-width: 5; stroke-linecap: round; fill: none; stroke-dasharray: 2 14; opacity: 0; transition: opacity .4s; }
 .flow.on { opacity: 1; animation: dash 1.2s linear infinite; }
@@ -535,7 +534,6 @@ button.node:focus-visible .ic { outline: 3px solid #6366f1; outline-offset: 3px;
 .node .bt { font-weight: 800; margin-top: 0; }
 .node .bt.chg { color: var(--bat); }
 .node .bt.dis { color: var(--warn); }
-.flow-hint { text-align: center; color: var(--mute); font-size: calc(12px * var(--fs, 1)); margin: 6px 0 0 !important; }
 
 /* ---------- دليل الربط ---------- */
 .login-links { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
@@ -665,24 +663,7 @@ button.adv-ind:active { transform: scale(.99); }
 @keyframes flash { 0%, 88%, 92%, 100% { opacity: 0; } 90% { opacity: .55; } }
 @keyframes fogMove { to { translate: 24px 0; } }
 
-.scene-svg .ground { fill: #cfe3c4; }
-.sky-night .scene-svg .ground { fill: #1f2a44; }
-.sky-rain .scene-svg .ground, .sky-storm .scene-svg .ground { fill: #a9b8a6; }
-.house .wall { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.5; }
-.sky-night .house .wall { fill: #cbd5e1; }
-.house .roof { fill: none; stroke: #475569; stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; }
-.house .panels { fill: #1e3a8a; stroke: #93c5fd; stroke-width: 1; transition: fill .6s; }
-.pv-on .house .panels { fill: #2563eb; animation: shine 3s ease-in-out infinite; }
-.house .panel-lines { stroke: #93c5fd99; stroke-width: 1; }
-.house .door { fill: #94a3b8; }
-.house .win { fill: #bae6fd; }
-.sky-night .house .win, .sky-rain .house .win, .sky-storm .house .win { fill: #fde68a; filter: drop-shadow(0 0 6px #fde68a); }
 .tower path { fill: none; stroke: #64748b; stroke-width: 2.2; stroke-linecap: round; }
-.battery-box rect:first-child { fill: #f1f5f9; stroke: #94a3b8; stroke-width: 1.5; }
-.battery-box .lvl { fill: var(--bat); transition: y .8s, height .8s; }
-.inv-box { fill: #f8fafc; stroke: #6366f1; stroke-width: 1.5; }
-.inv-led { fill: var(--ok); animation: twinkle 2s ease-in-out infinite; }
-.stale .inv-led { fill: var(--bad); animation: none; }
 @keyframes shine { 50% { fill: #3b82f6; } }
 .scene .flow-line { opacity: .55; stroke-width: 4; }
 
@@ -718,3 +699,144 @@ button.adv-ind:active { transform: scale(.99); }
 .loc-it { display: grid; text-align: start; padding: 10px 12px; border-radius: 14px; border: 1px solid var(--line); background: var(--soft); font: inherit; color: inherit; cursor: pointer; }
 .loc-it:active { transform: scale(.98); }
 .loc-it small { color: var(--mute); }
+
+/* ================= 3.8: المشهد ثلاثي الأبعاد ================= */
+.scene.flow-card { aspect-ratio: 400 / 300; }
+.iso .ground.top { fill: #d6e9cc; } .iso .ground.sx { fill: #a9c79b; } .iso .ground.sy { fill: #bcd7ae; }
+.iso .shadow { fill: #0f172a1f; }
+.iso .wall.sy { fill: #f8fafc; } .iso .wall.sx, .iso .wall.gable { fill: #dfe6ee; }
+.iso .roof.front { fill: #475569; } .iso .roof.back { fill: #334155; }
+.iso .ridge { stroke: #1e293b; stroke-width: 2.2; stroke-linecap: round; }
+.iso .panel { fill: #1e40af; stroke: #bfdbfe; stroke-width: .6; }
+.pv-on .iso .panel { animation: panelShine 2.8s ease-in-out infinite; }
+.pv-on .iso .panel:nth-of-type(2n) { animation-delay: -.7s; }
+@keyframes panelShine { 0%, 100% { fill: #1e40af; } 50% { fill: #3b82f6; } }
+.iso .win { fill: #bfe3f8; stroke: #94a3b8; stroke-width: .5; }
+.iso .tower { fill: none; stroke: #64748b; stroke-width: 1.4; stroke-linecap: round; }
+.iso .bat.top { fill: #f8fafc; } .iso .bat.sx { fill: #dbe3ec; } .iso .bat.sy { fill: #eef2f7; }
+.iso .bat { stroke: #94a3b8; stroke-width: .6; }
+.iso .bat-lvl { fill: var(--bat); transition: all .8s; }
+.bat-chg .iso .bat-lvl { animation: batPulse 1.6s ease-in-out infinite; }
+.bat-full .iso .bat-lvl { filter: drop-shadow(0 0 5px #34d399); }
+.bat-dis .iso .bat-lvl { fill: #f59e0b; }
+@keyframes batPulse { 50% { opacity: .55; } }
+.iso .inv.top { fill: #eef2ff; } .iso .inv.sx { fill: #c7d2fe; } .iso .inv.sy { fill: #e0e7ff; }
+.iso .inv { stroke: #6366f1; stroke-width: .7; }
+.iso .wire { stroke: #94a3b85c; stroke-width: 5; }
+.scene .iso .flow-line { opacity: .9; stroke-width: 3.2; filter: drop-shadow(0 0 3px currentColor); }
+.scene .iso .f-solar { color: #f59e0b; } .scene .iso .f-grid { color: #8b5cf6; } .scene .iso .f-load { color: #0ea5e9; } .scene .iso .f-bat { color: #10b981; }
+.iso .arrow { stroke-width: 2.6; }
+/* الليل والطقس الماطر: جدران أغمق ونوافذ مضاءة */
+.sky-night .iso .ground.top { fill: #24314f; } .sky-night .iso .ground.sx { fill: #1a2440; } .sky-night .iso .ground.sy { fill: #1f2a48; }
+.sky-night .iso .wall.sy { fill: #c7d0dd; } .sky-night .iso .wall.sx, .sky-night .iso .wall.gable { fill: #aab6c6; }
+.sky-night .iso .win, .sky-rain .iso .win, .sky-storm .iso .win { fill: #fde68a; filter: drop-shadow(0 0 4px #fde68a); }
+.sky-rain .iso .ground.top, .sky-storm .iso .ground.top { fill: #b8c9b0; }
+.stale .iso { filter: grayscale(.9); opacity: .7; }
+
+/* بطاقات القيم فوق المشهد */
+.scene .node { padding: 4px 10px; border-radius: 12px; background: #ffffffd9; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); box-shadow: 0 4px 14px #0f172a1f; min-width: 64px; gap: 0; z-index: 2; }
+.scene .node b { color: #0f172a; text-shadow: none; font-size: calc(15px * var(--fs, 1)); margin: 0; }
+.scene .node small { color: #475569; font-size: calc(11px * var(--fs, 1)); }
+.scene.sky-night .node, .scene.sky-rain .node, .scene.sky-storm .node { background: #0f172acc; }
+.scene.sky-night .node b, .scene.sky-rain .node b, .scene.sky-storm .node b { color: #f8fafc; text-shadow: none; }
+.scene.sky-night .node small, .scene.sky-rain .node small, .scene.sky-storm .node small { color: #cbd5e1; }
+.scene .node.dim { opacity: .7; }
+.scene .node:active { transform: translate(-50%, -50%) scale(.94); }
+.scene .n-inv { width: 34px; height: 40px; min-width: 0; padding: 0; background: transparent; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+.scene .n-inv:focus-visible { outline: 3px solid #6366f1; border-radius: 8px; }
+.scene .node.n-solar { border-top: 3px solid #f59e0b; } .scene .node.n-grid { border-top: 3px solid #8b5cf6; }
+.scene .node.n-bat { border-top: 3px solid #10b981; } .scene .node.n-load { border-top: 3px solid #0ea5e9; }
+
+/* درجات الحرارة */
+.tchips { display: flex; gap: 8px; justify-content: center; margin-top: 10px; flex-wrap: wrap; }
+.tchip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow); }
+.tchip svg { width: 16px; height: 16px; color: var(--warn); }
+.tchip b { font-size: calc(15px * var(--fs, 1)); font-weight: 800; }
+.tchip small { color: var(--mute); font-size: calc(12px * var(--fs, 1)); }
+.tchip.hot { border-color: var(--bad); } .tchip.hot b, .tchip.hot svg { color: var(--bad); }
+
+/* الطقس أسفل المشهد حتى لا يغطي بطاقات القيم */
+.scene .wx { top: auto; bottom: 8px; left: auto; right: 8px; transform: none; max-width: 70%; }
+
+/* ================= 3.8: أسلوب نظيف (مشهد أبيض، قيم في الزوايا، نبضات خضراء) ================= */
+.scene { --sky: linear-gradient(180deg, #e9eef3 0%, #f6f8fa 55%, #eef1f4 100%); border-radius: 22px; }
+.scene.sky-partly { --sky: linear-gradient(180deg, #e3e9ef, #f4f6f8 60%, #eceff2); }
+.scene.sky-cloudy, .scene.sky-fog, .scene.sky-snow { --sky: linear-gradient(180deg, #d9dfe6, #eef1f4 60%, #e6e9ed); }
+.scene.sky-rain, .scene.sky-storm { --sky: linear-gradient(180deg, #8f9bab, #c9d0d8 60%, #d7dce2); }
+.scene.sky-night { --sky: linear-gradient(180deg, #0c1328, #1b2546 70%, #222c4c); }
+[data-theme="dark"] .scene:not(.sky-night) { filter: brightness(.9); }
+.iso .ground.top { fill: #eef1f4; }
+.sky-night .iso .ground.top { fill: #1e2847; } .sky-rain .iso .ground.top, .sky-storm .iso .ground.top { fill: #d2d8de; }
+.iso .shadow { fill: #0f172a14; }
+.iso .wall.sy { fill: #ffffff; } .iso .wall.sx, .iso .wall.gable { fill: #e7ebf0; }
+.iso .roof.front { fill: #c9d1da; } .iso .roof.back { fill: #9aa5b3; }
+.iso .ridge { stroke: #e5e9ee; stroke-width: 2.5; }
+.iso .panel { fill: #1e3a8a; stroke: #3b5bb5; stroke-width: .7; }
+.pv-on .iso .panel { animation: panelShine 3.2s ease-in-out infinite; }
+@keyframes panelShine { 0%, 100% { fill: #1e3a8a; } 50% { fill: #2f56c9; } }
+.iso .frame { fill: #d4dae2; } .iso .glass { fill: #9fb0c3; } .iso .win { fill: #b9c8d8; stroke: none; }
+.iso .step { fill: #dfe4ea; }
+.iso .gar.top { fill: #f3f5f8; } .iso .gar.sx { fill: #e3e8ee; } .iso .gar.sy { fill: #f7f9fb; }
+.iso .gar-open { fill: #2b3442; } .iso .slat { stroke: #3b4657; stroke-width: 1; }
+.iso .car.top { fill: #ffffff; } .iso .car.sx { fill: #dfe5ec; } .iso .car.sy { fill: #f1f4f8; }
+.iso .car.cab.top { fill: #cfd8e2; } .iso .car.cab.sx, .iso .car.cab.sy { fill: #5b6b80; }
+.iso .wheel { fill: #1f2937; }
+.iso .tower { stroke: #9aa5b3; stroke-width: 1.3; }
+.iso .cable { fill: none; stroke: #4b5563; stroke-width: 1.2; }
+.iso .bat.top { fill: #ffffff; } .iso .bat.sx { fill: #e5e9ee; } .iso .bat.sy { fill: #f8fafc; }
+.iso .bat { stroke: #cbd5e1; stroke-width: .6; }
+.iso .bat-led { fill: #22c55e; }
+.iso .bat-lvl { fill: #22c55e; }
+.iso .bat-pct { font: 800 15px Cairo, sans-serif; fill: #16a34a; font-style: italic; }
+.bat-dis .iso .bat-pct, .bat-dis .iso .bat-lvl { fill: #d97706; }
+.stale .iso .bat-pct { fill: #94a3b8; }
+.iso .inv.top { fill: #ffffff; } .iso .inv.sx { fill: #e5e9ee; } .iso .inv.sy { fill: #f8fafc; }
+.iso .inv { stroke: #cbd5e1; stroke-width: .6; }
+.iso .inv-band { fill: #1f2937; }
+/* الأسلاك داكنة ورفيعة، والنبضات خضراء مضيئة */
+.iso .wire { stroke: #374151; stroke-width: 1.8; opacity: .85; }
+.scene .iso .flow-line { stroke: #374151; stroke-width: 1.8; opacity: 1; filter: none; }
+.scene .iso .arrow { stroke: #4ade80; stroke-width: 3.2; stroke-linecap: round; filter: drop-shadow(0 0 4px #22c55e) drop-shadow(0 0 2px #86efac); }
+.iso .leader { fill: none; stroke: #fb923c; stroke-width: 1; stroke-dasharray: 3 3; opacity: .8; }
+.sky-night .iso .wall.sy { fill: #c8d0dc; } .sky-night .iso .wall.sx, .sky-night .iso .wall.gable { fill: #a9b4c4; }
+.sky-night .iso .glass, .sky-night .iso .win, .sky-rain .iso .win, .sky-storm .iso .win { fill: #fde68a; filter: drop-shadow(0 0 4px #fde68a); }
+
+/* القيم في الزوايا الأربع بلا مربعات */
+.scene .node.corner { transform: none; background: none; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; border: 0 !important; padding: 2px 4px; min-width: 0; display: grid; gap: 0; }
+.scene .node.corner b { font-size: calc(22px * var(--fs, 1)); font-weight: 800; color: #111827; letter-spacing: -.3px; }
+.scene .node.corner small { font-size: calc(13px * var(--fs, 1)); color: #6b7280; font-weight: 600; }
+.scene .node.corner .bt { font-size: calc(13px * var(--fs, 1)); }
+.scene .n-solar.corner { left: 4%; top: 4%; right: auto; bottom: auto; justify-items: left; text-align: left; }
+.scene .n-grid.corner { right: 4%; top: 4%; left: auto; bottom: auto; justify-items: right; text-align: right; }
+.scene .n-bat.corner { left: 4%; bottom: 4%; top: auto; right: auto; justify-items: left; text-align: left; }
+.scene .n-load.corner { right: 4%; bottom: 4%; top: auto; left: auto; justify-items: right; text-align: right; }
+.scene .node.corner:active { transform: scale(.95); }
+.scene.sky-night .node.corner b, .scene.sky-rain .node.corner b, .scene.sky-storm .node.corner b { color: #f8fafc; }
+.scene.sky-night .node.corner small, .scene.sky-rain .node.corner small, .scene.sky-storm .node.corner small { color: #cbd5e1; }
+.scene .node.corner.dim { opacity: .75; }
+.scene .wx { bottom: auto; top: 8px; right: auto; left: 50%; transform: translateX(-50%); max-width: 46%; font-size: calc(11px * var(--fs, 1)); padding: 3px 10px; }
+.scene.flow-card { aspect-ratio: 400 / 360; }
+
+/* ================= الجولة التعريفية ================= */
+.tour { position: fixed; inset: 0; z-index: 50; background: var(--bg); display: flex; align-items: stretch; justify-content: center; opacity: 0; transition: opacity .25s; overflow: auto; }
+.tour.show { opacity: 1; }
+.tour-b { width: 100%; max-width: 520px; padding: calc(14px + var(--safe-top)) 20px calc(20px + var(--safe-bot)); display: flex; flex-direction: column; animation: storyIn .35s ease; }
+.tour-skip { align-self: flex-start; min-height: 32px; background: none; border: 0; color: var(--mute); font: inherit; font-weight: 700; cursor: pointer; }
+.tour-art { margin: 6px 0 14px; }
+.tour-art .scene { pointer-events: none; }
+.tour-ic { width: 120px; height: 120px; margin: 40px auto 10px; padding: 30px; border-radius: 36px; color: #fff; background: linear-gradient(145deg, #818cf8, #4f46e5); box-shadow: 0 20px 40px -12px #4f46e5; }
+.tour-case { margin: 10px 0 0; text-align: center; font-weight: 800; font-size: calc(16px * var(--fs, 1)); animation: storyIn .35s ease; }
+.tour-note { margin: 2px 0 0; text-align: center; color: var(--mute); font-size: calc(12px * var(--fs, 1)); }
+.tour-cases, .tour-dots { display: flex; gap: 6px; justify-content: center; margin-top: 8px; }
+.tour-cases i, .tour-dots i { width: 8px; height: 8px; border-radius: 4px; background: var(--line); transition: width .25s, background .25s; }
+.tour-cases i.on, .tour-dots i.on { width: 22px; background: var(--pri); }
+.tour h2 { margin: 6px 0 6px; font-size: calc(26px * var(--fs, 1)); font-weight: 800; }
+.tour p { margin: 0 0 8px; color: var(--mute); font-size: calc(15.5px * var(--fs, 1)); line-height: 1.85; }
+.tour-dots { margin: auto 0 14px; padding-top: 14px; }
+.tour-nav { display: grid; grid-template-columns: 1fr 1.6fr; gap: 10px; }
+.isheet .tour-nav { margin-top: 10px; }
+.wn { margin: 0 0 6px; padding-inline-start: 20px; }
+.wn li { margin-bottom: 8px; line-height: 1.8; font-size: calc(15px * var(--fs, 1)); }
+.scene .n-inv, .scene.sky-night .n-inv, .scene.sky-rain .n-inv, .scene.sky-storm .n-inv { background: transparent !important; box-shadow: none !important; }
+.scene.sky-rain .node.corner b, .scene.sky-storm .node.corner b { color: #111827; }
+.scene.sky-rain .node.corner small, .scene.sky-storm .node.corner small { color: #374151; }

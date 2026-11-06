@@ -18,7 +18,8 @@ import { icons } from './icons.js';
 import { isNative, secure, migrateSession, monitor, deviceTools, APPS, updater } from './native.js';
 import { fetchLatest, isNewer } from './update.js';
 import { INFO, infoBtn } from './info.js';
-import { fetchWeather, searchPlace, sceneStory, SKY_AR, expectedPv } from './weather.js';
+import { fetchWeather, searchPlace, sceneStory, SKY_AR } from './weather.js';
+import { scene3d } from './scene3d.js';
 import { analyze } from './advisor.js';
 import { CATS, catOf, levelOf, toEvents, migrateLog, addEvents } from './log.js';
 import { trendDates, change } from './trend.js';
@@ -29,7 +30,7 @@ import { TIP_SECTIONS, smartTips, tipOfDay } from './tips.js';
 Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, CategoryScale, Filler, Tooltip, Legend);
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '3.7.0';
+const VERSION = '3.8.0';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -329,6 +330,90 @@ function startApp(quiet = false) {
   if (quiet) return;
   takeOverFromBackground().then(() => { refresh(); syncMonitor(); });
   autoCheckUpdate();
+  // أول تثبيت: جولة تعريفية. بعد كل تحديث: «ما الجديد» مرة واحدة
+  if (!store.get('tourSeen', false)) openTour();
+  else if (store.get('seenVersion', null) !== VERSION) openWhatsNew();
+}
+
+// ================= الجولة التعريفية و«ما الجديد» =================
+// أمثلة توضيحية للمشهد (ليست بيانات جهازك): كل حالة تُظهر شكلاً مختلفاً للتدفق
+const TOUR_CASES = [
+  { sky: 'clear', title: 'الألواح تغذّي البيت وتشحن البطارية', m: { pvW: 3600, outW: 450, batW: 3100, soc: 68, gridOn: true, gridV: 230, mode: 'Battery Mode' } },
+  { sky: 'clear', title: 'البطارية ممتلئة: الألواح تغذّي البيت فقط', m: { pvW: 520, outW: 520, batW: 0, soc: 100, gridOn: true, gridV: 230, mode: 'Battery Mode' } },
+  { sky: 'night', title: 'ليلاً: البطارية تغذّي البيت', m: { pvW: 0, outW: 480, batW: -510, soc: 62, gridOn: true, gridV: 230, mode: 'Battery Mode' } },
+  { sky: 'cloudy', title: 'الكهرباء تغذّي البيت وتشحن البطارية', m: { pvW: 0, outW: 650, batW: 1200, soc: 35, gridOn: true, gridV: 228, mode: 'Line Mode' } },
+];
+const TOUR = [
+  { t: 'أهلاً بك في طاقتي', p: ['تابع منظومتك الشمسية لحظة بلحظة: الألواح والبطارية والكهرباء والبيت في مشهد واحد.', 'هذه جولة قصيرة في التطبيق. يمكنك تخطيها والعودة إليها من «المزيد».'], scene: 0 },
+  { t: 'الرئيسية', p: ['المشهد يتغيّر مع حالة منظومتك: النبضات الخضراء تسري باتجاه الطاقة، والقيم في الزوايا، والسماء من طقس موقعك.', 'اضغط أي قيمة أو عنصر لتفتح تفاصيله.'], cycle: true },
+  { t: 'التقارير', ic: 'chart', p: ['مؤشر الاستقلالية عن الكهرباء في الأعلى.', 'تقارير يومية وأسبوعية وشهرية وسنوية، و«ملاحظات على منظومتك» بتوصيات من قراءاتك.'] },
+  { t: 'التنبيهات', ic: 'bell', p: ['انقطاع الكهرباء وعودتها، انخفاض البطارية، الحمل الزائد، والأعطال، حتى والتطبيق مغلق.', 'واختر شروط التنبيه بنفسك، واطّلع على سجل أعطال الإنفرتر من الخادم.'] },
+  { t: 'المزيد', ic: 'gear', p: ['الإعدادات: سعة البطارية، قدرة الألواح، موقعك للطقس، المظهر وحجم الخط.', 'حاسبة الأحمال والتوفير بالمال، النصائح، وإعدادات الإنفرتر عن بُعد.'] },
+  { t: 'ⓘ بجانب كل رقم', ic: 'info', p: ['اضغطها لتعرف من أين جاء الرقم، وكيف حُسب، وإلى متى يبقى محفوظاً.', 'جاهز؟ لنبدأ.'] },
+];
+
+function tourScene(c) {
+  const m = { stale: false, ...c.m };
+  const parts = sceneParts(m, true, /line/i.test(m.mode));
+  return `<div class="scene flow-card sky-${c.sky} ${m.pvW > 5 ? 'pv-on' : ''} ${m.soc >= 98 ? 'bat-full' : ''} ${parts.flows.bat.on ? (parts.flows.bat.reverse ? 'bat-dis' : 'bat-chg') : ''}">
+    <div class="sky-fx" aria-hidden="true"><i class="sun"></i><i class="moon"></i><i class="stars"></i><i class="cloud c1"></i><i class="cloud c2"></i><i class="cloud c3"></i></div>
+    ${scene3d({ ...parts, flowLine })}</div>`;
+}
+
+function openTour() {
+  let i = 0, ci = 0, timer = null;
+  const el = document.createElement('div');
+  el.className = 'tour';
+  el.setAttribute('role', 'dialog');
+  el.setAttribute('aria-modal', 'true');
+  const close = () => { clearInterval(timer); store.set('tourSeen', true); store.set('seenVersion', VERSION); el.classList.remove('show'); setTimeout(() => el.remove(), 250); };
+  const draw = () => {
+    clearInterval(timer);
+    const s = TOUR[i];
+    const c = TOUR_CASES[s.cycle ? ci : s.scene ?? 0];
+    el.innerHTML = `<div class="tour-b">
+      <button class="tour-skip" data-t="skip">${i === TOUR.length - 1 ? '' : 'تخطي'}</button>
+      <div class="tour-art">${s.ic ? `<div class="tour-ic">${icons[s.ic]}</div>` : tourScene(c)}${s.cycle ? `<p class="tour-case">${esc(c.title)}</p><div class="tour-cases">${TOUR_CASES.map((_, k) => `<i class="${k === ci ? 'on' : ''}"></i>`).join('')}</div><p class="tour-note">مثال توضيحي</p>` : ''}</div>
+      <h2>${esc(s.t)}</h2>${s.p.map((x) => `<p>${esc(x)}</p>`).join('')}
+      <div class="tour-dots">${TOUR.map((_, k) => `<i class="${k === i ? 'on' : ''}"></i>`).join('')}</div>
+      <div class="tour-nav">${i ? '<button class="btn ghost" data-t="prev">السابق</button>' : '<span></span>'}<button class="btn primary" data-t="next">${i === TOUR.length - 1 ? 'ابدأ' : 'التالي'}</button></div>
+    </div>`;
+    // الحالات تتبدّل تلقائياً كل 3 ثوانٍ في شاشة الرئيسية
+    if (s.cycle) timer = setInterval(() => { ci = (ci + 1) % TOUR_CASES.length; draw(); }, 3000);
+  };
+  el.addEventListener('click', (e) => {
+    const a = e.target.closest('[data-t]')?.dataset.t;
+    if (!a) return;
+    if (a === 'skip') close();
+    if (a === 'prev') { i = Math.max(0, i - 1); draw(); }
+    if (a === 'next') { if (i === TOUR.length - 1) close(); else { i++; ci = 0; draw(); } }
+  });
+  draw();
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+}
+
+// ما الجديد في هذا الإصدار: يظهر مرة واحدة بعد التحديث
+const WHATS_NEW = [
+  'مشهد ثلاثي الأبعاد في الرئيسية: البيت والألواح والبطارية والشبكة، ونبضات تسري باتجاه الطاقة، والقيم في الزوايا.',
+  'درجة حرارة الجو من طقس موقعك، وحرارة الإنفرتر والبطارية إن كان جهازك يرسلها.',
+  'جولة تعريفية بالتطبيق، تجدها في «المزيد» متى شئت.',
+  'إصلاحات من مراجعة شاملة للدقة والتناسق.',
+];
+function openWhatsNew() {
+  store.set('seenVersion', VERSION);
+  const el = document.createElement('div');
+  el.className = 'isheet';
+  el.innerHTML = `<div class="isheet-b" role="dialog" aria-modal="true" aria-label="ما الجديد"><i class="grab"></i>
+    <h3>ما الجديد في الإصدار ${VERSION}</h3><ul class="wn">${WHATS_NEW.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
+    <div class="tour-nav"><button class="btn ghost" data-tour>جولة في التطبيق</button><button class="btn primary" data-close>تم</button></div></div>`;
+  const close = () => { el.classList.remove('show'); setTimeout(() => el.remove(), 250); };
+  el.addEventListener('click', (e) => {
+    if (e.target === el || e.target.closest('[data-close]')) close();
+    if (e.target.closest('[data-tour]')) { close(); openTour(); }
+  });
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
 }
 
 function navigate(tab, page) {
@@ -708,15 +793,22 @@ function nominalV(m) {
 // ===== ميزات الخادم الاختيارية =====
 // undefined = لم تُجرَّب بعد، true = يتيحها الخادم لهذا الحساب، false = رفضها فتُخفى الميزة.
 // «لا توجد بيانات» (ERR_NO_RECORD) ليس رفضاً، وخطأ الشبكة لا يحكم على الميزة.
-const cap = (k) => store.get(`cap.${k}.${sn()}`, undefined);
+// الرفض الصريح (لا صلاحية / غير مدعوم) يخفي الميزة فوراً، وأي خطأ آخر من الخادم يُحسب، فتُخفى بعد 3 مرات متتالية
+// حتى لا يُخفي خلل مؤقت في الخادم ميزة تعمل.
+const cap = (k) => { const v = store.get(`cap.${k}.${sn()}`, undefined); return v === true ? true : v === false || v >= 3 ? false : undefined; };
+const isRefusal = (e) => /صلاحية|لا يدعم|NO_AUTH|UNSUPPORT|PERMISSION|ACTION/i.test(`${e.desc || ''} ${e.message || ''}`);
 async function optional(k, fn) {
   if (cap(k) === false) return null;
+  const key = `cap.${k}.${sn()}`;
   try {
     const r = await fn();
-    store.set(`cap.${k}.${sn()}`, true);
+    store.set(key, true);
     return r;
   } catch (e) {
-    if (e.code !== undefined && e.code !== 12) store.set(`cap.${k}.${sn()}`, false);
+    if (e.code !== undefined && e.code !== 12) {
+      const prev = store.get(key, 0);
+      store.set(key, isRefusal(e) ? false : (typeof prev === 'number' ? prev : 0) + 1);
+    }
     throw e;
   }
 }
@@ -782,8 +874,9 @@ function flowLine(id, d, on, watts, reverse) {
   if (!on) return track;
   const dur = Math.max(0.7, 2.6 - Math.log10(Math.abs(watts || 50) + 1) * 0.5).toFixed(2);
   const keys = reverse ? 'keyPoints="1;0" keyTimes="0;1" calcMode="linear" rotate="auto-reverse"' : 'rotate="auto"';
+  // نبضات ضوء تسري على السلك باتجاه الطاقة
   const arrows = [0, 1, 2].map((i) => `
-    <path class="arrow a-${id}" d="M-4.5 -5 L1.5 0 L-4.5 5">
+    <path class="arrow a-${id}" d="M-6 0 L3 0">
       <animateMotion dur="${dur}s" begin="${(-i * dur / 3).toFixed(2)}s" repeatCount="indefinite" ${keys}><mpath href="#fp-${id}"/></animateMotion>
     </path>`).join('');
   return `${track}<path id="fp-${id}" class="flow-line f-${id}" d="${d}"/>${arrows}`;
@@ -861,48 +954,55 @@ function currentSky(m) {
   return h < 6 || h >= 18 ? 'night' : (m?.pvW ?? 0) > 50 ? 'clear' : 'partly';
 }
 
+// حالة الخطوط والتسميات من القراءة: نفس المنطق للرئيسية ولشاشات التعريف
+function sceneParts(m, live, isLine) {
+  const pv = live && (m.pvW ?? 0) > 5;
+  return {
+    soc: Math.max(0, Math.min(100, m.soc ?? 0)),
+    flows: {
+      solar: { on: pv, w: m.pvW, reverse: false },
+      grid: { on: live && isLine && m.gridOn, w: 300, reverse: false },
+      load: { on: live && (m.outW ?? 0) > 5, w: m.outW, reverse: false },
+      // المسار مرسوم من الإنفرتر إلى البطارية، فالتفريغ يسير عكسه
+      bat: { on: live && Math.abs(m.batW ?? 0) > 10, w: m.batW, reverse: (m.batW ?? 0) < 0 },
+    },
+    labels: {
+      solar: { value: fmt.wShort(m.pvW), dim: !pv },
+      grid: { title: live && isLine && m.gridOn ? 'الشبكة تغذّي' : 'الشبكة', value: m.gridOn ? numAr(m.gridV) + ' فولت' : 'مقطوعة', dim: !(m.gridOn && live) },
+      bat: { value: `${m.soc ?? '—'}%`, tag: batTag(m, live), dim: !live },
+      load: { value: fmt.wShort(m.outW), dim: !((m.outW ?? 0) > 5 && live) },
+    },
+  };
+}
+
 function scene(m, live, isLine) {
   const sky = currentSky(m);
   const pv = live && (m.pvW ?? 0) > 5;
-  const w = state.weather;
-  const story = sceneStory(m, w && Date.now() - w.at < 2 * 36e5 ? w : null, { kwp: pvKwp(), lowSoc: state.prefs.lowSoc });
-  const soc = Math.max(0, Math.min(100, m.soc ?? 0));
+  const w = state.weather && Date.now() - state.weather.at < 2 * 36e5 ? state.weather : null;
+  const story = sceneStory(m, w, { kwp: pvKwp(), lowSoc: state.prefs.lowSoc });
   const loc = weatherLoc();
-  const wx = w && Date.now() - w.at < 2 * 36e5
-    ? `<span class="wx-t">${esc(SKY_AR[w.sky])}${w.temp != null ? ` ${w.temp}°` : ''}</span>${loc?.name ? `<span>${esc(loc.name)}</span>` : ''}${w.sunrise ? `<span>${w.sunrise}–${w.sunset}</span>` : ''}`
+  const parts = sceneParts(m, live, isLine);
+  const full = (m.soc ?? 0) >= 98;
+  const wx = w
+    ? `<span class="wx-t">${esc(SKY_AR[w.sky])}</span>${loc?.name ? `<span>${esc(loc.name)}</span>` : ''}${w.sunrise ? `<span>${w.sunrise}–${w.sunset}</span>` : ''}`
     : loc ? '<span>جارٍ جلب الطقس…</span>' : '<button class="link" data-goto="more:settings">حدّد موقع منظومتك لعرض الطقس</button>';
+  // درجات الحرارة: الجو من الطقس، والإنفرتر والبطارية إن كان الجهاز يرسلها
+  const temps = [
+    w?.temp != null ? `<span class="tchip" title="حرارة الجو">${icons.thermo}<b><bdi>${w.temp}°</bdi></b><small>الجو</small></span>` : '',
+    m.invTemp != null ? `<span class="tchip ${m.invTemp >= state.prefs.tempInv ? 'hot' : ''}">${icons.inverter}<b><bdi>${numAr(m.invTemp)}°</bdi></b><small>الإنفرتر</small></span>` : '',
+    m.batTemp != null ? `<span class="tchip ${m.batTemp >= state.prefs.tempBat ? 'hot' : ''}">${icons.battery}<b><bdi>${numAr(m.batTemp)}°</bdi></b><small>البطارية</small></span>` : '',
+  ].join('');
   return `
-  <section class="card flow-card scene sky-${sky} ${live ? '' : 'stale'} ${pv ? 'pv-on' : ''}">
+  <section class="card flow-card scene sky-${sky} ${live ? '' : 'stale'} ${pv ? 'pv-on' : ''} ${full ? 'bat-full' : ''} ${parts.flows.bat.on ? (parts.flows.bat.reverse ? 'bat-dis' : 'bat-chg') : ''}">
     <div class="sky-fx" aria-hidden="true">
       <i class="sun"></i><i class="moon"></i><i class="stars"></i>
       <i class="cloud c1"></i><i class="cloud c2"></i><i class="cloud c3"></i>
       <i class="rain"></i><i class="flash"></i><i class="fog"></i>
     </div>
-    <svg viewBox="0 0 360 300" class="flow-svg scene-svg" aria-hidden="true">
-      <path class="ground" d="M0 248 Q180 228 360 248 L360 300 L0 300 Z"/>
-      <g class="tower"><path d="M318 238 L330 120 L342 238 M322 200 H338 M325 165 H335 M312 140 H348 M316 128 H344"/></g>
-      <g class="house">
-        <path class="wall" d="M150 238 V150 L230 112 L310 150 V238 Z"/>
-        <path class="roof" d="M136 156 L230 104 L322 156"/>
-        <path class="panels" d="M152 140 L226 101 L240 116 L168 154 Z"/>
-        <path class="panel-lines" d="M170 131 L184 145 M188 121 L202 136 M207 111 L220 126 M160 147 L233 108"/>
-        <rect class="door" x="264" y="192" width="26" height="46" rx="3"/>
-        <rect class="win" x="236" y="168" width="20" height="18" rx="2"/>
-      </g>
-      <g class="battery-box"><rect x="96" y="176" width="34" height="62" rx="7"/><rect class="lvl" x="101" y="${181 + Math.round(52 * (1 - soc / 100))}" width="24" height="${Math.round(52 * (soc / 100))}" rx="4"/></g>
-      ${flowLine('solar', 'M196 128 L196 168', pv, m.pvW, false)}
-      ${flowLine('grid', 'M330 150 L330 160 L210 160 L210 168', live && isLine && m.gridOn, 300, false)}
-      ${flowLine('load', 'M212 186 L250 186 L250 214 L264 214', live && (m.outW ?? 0) > 5, m.outW, false)}
-      ${flowLine('bat', 'M182 186 L150 186 L150 206 L130 206', live && Math.abs(m.batW ?? 0) > 10, m.batW, (m.batW ?? 0) < 0)}
-      <rect class="inv-box" x="182" y="168" width="30" height="34" rx="6"/><circle class="inv-led" cx="197" cy="178" r="3"/>
-    </svg>
-    <button class="node n-solar ${pv ? '' : 'dim'}" data-page="solar" aria-label="تفاصيل الألواح"><small>الألواح</small><b><bdi>${fmt.wShort(m.pvW)}</bdi></b></button>
-    <button class="node n-grid ${m.gridOn && live ? '' : 'dim'}" data-page="grid" aria-label="تفاصيل كهرباء الشبكة"><small>${live && isLine && m.gridOn ? 'الشبكة تغذّي' : 'الشبكة'}</small><b><bdi>${m.gridOn ? numAr(m.gridV) + ' فولت' : 'مقطوعة'}</bdi></b></button>
-    <button class="node n-bat ${live ? '' : 'dim'}" data-page="battery" aria-label="تفاصيل البطارية"><b><bdi>${m.soc ?? '—'}%</bdi></b>${batTag(m, live)}</button>
-    <button class="node n-load ${(m.outW ?? 0) > 5 && live ? '' : 'dim'}" data-page="load" aria-label="تفاصيل الحمل"><small>الحمل</small><b><bdi>${fmt.wShort(m.outW)}</bdi></b></button>
-    <button class="node n-inv" data-page="device" aria-label="تفاصيل الإنفرتر"></button>
+    ${scene3d({ ...parts, flowLine })}
     <div class="wx">${wx}</div>
   </section>
+  ${temps ? `<div class="tchips">${temps}</div>` : ''}
   ${story ? `<section class="story ${story.level}"><b>${esc(story.title)}</b><p>${esc(story.text)}</p></section>` : ''}
   ${state.demo ? `<div class="chips-sel demo-sky">${[['', 'الآن'], ['clear', 'مشمس'], ['partly', 'غائم جزئياً'], ['rain', 'ماطر'], ['night', 'ليل']].map(([k, l]) => `<button data-demo-sky="${k}" class="${(state.demoSky || '') === k ? 'on' : ''}">${l}</button>`).join('')}</div>` : ''}`;
 }
@@ -2058,12 +2158,16 @@ function viewMore() {
     { page: 'setup', title: 'ربط الجهاز والحساب', sub: 'إنشاء حساب، إعداد الواي فاي (Wi-Fi Config)، البلوتوث', icon: icons.wifi, color: 'c-sky' },
     { page: 'settings', title: 'الإعدادات', sub: `${themeName} · ${state.prefs.batteryAh ? `البطارية ${state.prefs.batteryAh} أمبير ساعة` : 'أدخل سعة البطارية'}`, icon: icons.gauge, color: 'c-violet' },
     { page: 'update', title: 'التحقق من التحديثات', sub: updateAvailable() ? `يتوفر الإصدار ${state.update.version}` : 'الإصدار الحالي ' + VERSION, icon: icons.upgrade, color: 'c-amber', badge: updateAvailable() ? 'جديد' : '' },
+    { page: 'tour', title: 'جولة في التطبيق', sub: 'كيف تستخدم طاقتي، مع أمثلة لحالات المنظومة', icon: icons.star, color: 'c-sky' },
     { page: 'about', title: 'حول التطبيق', sub: 'طاقتي · الإصدار ' + VERSION, icon: icons.info, color: 'c-slate' },
   ])}
   <button class="btn danger wide logout-btn" id="logoutBtn">${icons.logout} ${state.demo ? 'الخروج من الوضع التجريبي' : 'تسجيل الخروج'}</button>
   <p class="foot">طاقتي · الإصدار ${VERSION}</p>`;
 }
 AFTER.more = () => {
+  // الجولة نافذة فوق الصفحة وليست صفحة مستقلة
+  const t = $('[data-page="tour"]');
+  if (t) t.addEventListener('click', (e) => { e.stopPropagation(); openTour(); }, true);
   $('#logoutBtn').onclick = async () => {
     if (await confirmDialog('تسجيل الخروج', state.demo ? 'هل تريد الخروج من الوضع التجريبي؟' : 'هل تريد تسجيل الخروج؟ ستبقى التقارير المحفوظة على الهاتف.')) logout();
   };

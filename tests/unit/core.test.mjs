@@ -507,3 +507,20 @@ test('ترجمة أعطال الإنفرتر من الخادم', () => {
   assert.equal(warnAr('Over temperature').title, 'ارتفاع حرارة الإنفرتر');
   assert.equal(warnAr('Something new 42').title, 'Something new 42', 'غير المعروف يبقى بنصه الأصلي');
 });
+
+test('مشهد ثلاثي الأبعاد: الهندسة وخطوط الطاقة والنسبة على البطارية', async () => {
+  const { scene3d, P } = await import('../../src/scene3d.js');
+  const calls = [];
+  const flowLine = (id, d, on, w, rev) => { calls.push({ id, on, rev }); return `<path class="wire" data-id="${id}" d="${d}"/>`; };
+  const html = scene3d({ soc: 73, flows: { solar: { on: true }, grid: { on: false }, load: { on: true }, bat: { on: true, reverse: true } },
+    labels: { solar: { value: '3.6 ك.واط' }, grid: { title: 'الشبكة', value: '230 فولت' }, bat: { value: '73%', tag: '' }, load: { value: '450 واط' } }, flowLine });
+  assert.deepEqual(calls.map((c) => c.id).sort(), ['bat', 'grid', 'load', 'solar']);
+  assert.equal(calls.find((c) => c.id === 'bat').rev, true, 'التفريغ يسير عكس رسم المسار');
+  assert.match(html, />73%</, 'النسبة مكتوبة على البطارية');
+  for (const c of ['n-solar', 'n-grid', 'n-bat', 'n-load', 'n-inv']) assert.ok(html.includes(c), c);
+  // كل النقاط داخل مساحة الرسم
+  // كل العناصر داخل مساحة الرسم (الأرض وحدها تمتد خارجه عمداً لتملأ المشهد)
+  const pts = [...html.matchAll(/class="([^"]+)" points="([^"]+)"/g)].filter((m) => !m[1].startsWith('ground')).flatMap((m) => m[2].split(' ').map((p) => p.split(',').map(Number)));
+  assert.ok(pts.length > 50 && pts.every(([x, y]) => x > 0 && x < 400 && y > 0 && y < 360), 'لا شيء خارج المشهد');
+  assert.deepEqual(P(0, 0, 0).map(Math.round), [206, 96]);
+});

@@ -1,0 +1,114 @@
+// مشهد ثلاثي الأبعاد (إسقاط متساوي القياس) بأسلوب نظيف: بيت أبيض بسقف ألواح داكنة، مرآب بسيارة، بطارية
+// مكتوبة نسبتها عليها، إنفرتر على الجدار، وبرج كهرباء. القيم في الزوايا الأربع تصلها خطوط برتقالية متقطعة بالعناصر،
+// والأسلاك الداكنة تسري فيها نبضات ضوء باتجاه الطاقة الحقيقي.
+
+const S = 25; // حجم الوحدة بالبكسل
+const OX = 206, OY = 96;
+const C30 = Math.cos(Math.PI / 6), S30 = 0.5;
+
+// من إحداثيات العالم إلى الشاشة
+export const P = (x, y, z = 0) => [OX + (x - y) * C30 * S, OY + (x + y) * S30 * S - z * S];
+const pt = (p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`;
+const poly = (cls, ...pts) => `<polygon class="${cls}" points="${pts.map((p) => pt(P(...p))).join(' ')}"/>`;
+const path = (...pts) => 'M' + pts.map((p) => pt(P(...p))).join(' L');
+const at = (x, y, z) => { const [sx, sy] = P(x, y, z); return `left:${(sx / 4).toFixed(1)}%;top:${(sy / 3.6).toFixed(1)}%`; };
+
+// صندوق: الأوجه الظاهرة فقط (العلوي، المواجه لـ +x، المواجه لـ +y)
+function box(cls, x0, x1, y0, y1, z0, z1) {
+  return poly(`${cls} top`, [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1])
+    + poly(`${cls} sx`, [x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1])
+    + poly(`${cls} sy`, [x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]);
+}
+
+// نص مرسوم على وجه يواجه +y (يميل مع اتجاه x)
+const faceText = (cls, x, y, z, txt) => {
+  const [sx, sy] = P(x, y, z);
+  return `<text class="${cls}" transform="matrix(${C30.toFixed(3)},${S30},0,1,${sx.toFixed(1)},${sy.toFixed(1)})">${txt}</text>`;
+};
+
+function house() {
+  const [x0, x1, y0, y1, h, ridge] = [3.2, 8.4, 3.2, 7.4, 3.1, 5.2];
+  const ym = (y0 + y1) / 2;
+  let s = '';
+  s += poly('shadow', [x0 + 0.6, y0 + 0.8, 0], [x1 + 1.6, y0 + 0.8, 0], [x1 + 1.6, y1 + 1.1, 0], [x0 + 0.6, y1 + 1.1, 0]);
+  s += poly('roof back', [x0 - 0.3, ym, ridge], [x1 + 0.3, ym, ridge], [x1 + 0.3, y0 - 0.35, h - 0.15], [x0 - 0.3, y0 - 0.35, h - 0.15]);
+  s += poly('wall sy', [x0, y1, 0], [x1, y1, 0], [x1, y1, h], [x0, y1, h]);
+  s += poly('wall sx', [x1, y0, 0], [x1, y1, 0], [x1, y1, h], [x1, y0, h]);
+  s += poly('wall gable', [x1, y0, h], [x1, y1, h], [x1, ym, ridge]);
+  // مدخل ونوافذ على الواجهة الجانبية
+  s += poly('frame', [x1, 4.0, 0], [x1, 5.6, 0], [x1, 5.6, 2.2], [x1, 4.0, 2.2]);
+  s += poly('glass', [x1, 4.15, 0.05], [x1, 5.45, 0.05], [x1, 5.45, 2.05], [x1, 4.15, 2.05]);
+  s += poly('win', [x1, 6.0, 1.2], [x1, 6.9, 1.2], [x1, 6.9, 2.3], [x1, 6.0, 2.3]);
+  s += poly('step', [x1, 3.8, 0], [x1 + 0.9, 3.8, 0], [x1 + 0.9, 5.8, 0], [x1, 5.8, 0]);
+  // السقف الأمامي مغطى بالألواح بالكامل تقريباً
+  s += poly('roof front', [x0 - 0.3, ym, ridge], [x1 + 0.3, ym, ridge], [x1 + 0.3, y1 + 0.35, h - 0.15], [x0 - 0.3, y1 + 0.35, h - 0.15]);
+  const cols = 5, rows = 3;
+  const yz = (t) => [ym + (y1 + 0.25 - ym) * t, ridge - (ridge - h + 0.1) * t + 0.05];
+  for (let c = 0; c < cols; c++) {
+    for (let r = 0; r < rows; r++) {
+      const ax = x0 + 0.05 + c * 1.04, bx = ax + 0.98;
+      const [ya, za] = yz(0.06 + r * 0.31), [yb, zb] = yz(0.06 + r * 0.31 + 0.28);
+      s += poly('panel', [ax, ya, za], [bx, ya, za], [bx, yb, zb], [ax, yb, zb]);
+    }
+  }
+  s += `<path class="ridge" d="${path([x0 - 0.3, ym, ridge], [x1 + 0.3, ym, ridge])}"/>`;
+  return s;
+}
+
+// مرآب ملاصق للبيت بسيارة بيضاء
+function garage() {
+  let s = box('gar', 0.6, 3.2, 3.8, 7.4, 0, 2.2);
+  s += poly('gar-open', [0.75, 7.4, 0], [3.05, 7.4, 0], [3.05, 7.4, 1.8], [0.75, 7.4, 1.8]);
+  for (let i = 0; i < 4; i++) s += `<path class="slat" d="${path([0.75, 7.41, 1.75 - i * 0.12], [3.05, 7.41, 1.75 - i * 0.12])}"/>`;
+  s += box('car', 1.0, 2.8, 6.4, 8.4, 0.25, 0.85) + box('car cab', 1.25, 2.55, 6.6, 7.7, 0.85, 1.35);
+  for (const [x, y] of [[1.15, 8.4], [2.65, 8.4]]) { const [cx, cy] = P(x, y, 0.25); s += `<ellipse class="wheel" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" rx="5" ry="6"/>`; }
+  return s;
+}
+
+function pylon() {
+  const [x, y] = [9.1, 1.5];
+  const legs = [[-0.45, -0.45], [0.45, -0.45], [0.45, 0.45], [-0.45, 0.45]];
+  let d = '';
+  for (const [dx, dy] of legs) d += path([x + dx, y + dy, 0], [x + dx * 0.25, y + dy * 0.25, 5.4]) + ' ';
+  for (const z of [1.4, 2.8, 4.2]) {
+    const k = 1 - (z / 5.4) * 0.75;
+    d += path(...legs.map(([dx, dy]) => [x + dx * k, y + dy * k, z]), [x + legs[0][0] * k, y + legs[0][1] * k, z]) + ' ';
+  }
+  d += path([x - 1.2, y, 5.4], [x + 1.2, y, 5.4]) + ' ' + path([x - 0.9, y, 4.7], [x + 0.9, y, 4.7]) + ' ' + path([x, y, 5.4], [x, y, 6.2]);
+  return `<path class="tower" d="${d}"/>`;
+}
+
+// خط برتقالي متقطع من قيمة الزاوية إلى العنصر: أفقي ثم عمودي
+const leader = (from, to) => `<path class="leader" d="M${pt(from)} L${pt([to[0], from[1]])} L${pt(to)}"/>`;
+
+/**
+ * يبني المشهد. flowLine تأتي من الواجهة (نبضات متحركة على مسار)، فتبقى سلوكياتها واختباراتها كما هي.
+ */
+export function scene3d({ soc = 0, flows, labels, flowLine }) {
+  const lvl = Math.max(0, Math.min(1, soc / 100));
+  const bat = box('bat', 3.3, 4.3, 7.8, 8.8, 0, 2.6)
+    + poly('bat-lvl', [3.4, 8.8, 0.15], [3.5, 8.8, 0.15], [3.5, 8.8, 0.15 + 2.3 * lvl], [3.4, 8.8, 0.15 + 2.3 * lvl])
+    + `<circle class="bat-led" cx="${P(3.8, 8.8, 2.25)[0].toFixed(1)}" cy="${P(3.8, 8.8, 2.25)[1].toFixed(1)}" r="2.2"/>`
+    + faceText('bat-pct', 3.55, 8.8, 0.95, `${Math.round(soc)}%`);
+  const inv = box('inv', 4.9, 5.8, 7.4, 7.75, 1.3, 2.5) + poly('inv-band', [5.05, 7.75, 1.8], [5.65, 7.75, 1.8], [5.65, 7.75, 1.95], [5.05, 7.75, 1.95]);
+  const ground = poly('ground top', [-0.5, -0.5, 0], [12, -0.5, 0], [12, 11.5, 0], [-0.5, 11.5, 0]);
+  const line = (id, pts, f) => flowLine(id, path(...pts), f.on, f.w, f.reverse);
+  return `<svg viewBox="0 0 400 360" class="flow-svg scene-svg iso" aria-hidden="true">
+    ${ground}${pylon()}${garage()}${house()}
+    <path class="cable" d="${path([9.1, 1.5, 5.4], [8.4, 3.4, 3.4])}"/>
+    ${line('grid', [[8.4, 3.4, 3.0], [8.4, 3.4, 2.75], [8.4, 7.42, 2.75], [5.7, 7.5, 2.75], [5.7, 7.5, 2.5]], flows.grid)}
+    ${line('solar', [[5.35, 6.4, 4.0], [5.35, 7.6, 3.05], [5.35, 7.6, 2.5]], flows.solar)}
+    ${line('bat', [[4.9, 7.6, 1.6], [4.6, 7.6, 1.6], [4.6, 8.3, 1.6], [4.3, 8.3, 1.6]], flows.bat)}
+    ${line('load', [[5.8, 7.55, 1.6], [7.0, 7.45, 1.6], [8.4, 7.45, 1.6], [8.4, 5.6, 1.6]], flows.load)}
+    ${bat}${inv}
+    ${leader([92, 52], P(5.5, 5.6, 4.6))}
+    ${leader([318, 52], P(9.1, 1.5, 6.2))}
+    ${leader([92, 318], P(3.8, 8.8, 0))}
+    ${leader([318, 318], P(8.8, 4.8, 0))}
+  </svg>
+  <button class="node corner n-solar ${labels.solar.dim ? 'dim' : ''}" data-page="solar" aria-label="تفاصيل الألواح"><small>الألواح</small><b><bdi>${labels.solar.value}</bdi></b></button>
+  <button class="node corner n-grid ${labels.grid.dim ? 'dim' : ''}" data-page="grid" aria-label="تفاصيل كهرباء الشبكة"><small>${labels.grid.title}</small><b><bdi>${labels.grid.value}</bdi></b></button>
+  <button class="node corner n-bat ${labels.bat.dim ? 'dim' : ''}" data-page="battery" aria-label="تفاصيل البطارية">${labels.bat.tag}<b><bdi>${labels.bat.value}</bdi></b></button>
+  <button class="node corner n-load ${labels.load.dim ? 'dim' : ''}" data-page="load" aria-label="تفاصيل الحمل"><small>البيت</small><b><bdi>${labels.load.value}</bdi></b></button>
+  <button class="node n-inv" style="${at(5.35, 7.75, 1.9)}" data-page="device" aria-label="تفاصيل الإنفرتر"></button>`;
+}

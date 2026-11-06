@@ -75,17 +75,19 @@ async function newPage(browser, { viewport = { width: 390, height: 844 }, scheme
     page.ghCalls++;
     await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify(release) });
   });
-  await page.addInitScript(({ loggedIn, SESSION, DEVICE, prefs, storage }) => {
+  await page.addInitScript(({ loggedIn, SESSION, DEVICE, prefs, storage, VER }) => {
     if (sessionStorage.getItem('seeded')) return;
     sessionStorage.setItem('seeded', '1');
     localStorage.clear();
+    // الجولة التعريفية و«ما الجديد» تُختبران في قسمهما، فنتجاوزهما في باقي الاختبارات
+    if (!storage.__tour) { localStorage.setItem('taqati.tourSeen', 'true'); localStorage.setItem('taqati.seenVersion', JSON.stringify(VER)); }
     if (loggedIn) {
       localStorage.setItem('taqati.session', JSON.stringify(SESSION));
       localStorage.setItem('taqati.devices', JSON.stringify([{ ...DEVICE, alias: DEVICE.devalias }]));
     }
     if (prefs) localStorage.setItem('taqati.prefs', JSON.stringify(prefs));
-    for (const [k, v] of Object.entries(storage)) localStorage.setItem('taqati.' + k, JSON.stringify(v));
-  }, { loggedIn, SESSION, DEVICE, prefs, storage });
+    for (const [k, v] of Object.entries(storage)) if (k !== '__tour') localStorage.setItem('taqati.' + k, JSON.stringify(v));
+  }, { loggedIn, SESSION, DEVICE, prefs, storage, VER });
   await page.goto(`http://localhost:${server.address().port}/`);
   return page;
 }
@@ -479,6 +481,9 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       check('المشهد المشمس: سماء صافية والألواح تشحن البطارية', scenes.clear.cls.includes('sky-clear') && scenes.clear.story.includes('تشحن البطارية') && scenes.clear.bat.includes('تشحن'), JSON.stringify(scenes.clear));
       check('المشهد الماطر: إنتاج ضعيف متوقع والبطارية تكمّل', scenes.rain.cls.includes('sky-rain') && scenes.rain.story.includes('متوقع') && scenes.rain.bat.includes('تُفرّغ'), JSON.stringify(scenes.rain));
       check('المشهد الليلي: البيت على البطارية', scenes.night.cls.includes('sky-night') && scenes.night.story.includes('ليل') && scenes.night.bat.includes('تُفرّغ'), JSON.stringify(scenes.night));
+      await page.click('[data-demo-sky="clear"]'); await page.waitForTimeout(600);
+      check('حرارة الجو تظهر من الطقس', (await text(page, '.tchips')).includes('24°') && (await text(page, '.tchips')).includes('الجو'));
+      check('المشهد ثلاثي الأبعاد: نسبة البطارية مكتوبة على البطارية', /\d+%/.test(await page.$eval('.bat-pct', (e) => e.textContent)));
       const arrows = await page.$$eval('animateMotion', (a) => a.length);
       check('خطوط الطاقة متحركة في المشهد', arrows >= 6);
       // ⓘ داخل بطاقة: يفتح الشرح ولا يفتح البطاقة
@@ -531,7 +536,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
     {
       // ميزة يرفضها خادم الحساب تختفي بدل أن تبقى زراً لا يعمل
       const page = await newPage(browser, {
-        api: (a) => (a === 'queryDeviceLastData' ? { err: 0, dat: points(Date.now() - 60000) } : a === 'queryDeviceEnergyYearPerMonth' ? { err: 260, desc: 'ERR_NO_AUTH' } : a === 'queryDeviceEnergyTotal' ? { err: 0, dat: { energy: '900' } } : null),
+        api: (a) => (a === 'authSource' ? { err: 0, dat: { token: 'T2', secret: 'S2', expire: 7200 } } : a === 'queryDeviceLastData' ? { err: 0, dat: points(Date.now() - 60000) } : a === 'queryDeviceEnergyYearPerMonth' ? { err: 260, desc: 'ERR_NO_AUTH' } : a === 'queryDeviceEnergyTotal' ? { err: 0, dat: { energy: '900' } } : null),
       });
       await page.waitForSelector('.flow-card');
       await page.evaluate(() => window.__nav('reports', 'year')); await page.waitForTimeout(800);
@@ -539,6 +544,41 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.evaluate(() => window.__nav('reports', null)); await page.waitForTimeout(300);
       check('بطاقة التقرير السنوي تختفي بعد رفض الخادم', !(await page.$('[data-page=year]')));
       await page.context().close();
+    }
+
+    // 16) الجولة التعريفية عند أول تثبيت، و«ما الجديد» بعد التحديث
+    {
+      const page = await newPage(browser, { loggedIn: false, storage: { __tour: true } });
+      await page.click('#demoBtn');
+      await page.waitForSelector('.tour.show', { timeout: 5000 }).catch(() => null);
+      check('الجولة تظهر عند أول تشغيل', (await text(page, '.tour h2')).includes('أهلاً بك'));
+      await page.click('[data-t=next]'); await page.waitForTimeout(300);
+      const c1 = await text(page, '.tour-case');
+      await page.waitForTimeout(3300);
+      const c2 = await text(page, '.tour-case');
+      check('شاشة الرئيسية في الجولة تعرض حالات مختلفة للمشهد تلقائياً', (await text(page, '.tour h2')) === 'الرئيسية' && c1 && c2 && c1 !== c2, `${c1} → ${c2}`);
+      const titles = [];
+      for (let k = 0; k < 4; k++) { await page.click('[data-t=next]'); await page.waitForTimeout(200); titles.push(await text(page, '.tour h2')); }
+      check('التالي ينتقل بين الشاشات بالترتيب', titles.join('|') === 'التقارير|التنبيهات|المزيد|ⓘ بجانب كل رقم', titles.join('|'));
+      await page.click('[data-t=prev]'); await page.waitForTimeout(200);
+      check('السابق يعود للشاشة قبلها', (await text(page, '.tour h2')) === 'المزيد');
+      await page.click('[data-t=next]'); await page.click('[data-t=next]'); await page.waitForTimeout(400);
+      check('«ابدأ» يغلق الجولة ولا تعود', !(await page.$('.tour')) && (await page.evaluate(() => localStorage.getItem('taqati.tourSeen'))) === 'true');
+      await page.evaluate(() => window.__nav('more', null)); await page.waitForTimeout(300);
+      await page.$eval('[data-page="tour"]', (e) => e.scrollIntoView({ block: 'center' }));
+      await page.click('[data-page="tour"]'); await page.waitForTimeout(300);
+      check('الجولة متاحة من «المزيد»', !!(await page.$('.tour')));
+      await page.click('[data-t=skip]'); await page.waitForTimeout(400);
+      check('تخطي يغلق الجولة', !(await page.$('.tour')));
+      check('بلا أخطاء JavaScript (الجولة)', page.errors.length === 0, page.errors.join(' | '));
+      await page.context().close();
+      const up = await newPage(browser, { loggedIn: false, storage: { __tour: true, tourSeen: true, seenVersion: '0.0.1' } });
+      await up.click('#demoBtn');
+      await up.waitForSelector('.isheet.show', { timeout: 5000 }).catch(() => null);
+      check('«ما الجديد» يظهر مرة بعد التحديث', (await text(up, '.isheet h3')).includes('ما الجديد') && (await up.$$('.wn li')).length >= 3);
+      await up.click('.isheet [data-close]'); await up.waitForTimeout(300);
+      check('«ما الجديد» لا يعود بعد إغلاقه', (await up.evaluate(() => JSON.parse(localStorage.getItem('taqati.seenVersion')))) === VER);
+      await up.context().close();
     }
 
     // 11) التحقق من التحديثات
