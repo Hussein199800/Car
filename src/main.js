@@ -20,6 +20,8 @@ import { fetchLatest, isNewer } from './update.js';
 import { INFO, infoBtn } from './info.js';
 import { fetchWeather, searchPlace, sceneStory, SKY_AR } from './weather.js';
 import { scene3d } from './scene3d.js';
+import { scenePhoto, photoFor, batLook, photoIsDark } from './scenePhoto.js';
+import { sceneClassic } from './sceneClassic.js';
 import { analyze } from './advisor.js';
 import { CATS, catOf, levelOf, toEvents, migrateLog, addEvents } from './log.js';
 import { trendDates, change } from './trend.js';
@@ -30,7 +32,7 @@ import { TIP_SECTIONS, smartTips, tipOfDay } from './tips.js';
 Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, CategoryScale, Filler, Tooltip, Legend);
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '3.8.0';
+const VERSION = '3.9.0';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -42,6 +44,8 @@ const DEFAULT_PREFS = {
   loc: null,
   cutoffSoc: 20,
   theme: 'auto',
+  // شكل المشهد في الرئيسية: صور واقعية، أو رسم ثلاثي الأبعاد، أو الكلاسيكي
+  sceneStyle: 'photo',
   notify: true,
   lowSoc: 30,
   overloadPct: 80,
@@ -341,7 +345,7 @@ const TOUR_CASES = [
   { sky: 'clear', title: 'الألواح تغذّي البيت وتشحن البطارية', m: { pvW: 3600, outW: 450, batW: 3100, soc: 68, gridOn: true, gridV: 230, mode: 'Battery Mode' } },
   { sky: 'clear', title: 'البطارية ممتلئة: الألواح تغذّي البيت فقط', m: { pvW: 520, outW: 520, batW: 0, soc: 100, gridOn: true, gridV: 230, mode: 'Battery Mode' } },
   { sky: 'night', title: 'ليلاً: البطارية تغذّي البيت', m: { pvW: 0, outW: 480, batW: -510, soc: 62, gridOn: true, gridV: 230, mode: 'Battery Mode' } },
-  { sky: 'cloudy', title: 'الكهرباء تغذّي البيت وتشحن البطارية', m: { pvW: 0, outW: 650, batW: 1200, soc: 35, gridOn: true, gridV: 228, mode: 'Line Mode' } },
+  { sky: 'night', title: 'الكهرباء تغذّي البيت وتشحن البطارية', m: { pvW: 0, outW: 650, batW: 1200, soc: 35, gridOn: true, gridV: 228, mode: 'Line Mode' } },
 ];
 const TOUR = [
   { t: 'أهلاً بك في طاقتي', p: ['تابع منظومتك الشمسية لحظة بلحظة: الألواح والبطارية والكهرباء والبيت في مشهد واحد.', 'هذه جولة قصيرة في التطبيق. يمكنك تخطيها والعودة إليها من «المزيد».'], scene: 0 },
@@ -355,9 +359,9 @@ const TOUR = [
 function tourScene(c) {
   const m = { stale: false, ...c.m };
   const parts = sceneParts(m, true, /line/i.test(m.mode));
-  return `<div class="scene flow-card sky-${c.sky} ${m.pvW > 5 ? 'pv-on' : ''} ${m.soc >= 98 ? 'bat-full' : ''} ${parts.flows.bat.on ? (parts.flows.bat.reverse ? 'bat-dis' : 'bat-chg') : ''}">
-    <div class="sky-fx" aria-hidden="true"><i class="sun"></i><i class="moon"></i><i class="stars"></i><i class="cloud c1"></i><i class="cloud c2"></i><i class="cloud c3"></i></div>
-    ${scene3d({ ...parts, flowLine })}</div>`;
+  const body = sceneBody(m, true, /line/i.test(m.mode), c.sky, parts, null);
+  return `<div class="scene flow-card ${body.cls} sky-${c.sky} ${m.pvW > 5 ? 'pv-on' : ''} ${m.soc >= 98 ? 'bat-full' : ''} ${parts.flows.bat.on ? (parts.flows.bat.reverse ? 'bat-dis' : 'bat-chg') : ''}">
+    ${body.html}</div>`;
 }
 
 function openTour() {
@@ -395,10 +399,10 @@ function openTour() {
 
 // ما الجديد في هذا الإصدار: يظهر مرة واحدة بعد التحديث
 const WHATS_NEW = [
-  'مشهد ثلاثي الأبعاد في الرئيسية: البيت والألواح والبطارية والشبكة، ونبضات تسري باتجاه الطاقة، والقيم في الزوايا.',
-  'درجة حرارة الجو من طقس موقعك، وحرارة الإنفرتر والبطارية إن كان جهازك يرسلها.',
-  'جولة تعريفية بالتطبيق، تجدها في «المزيد» متى شئت.',
-  'إصلاحات من مراجعة شاملة للدقة والتناسق.',
+  'مشهد بصور واقعية للبيت يتبدّل مع الطقس والغروب والليل، وتضيء فيه شرائح البطارية بنسبتها الحقيقية.',
+  'اختر شكل المشهد من الإعدادات: صور واقعية، أو رسم ثلاثي الأبعاد، أو الكلاسيكي.',
+  'إصلاح خانات الإعدادات: سعة البطارية وقدرة الألواح تُكتب وتُحفظ الآن، والبحث عن المدينة يعمل أثناء الكتابة ويجد «ادلب» بلا همزة.',
+  'تنسيق أوضح على الأجهزة اللوحية: المشهد بعمود كامل والتفاصيل والبطارية بجانبه.',
 ];
 function openWhatsNew() {
   store.set('seenVersion', VERSION);
@@ -916,7 +920,8 @@ function viewHome() {
   ${scene(m, live, isLine)}
 
 
-  <section class="card battery-card ${live ? '' : 'stale'}" data-page="battery">
+  </div>
+  <section class="card battery-card hg-bat ${live ? '' : 'stale'}" data-page="battery">
     <div class="ring">
       <svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="52" class="ring-bg"/>
         <circle cx="60" cy="60" r="52" class="ring-fg" style="stroke-dasharray:${(soc / 100) * C} ${C};stroke:${soc < 25 ? 'var(--bad)' : soc < 50 ? 'var(--warn)' : 'var(--bat)'}"/></svg>
@@ -928,8 +933,7 @@ function viewHome() {
       <div class="bat-sub"><bdi>${fmt.v(m.batV)}</bdi>${e.sub ? ' · ' + esc(e.sub) : ''}</div>
     </div>
   </section>
-
-  </div><div class="col-b">
+  <div class="col-b">
   <h3 class="sec-h">التفاصيل</h3>
   ${gridCards([
     ...[
@@ -975,6 +979,28 @@ function sceneParts(m, live, isLine) {
   };
 }
 
+const SKY_FX = `<div class="sky-fx" aria-hidden="true">
+      <i class="sun"></i><i class="moon"></i><i class="stars"></i>
+      <i class="cloud c1"></i><i class="cloud c2"></i><i class="cloud c3"></i>
+      <i class="rain"></i><i class="flash"></i><i class="fog"></i>
+    </div>`;
+const sceneStyle = () => (['photo', '3d', 'classic'].includes(state.prefs.sceneStyle) ? state.prefs.sceneStyle : 'photo');
+
+// يرسم جسم المشهد بالشكل المختار، ويعيد صنف البطاقة الإضافي
+function sceneBody(m, live, isLine, sky, parts, sunset) {
+  const style = sceneStyle();
+  if (style === 'photo') {
+    const gridFeeds = live && isLine && m.gridOn;
+    const img = photoFor({ live, sky, gridFeeds, sunset });
+    const pvLow = (m.pvW ?? 0) < 50;
+    const bat = batLook({ soc: m.soc, batW: m.batW, live, low: state.prefs.lowSoc, gridCharging: gridFeeds && pvLow });
+    const led = !live ? 'off' : m.fault ? 'bad' : 'ok';
+    return { cls: `st-photo ph-${img} ${photoIsDark(img) ? 'ph-dark' : ''}`, html: scenePhoto({ img, ...parts, flowLine, bat, led }) };
+  }
+  if (style === 'classic') return { cls: 'st-classic', html: SKY_FX + sceneClassic({ ...parts, flowLine }) };
+  return { cls: 'st-3d', html: SKY_FX + scene3d({ ...parts, flowLine }) };
+}
+
 function scene(m, live, isLine) {
   const sky = currentSky(m);
   const pv = live && (m.pvW ?? 0) > 5;
@@ -983,6 +1009,7 @@ function scene(m, live, isLine) {
   const loc = weatherLoc();
   const parts = sceneParts(m, live, isLine);
   const full = (m.soc ?? 0) >= 98;
+  const body = sceneBody(m, live, isLine, sky, parts, w?.sunset);
   const wx = w
     ? `<span class="wx-t">${esc(SKY_AR[w.sky])}</span>${loc?.name ? `<span>${esc(loc.name)}</span>` : ''}${w.sunrise ? `<span>${w.sunrise}–${w.sunset}</span>` : ''}`
     : loc ? '<span>جارٍ جلب الطقس…</span>' : '<button class="link" data-goto="more:settings">حدّد موقع منظومتك لعرض الطقس</button>';
@@ -993,13 +1020,8 @@ function scene(m, live, isLine) {
     m.batTemp != null ? `<span class="tchip ${m.batTemp >= state.prefs.tempBat ? 'hot' : ''}">${icons.battery}<b><bdi>${numAr(m.batTemp)}°</bdi></b><small>البطارية</small></span>` : '',
   ].join('');
   return `
-  <section class="card flow-card scene sky-${sky} ${live ? '' : 'stale'} ${pv ? 'pv-on' : ''} ${full ? 'bat-full' : ''} ${parts.flows.bat.on ? (parts.flows.bat.reverse ? 'bat-dis' : 'bat-chg') : ''}">
-    <div class="sky-fx" aria-hidden="true">
-      <i class="sun"></i><i class="moon"></i><i class="stars"></i>
-      <i class="cloud c1"></i><i class="cloud c2"></i><i class="cloud c3"></i>
-      <i class="rain"></i><i class="flash"></i><i class="fog"></i>
-    </div>
-    ${scene3d({ ...parts, flowLine })}
+  <section class="card flow-card scene ${body.cls} sky-${sky} ${live ? '' : 'stale'} ${pv ? 'pv-on' : ''} ${full ? 'bat-full' : ''} ${parts.flows.bat.on ? (parts.flows.bat.reverse ? 'bat-dis' : 'bat-chg') : ''}">
+    ${body.html}
     <div class="wx">${wx}</div>
   </section>
   ${temps ? `<div class="tchips">${temps}</div>` : ''}
@@ -1784,7 +1806,8 @@ AFTER.rules = () => {
 
 function bindPrefs(root) {
   root.querySelectorAll('[data-pref]').forEach((el) => {
-    el.onchange = async () => {
+    // live: حفظ أثناء الكتابة، فلا نعيد كتابة الحقل (حتى لا تُمسح «4.» قبل أن تكتمل «4.4»)
+    el.onchange = async (ev, live = false) => {
       const k = el.dataset.pref;
       if (el.type === 'checkbox') state.prefs[k] = el.checked;
       else if (el.tagName === 'SELECT') state.prefs[k] = el.value;
@@ -1796,7 +1819,7 @@ function bindPrefs(root) {
         const clamped = Math.min(max, Math.max(min, v));
         if (clamped !== v) toast(`القيمة المسموحة بين ${min} و${max}`, 'bad');
         state.prefs[k] = clamped;
-        el.value = clamped;
+        if (!live) el.value = clamped;
       }
       savePrefs();
       if (k === 'notify' && el.checked && Capacitor.isNativePlatform()) {
@@ -1818,7 +1841,7 @@ function bindPrefs(root) {
         clearTimeout(t);
         t = setTimeout(() => {
           const v = parseFloat(latinDigits(el.value));
-          if (Number.isFinite(v) && v >= Number(el.dataset.min) && v <= Number(el.dataset.max)) el.onchange();
+          if (Number.isFinite(v) && v >= Number(el.dataset.min) && v <= Number(el.dataset.max) && v !== state.prefs[el.dataset.pref]) el.onchange(null, true);
         }, 900);
       };
       el.onkeydown = (e) => { if (e.key === 'Enter') el.blur(); };
@@ -2175,13 +2198,20 @@ AFTER.more = () => {
 
 function pageCustom() {
   const sizes = [[0.9, 'صغير'], [1, 'عادي'], [1.1, 'كبير'], [1.2, 'أكبر']];
+  const scenes = [['photo', 'صور واقعية', 'day'], ['3d', 'رسم ثلاثي الأبعاد', 'thumb-3d'], ['classic', 'الكلاسيكي', 'thumb-classic']];
   return `<section class="card"><div class="card-h"><h2>المظهر</h2></div>${pageTheme()}</section>
+  <section class="card"><div class="card-h"><h2>شكل المشهد في الرئيسية</h2></div>
+    <div class="scene-opts">${scenes.map(([v, l, img]) => `<button class="scene-opt ${sceneStyle() === v ? 'on' : ''}" data-scene-opt="${v}"><img src="scene/${img}.webp" alt="" loading="lazy"><b>${l}</b></button>`).join('')}</div>
+    <p class="hint center">«صور واقعية» تتبدّل مع الطقس والليل وحالة البطارية.</p></section>
   <section class="card"><div class="card-h"><h2>حجم الخط</h2></div>
     <div class="theme-opts">${sizes.map(([v, l]) => `<button class="theme-opt fs-opt ${Number(state.prefs.fontScale || 1) === v ? 'on' : ''}" data-fs="${v}"><b style="font-size:${Math.round(15 * v)}px">أ</b><b>${l}</b></button>`).join('')}</div>
     <p class="hint center">يغيّر حجم النصوص في كل التطبيق، وتتكيّف البطاقات معه.</p></section>`;
 }
 AFTER.custom = () => {
   AFTER.theme();
+  document.querySelectorAll('[data-scene-opt]').forEach((b) => {
+    b.onclick = () => { state.prefs.sceneStyle = b.dataset.sceneOpt; savePrefs(); render(); toast('سيظهر المشهد الجديد في الرئيسية', 'ok'); };
+  });
   document.querySelectorAll('[data-fs]').forEach((b) => {
     b.onclick = () => { state.prefs.fontScale = Number(b.dataset.fs); savePrefs(); applyTheme(); render(); };
   });
@@ -2218,13 +2248,13 @@ AFTER.settings = () => {
 };
 
 function pageTheme() {
-  const opt = (v, label, ic) => `<button class="theme-opt ${state.prefs.theme === v ? 'on' : ''}" data-theme="${v}">${ic}<b>${label}</b></button>`;
+  const opt = (v, label, ic) => `<button class="theme-opt ${state.prefs.theme === v ? 'on' : ''}" data-theme-opt="${v}">${ic}<b>${label}</b></button>`;
   return `<div class="theme-opts">${opt('auto', 'تلقائي', icons.refresh)}${opt('light', 'نهاري', icons.sun)}${opt('dark', 'ليلي', icons.moon)}</div>
     <p class="hint center">«تلقائي» يتبع وضع هاتفك الليلي.</p>`;
 }
 AFTER.theme = () => {
-  document.querySelectorAll('[data-theme]').forEach((b) => {
-    b.onclick = () => { state.prefs.theme = b.dataset.theme; savePrefs(); applyTheme(); render(); };
+  document.querySelectorAll('[data-theme-opt]').forEach((b) => {
+    b.onclick = () => { state.prefs.theme = b.dataset.themeOpt; savePrefs(); applyTheme(); render(); };
   });
 };
 
@@ -2247,34 +2277,58 @@ function pageLoc() {
   const r = state.locSearch;
   return `${cardH('موقع المنظومة للطقس')}
     <p class="hint">${loc ? `الموقع: <b>${esc(loc.name)}</b>${loc.area ? '، ' + esc(loc.area) : ''}` : srv ? 'يُستخدم الموقع المسجّل للمنظومة على خادم WatchPower.' : 'لم يُحدَّد موقع بعد. ابحث عن مدينتك ليظهر الطقس في الرئيسية.'}</p>
-    <div class="loc-row"><input type="search" id="locQ" placeholder="اسم المدينة، مثلاً: إدلب" autocomplete="off" enterkeyhint="search"><button class="btn primary" id="locGo">بحث</button></div>
-    ${r?.loading ? '<div class="spinner sm"></div>' : ''}
-    ${r?.error ? `<p class="note bad">${icons.warn}<span>${esc(r.error)}</span></p>` : ''}
-    ${r?.list ? (r.list.length ? `<div class="loc-list">${r.list.map((x, i) => `<button class="loc-it" data-loc="${i}"><b>${esc(x.name)}</b><small>${esc(x.area)}</small></button>`).join('')}</div>` : '<p class="hint">لم يُعثر على مكان بهذا الاسم.</p>') : ''}
+    <div class="loc-row"><input type="search" id="locQ" placeholder="اسم المدينة، مثلاً: إدلب" autocomplete="off" enterkeyhint="search" value="${esc(state.locQuery || '')}"><button class="btn primary" id="locGo">بحث</button></div>
+    <div id="locRes">${locResults(r)}</div>
     ${loc ? '<button class="link pad" id="locClear">إزالة الموقع</button>' : ''}`;
+}
+
+// النتائج وحدها تُعاد رسمها، فيبقى ما كتبه المستخدم ولوحة المفاتيح مفتوحة
+function locResults(r) {
+  if (r?.loading) return '<div class="spinner sm"></div>';
+  if (r?.error) return `<p class="note bad">${icons.warn}<span>${esc(r.error)}</span></p>`;
+  if (!r?.list) return '';
+  return r.list.length
+    ? `<div class="loc-list">${r.list.map((x, i) => `<button class="loc-it" data-loc="${i}"><b>${esc(x.name)}</b><small>${esc(x.area)}</small></button>`).join('')}</div>`
+    : '<p class="hint">لم يُعثر على مكان بهذا الاسم. جرّب الاسم بالإنجليزية أو اسم مدينة قريبة.</p>';
 }
 
 function bindLoc() {
   const card = $('#locCard');
   if (!card) return;
   // نكتب في البطاقة الظاهرة الآن، فقد تُعاد رسم الصفحة أثناء انتظار البحث
-  const redraw = () => { const c = $('#locCard'); if (c) { c.innerHTML = pageLoc(); bindLoc(); } };
-  const go = async () => {
-    const q = $('#locQ').value.trim();
-    if (q.length < 2) { toast('اكتب اسم المدينة', 'bad'); return; }
+  const showRes = () => { const box = $('#locRes'); if (box) { box.innerHTML = locResults(state.locSearch); bindPick(); } };
+  const go = async (quiet = false) => {
+    const q = ($('#locQ')?.value || '').trim();
+    state.locQuery = q;
+    if (q.length < 2) { if (!quiet) toast('اكتب اسم المدينة', 'bad'); return; }
+    const seq = (state.locSeq = (state.locSeq || 0) + 1);
     state.locSearch = { loading: true };
-    redraw();
-    try { state.locSearch = { list: await searchPlace(q) }; } catch (e) { state.locSearch = { error: e.message }; }
-    redraw();
+    showRes();
+    let res;
+    try { res = { list: await searchPlace(q) }; } catch (e) { res = { error: e.message }; }
+    // نتيجة بحث أقدم وصلت متأخرة لا تُظهر فوق الأحدث
+    if (seq !== state.locSeq) return;
+    state.locSearch = res;
+    showRes();
   };
-  $('#locGo').onclick = go;
-  $('#locQ').onkeydown = (e) => { if (e.key === 'Enter') go(); };
-  card.querySelectorAll('[data-loc]').forEach((b) => {
+  let t;
+  $('#locGo').onclick = () => { clearTimeout(t); go(); };
+  $('#locQ').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); clearTimeout(t); go(); } };
+  // البحث أثناء الكتابة بعد توقف قصير
+  $('#locQ').oninput = () => { state.locQuery = $('#locQ').value; clearTimeout(t); t = setTimeout(() => go(true), 700); };
+  bindPick();
+  bindClear();
+}
+
+function bindPick() {
+  const redraw = () => { const c = $('#locCard'); if (c) { c.innerHTML = pageLoc(); bindLoc(); } };
+  $('#locCard')?.querySelectorAll('[data-loc]').forEach((b) => {
     b.onclick = () => {
       const x = state.locSearch.list[Number(b.dataset.loc)];
       state.prefs.loc = { name: x.name, area: x.area, lat: x.lat, lon: x.lon };
       savePrefs();
       state.locSearch = null;
+      state.locQuery = '';
       state.weather = null;
       store.del('wx');
       toast(`الموقع: ${x.name}`, 'ok');
@@ -2282,6 +2336,10 @@ function bindLoc() {
       loadWeather(true);
     };
   });
+}
+
+function bindClear() {
+  const redraw = () => { const c = $('#locCard'); if (c) { c.innerHTML = pageLoc(); bindLoc(); } };
   const clr = $('#locClear');
   if (clr) clr.onclick = () => { state.prefs.loc = null; savePrefs(); state.weather = null; store.del('wx'); redraw(); };
 }

@@ -524,3 +524,39 @@ test('مشهد ثلاثي الأبعاد: الهندسة وخطوط الطاقة
   assert.ok(pts.length > 50 && pts.every(([x, y]) => x > 0 && x < 400 && y > 0 && y < 360), 'لا شيء خارج المشهد');
   assert.deepEqual(P(0, 0, 0).map(Math.round), [206, 96]);
 });
+
+test('مشهد الصور: اختيار الصورة حسب الحالة والطقس والغروب', async () => {
+  const { photoFor, batLook } = await import('../../src/scenePhoto.js');
+  const at = (h, m = 0) => { const d = new Date(2026, 10, 6, h, m); return d; };
+  assert.equal(photoFor({ live: false, sky: 'clear' }), 'offline');
+  assert.equal(photoFor({ live: true, sky: 'night' }), 'night');
+  assert.equal(photoFor({ live: true, sky: 'night', gridFeeds: true }), 'night-grid');
+  assert.equal(photoFor({ live: true, sky: 'storm' }), 'rain');
+  assert.equal(photoFor({ live: true, sky: 'fog' }), 'cloudy');
+  assert.equal(photoFor({ live: true, sky: 'clear', sunset: '17:05', now: at(12) }), 'day');
+  assert.equal(photoFor({ live: true, sky: 'partly', sunset: '17:05', now: at(16, 20) }), 'sunset');
+  assert.equal(photoFor({ live: true, sky: 'clear', now: at(16, 20) }), 'day');
+  // الشرائح الست بنسبة الشحن، واللون من الاتجاه والحد الأدنى
+  assert.deepEqual(batLook({ soc: 94, batW: 3700, live: true }), { lit: 6, color: 'green', charging: true });
+  assert.equal(batLook({ soc: 45, batW: -561, live: true }).color, 'amber');
+  assert.equal(batLook({ soc: 45, batW: -561, live: true }).lit, 3);
+  assert.equal(batLook({ soc: 20, batW: -300, live: true, low: 30 }).color, 'red');
+  assert.equal(batLook({ soc: 2, batW: 0, live: true }).lit, 1);
+  assert.equal(batLook({ soc: 50, batW: 900, live: true, gridCharging: true }).color, 'blue');
+  assert.equal(batLook({ soc: 80, batW: 0, live: false }).lit, 0);
+});
+
+test('البحث عن المدينة: صيغ الهمزة والتاء المربوطة، والمطابق أولاً', async () => {
+  const { nameVariants, normAr, searchPlace } = await import('../../src/weather.js');
+  assert.deepEqual(nameVariants('ادلب'), ['ادلب', 'إدلب', 'أدلب']);
+  assert.deepEqual(nameVariants('حماه'), ['حماه', 'حماة']);
+  assert.equal(normAr('إدلب'), normAr('ادلب'));
+  const fake = async (url) => {
+    const n = new URL(url).searchParams.get('name');
+    const results = n === 'ادلب' ? [{ name: 'ادلبودن', admin1: 'برن', country: 'سويسرا', latitude: 46.9, longitude: 7.4 }] : n === 'إدلب' ? [{ name: 'إدلب', admin1: 'محافظة ادلب', country: 'سوريا', latitude: 35.93, longitude: 36.63 }] : [];
+    return { ok: true, json: async () => ({ results }) };
+  };
+  const r = await searchPlace('ادلب', fake);
+  assert.equal(r[0].name, 'إدلب');
+  assert.equal(r.length, 2);
+});

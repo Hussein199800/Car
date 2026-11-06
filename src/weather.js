@@ -51,9 +51,35 @@ export async function fetchWeather(lat, lon, fetchFn = fetch) {
   };
 }
 
+// توحيد الكتابة العربية للمقارنة: الهمزات والتاء المربوطة والألف المقصورة والتشكيل
+export const normAr = (s) => String(s || '').trim().replace(/[\u064B-\u0652\u0640]/g, '').replace(/[أإآٱ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').toLowerCase();
+
+// صيغ الاسم التي يُبحث بها: كثيرون يكتبون «ادلب» والخدمة تعرفها «إدلب»
+export function nameVariants(name) {
+  const q = String(name || '').trim();
+  const out = [q];
+  if (/^ا/.test(q)) out.push(q.replace(/^ا/, 'إ'), q.replace(/^ا/, 'أ'));
+  if (/ه$/.test(q)) out.push(q.replace(/ه$/, 'ة'));
+  return [...new Set(out)];
+}
+
 export async function searchPlace(name, fetchFn = fetch) {
-  const d = await get(`${GEOCODE}?name=${encodeURIComponent(name)}&count=6&language=ar`, fetchFn);
-  return (d.results || []).map((r) => ({ name: r.name, area: [r.admin1, r.country].filter(Boolean).join('، '), lat: r.latitude, lon: r.longitude }));
+  const vs = nameVariants(name);
+  const all = await Promise.all(vs.map((v) => get(`${GEOCODE}?name=${encodeURIComponent(v)}&count=6&language=ar`, fetchFn).catch((e) => (v === vs[0] ? Promise.reject(e) : {}))));
+  const seen = new Set();
+  const list = [];
+  for (const d of all) {
+    for (const r of d.results || []) {
+      const k = `${(+r.latitude).toFixed(2)},${(+r.longitude).toFixed(2)}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      list.push({ name: r.name, area: [r.admin1, r.country].filter(Boolean).join('، '), lat: r.latitude, lon: r.longitude });
+    }
+  }
+  // الاسم المطابق أولاً، ثم الباقي بترتيب الخدمة
+  const q = normAr(name);
+  const rank = (x) => (normAr(x.name) === q ? 0 : 1);
+  return list.map((x, i) => [x, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([x]) => x).slice(0, 8);
 }
 
 // الإنتاج الذي تسمح به الشمس الآن: القدرة المركّبة × الإشعاع ÷ 1000 × 0.75 (فواقد الحرارة والأسلاك والزاوية)
