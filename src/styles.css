@@ -401,25 +401,23 @@ button.banner { background-clip: padding-box; }
 .icon-btn { min-width: 44px; min-height: 44px; }
 
 /* ---------- الشاشات العريضة: الأجهزة اللوحية والوضع الأفقي ---------- */
-@media (min-width: 720px) {
-  #view { max-width: 1040px; padding-inline: 24px; }
-  .gcards { grid-template-columns: repeat(4, 1fr); }
-  .stats { grid-template-columns: repeat(3, 1fr); }
-  .lcards { grid-template-columns: repeat(2, 1fr); }
-  .home-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
-  .home-grid .col-a > * + *, .home-grid .col-b > * + * { margin-top: 14px; }
-  .home-grid .gcards { grid-template-columns: repeat(2, 1fr); }
-  .home-grid .lcards { grid-template-columns: 1fr; }
-  .home-grid .sec-h { margin-top: 0 !important; }
-  .home-grid .flow-card { max-width: 420px; margin-inline: auto; }
-  .tips { grid-template-columns: repeat(2, 1fr); }
-  .chart-box { height: 280px; }
-  .theme-opts { max-width: 520px; }
-  .sheet { max-width: 520px; margin: 0 auto 24px; border-radius: 26px; }
-}
+html.wide #view { max-width: 1040px; padding-inline: 24px; }
+html.wide .gcards { grid-template-columns: repeat(4, 1fr); }
+html.wide .stats { grid-template-columns: repeat(3, 1fr); }
+html.wide .lcards { grid-template-columns: repeat(2, 1fr); }
+html.wide .home-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+html.wide .home-grid .col-a > * + *, html.wide .home-grid .col-b > * + * { margin-top: 14px; }
+html.wide .home-grid .gcards { grid-template-columns: repeat(2, 1fr); }
+html.wide .home-grid .lcards { grid-template-columns: 1fr; }
+html.wide .home-grid .sec-h { margin-top: 0 !important; }
+html.wide .home-grid .flow-card { max-width: 420px; margin-inline: auto; }
+html.wide .tips { grid-template-columns: repeat(2, 1fr); }
+html.wide .chart-box { height: 280px; }
+html.wide .theme-opts { max-width: 520px; }
+html.wide .sheet { max-width: 520px; margin: 0 auto 24px; border-radius: 26px; }
 @media (min-width: 720px) and (max-height: 520px) {
   /* هاتف بالوضع الأفقي: نصغّر مخطط التدفق ليبقى ظاهراً كاملاً */
-  .flow-card { max-width: 330px; margin-inline: auto; }
+  html:not(.tablet) .flow-card, html.wide:not(.tablet) .home-grid .flow-card { max-width: 330px; margin-inline: auto; }
 }
 @media (max-width: 359px) {
   .node .ic { width: 46px; height: 46px; padding: 10px; border-radius: 16px; }
@@ -512,10 +510,8 @@ button.banner { background-clip: padding-box; }
 .qty { display: flex; align-items: center; justify-content: space-between; border-radius: 12px; background: var(--input); border: 1px solid var(--line); }
 .qty button { width: 34px; height: 34px; border: 0; background: none; font-size: calc(18px * var(--fs, 1)); font-weight: 800; color: #f97316; cursor: pointer; }
 .qty b { color: var(--txt); font-size: calc(15px * var(--fs, 1)); }
-@media (min-width: 720px) {
-  .appl { grid-template-columns: repeat(6, 1fr); }
-  .lds { grid-template-columns: repeat(2, 1fr); }
-}
+html.wide .appl { grid-template-columns: repeat(6, 1fr); }
+html.wide .lds { grid-template-columns: repeat(2, 1fr); }
 @media (max-width: 359px) {
   .appl { grid-template-columns: repeat(2, 1fr); }
   .res-main b { font-size: calc(24px * var(--fs, 1)); }
@@ -840,3 +836,88 @@ button.adv-ind:active { transform: scale(.99); }
 .scene .n-inv, .scene.sky-night .n-inv, .scene.sky-rain .n-inv, .scene.sky-storm .n-inv { background: transparent !important; box-shadow: none !important; }
 .scene.sky-rain .node.corner b, .scene.sky-storm .node.corner b { color: #111827; }
 .scene.sky-rain .node.corner small, .scene.sky-storm .node.corner small { color: #374151; }
+
+/* ================= 3.9: مشهد «الصور» ================= */
+.scene.st-photo.flow-card { aspect-ratio: 1088 / 1106; background: #e3ecf7; }
+.st-photo .ph-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; pointer-events: none; user-select: none; -webkit-user-select: none; }
+.st-photo .flow-svg { z-index: 1; width: 100%; height: 100%; }
+.st-photo .wire { stroke: none; }
+.scene.st-photo .photo .flow-line { stroke-width: 4; opacity: .4; filter: none; }
+.scene.st-photo .photo .arrow { d: path('M-26 0 L8 0'); stroke-width: 9; stroke-linecap: round; filter: drop-shadow(0 0 6px currentColor); }
+.st-photo .a-solar { stroke: #fcd34d; color: #f59e0b; } .st-photo .a-grid { stroke: #a5b4fc; color: #6366f1; }
+.st-photo .a-bat { stroke: #6ee7b7; color: #10b981; } .st-photo .a-load { stroke: #7dd3fc; color: #0ea5e9; }
+.st-photo .seg { fill: #0f172a55; transition: fill .6s; }
+.st-photo .seg.on.green { fill: #4ade80; filter: drop-shadow(0 0 5px #22c55e); }
+.st-photo .seg.on.blue { fill: #60a5fa; filter: drop-shadow(0 0 5px #3b82f6); }
+.st-photo .seg.on.amber { fill: #fbbf24; filter: drop-shadow(0 0 5px #f59e0b); }
+.st-photo .seg.on.red { fill: #f87171; filter: drop-shadow(0 0 5px #ef4444); }
+.st-photo .seg.top { animation: segBlink 1.4s ease-in-out infinite; }
+@keyframes segBlink { 50% { opacity: .35; } }
+.st-photo .ph-led.ok { fill: #4ade80; filter: drop-shadow(0 0 4px #22c55e); }
+.st-photo .ph-led.bad { fill: #f87171; filter: drop-shadow(0 0 4px #ef4444); animation: segBlink 1s infinite; }
+.st-photo .ph-led.off { fill: #64748b; }
+.scene.st-photo .node.corner { top: 2.5%; bottom: auto; }
+.scene.st-photo .n-bat.corner, .scene.st-photo .n-load.corner { top: auto; bottom: 2.5%; }
+.scene.st-photo:not(.ph-dark) .node.corner b { color: #0f172a; text-shadow: 0 1px 8px #ffffffcc; }
+.scene.st-photo:not(.ph-dark) .node.corner small { color: #334155; }
+.scene.st-photo.ph-dark .node.corner b { color: #f8fafc; text-shadow: 0 1px 8px #0009; }
+.scene.st-photo.ph-dark .node.corner small { color: #dbe3ee; }
+.scene.st-photo.ph-dark .node .bt.chg { color: #6ee7b7; } .scene.st-photo.ph-dark .node .bt.dis { color: #fcd34d; }
+.scene.st-photo .wx { top: 3%; }
+.scene.st-photo.stale .ph-img { filter: none; }
+.scene .n-batbox { width: 8%; height: 11%; min-width: 0; padding: 0; background: transparent; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+[data-theme="dark"] .scene.st-photo:not(.sky-night) { filter: brightness(.92); }
+
+/* ================= المشهد الكلاسيكي (3.7) ================= */
+.scene.st-classic.flow-card { aspect-ratio: 360 / 300; --sky: linear-gradient(180deg, #8cc8f5, #e3f1fb 70%); }
+.scene.st-classic.sky-partly { --sky: linear-gradient(180deg, #a3c7e6, #e8eef4 70%); }
+.scene.st-classic.sky-cloudy, .scene.st-classic.sky-fog, .scene.st-classic.sky-snow { --sky: linear-gradient(180deg, #a9b5c3, #e3e8ee 70%); }
+.scene.st-classic.sky-rain, .scene.st-classic.sky-storm { --sky: linear-gradient(180deg, #5e6d82, #b9c3cf 75%); }
+.scene.st-classic.sky-night { --sky: linear-gradient(180deg, #0b1230, #23305e 80%); }
+.st-classic .scene-svg .ground { fill: #cfe3c4; }
+.st-classic.sky-night .scene-svg .ground { fill: #1f2a44; }
+.st-classic.sky-rain .scene-svg .ground, .st-classic.sky-storm .scene-svg .ground { fill: #a9b8a6; }
+.st-classic .house .wall { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.5; }
+.st-classic.sky-night .house .wall { fill: #cbd5e1; }
+.st-classic .house .roof { fill: none; stroke: #475569; stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; }
+.st-classic .house .panels { fill: #1e3a8a; stroke: #93c5fd; stroke-width: 1; transition: fill .6s; }
+.st-classic.pv-on .house .panels { fill: #2563eb; animation: classicShine 3s ease-in-out infinite; }
+@keyframes classicShine { 50% { fill: #3b82f6; } }
+.st-classic .house .panel-lines { stroke: #93c5fd99; stroke-width: 1; }
+.st-classic .house .door { fill: #94a3b8; }
+.st-classic .house .win { fill: #bae6fd; }
+.st-classic.sky-night .house .win, .st-classic.sky-rain .house .win, .st-classic.sky-storm .house .win { fill: #fde68a; filter: drop-shadow(0 0 6px #fde68a); }
+.st-classic .tower path { fill: none; stroke: #64748b; stroke-width: 2.2; stroke-linecap: round; }
+.st-classic .battery-box rect:first-child { fill: #f1f5f9; stroke: #94a3b8; stroke-width: 1.5; }
+.st-classic .battery-box .lvl { fill: var(--bat); transition: y .8s, height .8s; }
+.st-classic .inv-box { fill: #f8fafc; stroke: #6366f1; stroke-width: 1.5; }
+.st-classic .inv-led { fill: var(--ok); animation: twinkle 2s ease-in-out infinite; }
+.st-classic.stale .inv-led { fill: var(--bad); animation: none; }
+.st-classic .wire { stroke: #ffffff8c; stroke-width: 5; }
+.st-classic .flow-line { opacity: .55; stroke-width: 4; }
+.st-classic .arrow { d: path('M-4 -4 L1 0 L-4 4'); stroke-width: 2.6; }
+.scene.st-classic .node { top: auto; }
+.scene.st-classic .n-solar { left: 20%; top: 27%; } .scene.st-classic .n-grid { left: 80%; top: 27%; }
+.scene.st-classic .n-bat { left: 22%; top: 89%; } .scene.st-classic .n-load { left: 76%; top: 89%; }
+.scene.st-classic .n-inv { left: 54.7%; top: 61.5%; width: 44px; height: 48px; }
+.scene.st-classic .wx { top: auto; bottom: 8px; left: auto; right: 8px; transform: none; max-width: 70%; }
+
+/* اختيار شكل المشهد */
+.scene-opts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.scene-opt { display: grid; gap: 6px; padding: 8px; border-radius: 16px; border: 2px solid var(--line); background: var(--card); color: var(--txt); font: inherit; cursor: pointer; text-align: center; }
+.scene-opt img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; background: var(--input); }
+.scene-opt b { font-size: calc(13px * var(--fs, 1)); font-weight: 800; }
+.scene-opt.on { border-color: var(--pri); box-shadow: 0 0 0 3px color-mix(in srgb, var(--pri) 22%, transparent); }
+
+/* ================= الأجهزة اللوحية: المشهد عمود كامل، والتفاصيل والبطارية بجانبه ================= */
+html.wide .home-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'a b' 'a bat'; grid-template-rows: auto 1fr; column-gap: 20px; row-gap: 14px; }
+html.wide .home-grid .col-a { grid-area: a; }
+html.wide .home-grid .col-b { grid-area: b; }
+html.wide .home-grid .hg-bat { grid-area: bat; align-self: start; margin-top: 0; }
+html.wide .home-grid .flow-card { max-width: none; }
+html.wide .scene-opts { max-width: 560px; }
+html.wider #view { max-width: 1180px; }
+.scene.st-photo.ph-dark .wx { background: #0f172acc; color: #e2e8f0; }
+.scene.st-photo.ph-dark .wx .link { color: #c7d2fe; }
+/* لوحي عمودي: تصميم الهاتف نفسه مكبّراً، بعرض منطقي معتدل في الأجهزة الكبيرة جداً */
+html.tablet:not(.wide) #view { max-width: 620px; margin-inline: auto; }

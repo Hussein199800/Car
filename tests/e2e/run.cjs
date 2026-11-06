@@ -344,7 +344,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       check('وقت القراءات في CSV بصيغة ثابتة يفهمها Excel', /\n"?\d{4}-\d\d-\d\d \d\d:\d\d:\d\d/.test(csv), csv.slice(0, 160));
       // المظهر
       await page.evaluate(() => window.__nav('more', 'settings'));
-      await page.click('[data-theme=dark]');
+      await page.click('[data-theme-opt=dark]');
       check('التبديل للوضع الليلي', (await page.getAttribute('html', 'data-theme')) === 'dark');
       await page.evaluate(() => window.__nav('home', null));
       check('المصطلحات الثابتة في الواجهة', (await text(page, '#view')).includes('الإنفرتر') && !(await text(page, 'body')).includes('الرافع'));
@@ -476,14 +476,21 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       const scenes = {};
       for (const k of ['clear', 'rain', 'night']) {
         await page.click(`[data-demo-sky="${k}"]`); await page.waitForTimeout(700);
-        scenes[k] = { cls: await page.$eval('.scene', (e) => e.className), story: await text(page, '.story b'), bat: await text(page, '.n-bat .bt') };
+        scenes[k] = { cls: await page.$eval('.scene', (e) => e.className), story: await text(page, '.story b'), bat: await text(page, '.n-bat .bt'), img: await page.$eval('.ph-img', (e) => e.getAttribute('src')).catch(() => '') };
       }
       check('المشهد المشمس: سماء صافية والألواح تشحن البطارية', scenes.clear.cls.includes('sky-clear') && scenes.clear.story.includes('تشحن البطارية') && scenes.clear.bat.includes('تشحن'), JSON.stringify(scenes.clear));
       check('المشهد الماطر: إنتاج ضعيف متوقع والبطارية تكمّل', scenes.rain.cls.includes('sky-rain') && scenes.rain.story.includes('متوقع') && scenes.rain.bat.includes('تُفرّغ'), JSON.stringify(scenes.rain));
       check('المشهد الليلي: البيت على البطارية', scenes.night.cls.includes('sky-night') && scenes.night.story.includes('ليل') && scenes.night.bat.includes('تُفرّغ'), JSON.stringify(scenes.night));
       await page.click('[data-demo-sky="clear"]'); await page.waitForTimeout(600);
       check('حرارة الجو تظهر من الطقس', (await text(page, '.tchips')).includes('24°') && (await text(page, '.tchips')).includes('الجو'));
-      check('المشهد ثلاثي الأبعاد: نسبة البطارية مكتوبة على البطارية', /\d+%/.test(await page.$eval('.bat-pct', (e) => e.textContent)));
+      check('مشهد الصور افتراضياً: صورة النهار والمطر والليل حسب الطقس', scenes.clear.img.endsWith('day.webp') && scenes.rain.img.endsWith('rain.webp') && scenes.night.img.endsWith('night.webp'), [scenes.clear.img, scenes.rain.img, scenes.night.img].join(' '));
+      {
+        const soc = parseInt((await text(page, '.n-bat b')).replace(/\D/g, ''), 10);
+        const lit = await page.$$eval('.bat-segs .seg.on', (a) => a.length);
+        check('شرائح البطارية على الصورة بنسبة الشحن الحقيقية', lit === Math.max(1, Math.round((soc / 100) * 6)), `${soc}% → ${lit}`);
+        const imgOk = await page.$eval('.ph-img', (e) => e.complete && e.naturalWidth === 1088);
+        check('صورة المشهد تُحمَّل من التطبيق نفسه', imgOk);
+      }
       const arrows = await page.$$eval('animateMotion', (a) => a.length);
       check('خطوط الطاقة متحركة في المشهد', arrows >= 6);
       // ⓘ داخل بطاقة: يفتح الشرح ولا يفتح البطاقة
@@ -581,6 +588,74 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await up.context().close();
     }
 
+    // 17) 3.9: أشكال المشهد، الكتابة في الإعدادات بلا إعادة رسم، والبحث عن المدينة أثناء الكتابة
+    {
+      const page = await newPage(browser, { loggedIn: false, viewport: { width: 890, height: 1335 } });
+      let geo = 0;
+      await page.route(/geocoding-api\.open-meteo\.com/, (rt) => {
+        geo++;
+        const name = new URL(rt.request().url()).searchParams.get('name');
+        const results = name === 'إدلب' ? [{ name: 'إدلب', admin1: 'محافظة ادلب', country: 'سوريا', latitude: 35.93, longitude: 36.63 }] : name === 'ادلب' ? [{ name: 'ادلبودن', admin1: 'برن', country: 'سويسرا', latitude: 46.9, longitude: 7.4 }] : [];
+        return rt.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ results }) });
+      });
+      await page.click('#demoBtn'); await page.waitForSelector('.flow-card');
+      // اللوحي العمودي: نسب الهاتف نفسها (المشهد يملأ العرض، والبطاقات عمودان كما في الهاتف)
+      const lay = await page.evaluate(() => {
+        const sc = document.querySelector('.flow-card').getBoundingClientRect(), g = [...document.querySelectorAll('.gcard')].map((e) => e.getBoundingClientRect());
+        return { zoom: Number(document.documentElement.style.zoom || 1), scene: +(sc.width / innerWidth).toFixed(2), cols: new Set(g.map((r) => Math.round(r.left))).size };
+      });
+      check('لوحي عمودي: الواجهة مكبّرة بنسب الهاتف', lay.zoom > 1.5 && lay.scene > 0.85 && lay.cols === 2, JSON.stringify(lay));
+      // التدوير إلى الأفقي: عمودان متساويان كل منهما بعرض شاشة هاتف تقريباً
+      await page.setViewportSize({ width: 1335, height: 890 }); await page.waitForTimeout(500);
+      const land = await page.evaluate(() => {
+        const a = document.querySelector('.col-a').getBoundingClientRect(), b = document.querySelector('.col-b').getBoundingClientRect(), z = Number(document.documentElement.style.zoom || 1);
+        return { side: Math.abs(a.top - b.top) < 60, equal: Math.abs(a.width - b.width) < 8, colLogical: Math.round(a.width / z), zoom: z };
+      });
+      check('لوحي أفقي بعد التدوير: عمودان متساويان بعرض هاتف', land.side && land.equal && land.colLogical > 380 && land.colLogical < 560, JSON.stringify(land));
+      await page.setViewportSize({ width: 890, height: 1335 }); await page.waitForTimeout(500);
+      check('الجهاز اللوحي: بلا تمرير أفقي', await noHScroll(page));
+      await page.evaluate(() => window.__nav('more', 'settings')); await page.waitForTimeout(400);
+      // اللمس في أي مكان من الصفحة لا يعيد رسمها ولا يغيّر المظهر (كان محدد [data-theme] يطابق <html>)
+      const before = await page.evaluate(() => JSON.parse(localStorage.getItem('taqati.prefs') || '{}').theme);
+      const inp = '[data-pref=batteryAh]';
+      await page.$eval(inp, (e) => e.scrollIntoView({ block: 'center' }));
+      await page.click(inp);
+      check('الضغط على خانة الإعدادات يبقي التركيز فيها', await page.$eval(inp, (e) => document.activeElement === e));
+      await page.keyboard.type('٢٠٠', { delay: 120 });
+      await page.waitForTimeout(1300);
+      const pr = await page.evaluate(() => JSON.parse(localStorage.getItem('taqati.prefs')));
+      check('كتابة السعة بالأرقام العربية حرفاً حرفاً تُحفظ', pr.batteryAh === 200 && (await page.inputValue(inp)) === '٢٠٠', JSON.stringify(pr.batteryAh));
+      check('اللمس في الإعدادات لا يغيّر المظهر المختار', (pr.theme ?? 'auto') === (before ?? 'auto'), `${before} → ${pr.theme}`);
+      const pv = '[data-pref=pvKwp]';
+      await page.click(pv); await page.fill(pv, '');
+      await page.keyboard.type('4', { delay: 50 }); await page.waitForTimeout(1100);
+      await page.keyboard.type('٫', { delay: 50 }); await page.waitForTimeout(1100);
+      await page.keyboard.type('4', { delay: 50 }); await page.waitForTimeout(1100);
+      check('رقم عشري مع توقف أثناء الكتابة لا تُمسح فاصلته', (await page.evaluate(() => JSON.parse(localStorage.getItem('taqati.prefs')).pvKwp)) === 4.4, await page.inputValue(pv));
+      // البحث عن المدينة أثناء الكتابة، والكتابة بلا همزة تجد «إدلب»
+      await page.$eval('#locQ', (e) => e.scrollIntoView({ block: 'center' }));
+      await page.click('#locQ');
+      await page.keyboard.type('ادلب', { delay: 80 });
+      await page.waitForSelector('.loc-it', { timeout: 4000 }).catch(() => null);
+      check('البحث يبدأ أثناء الكتابة ويبقى النص والتركيز في الخانة', geo > 0 && (await page.inputValue('#locQ')) === 'ادلب' && (await page.$eval('#locQ', (e) => document.activeElement === e)));
+      check('«ادلب» بلا همزة تجد إدلب أولاً', (await text(page, '.loc-it b')) === 'إدلب', await text(page, '.loc-list'));
+      // اختيار شكل المشهد
+      check('ثلاثة أشكال للمشهد، والصور مختارة افتراضياً', (await page.$$('[data-scene-opt]')).length === 3 && !!(await page.$('[data-scene-opt=photo].on')));
+      const thumbs = await page.$$eval('.scene-opt img', (a) => a.map((i) => i.complete && i.naturalWidth > 0));
+      check('صور مصغّرة لكل شكل', thumbs.length === 3 && thumbs.every(Boolean), JSON.stringify(thumbs));
+      for (const [st, sel, label] of [['3d', '.bat-pct', 'رسم ثلاثي الأبعاد'], ['classic', '.battery-box', 'الكلاسيكي']]) {
+        await page.evaluate(() => window.__nav('more', 'settings')); await page.waitForTimeout(300);
+        await page.$eval(`[data-scene-opt="${st}"]`, (e) => e.scrollIntoView({ block: 'center' }));
+        await page.click(`[data-scene-opt="${st}"]`); await page.waitForTimeout(300);
+        await page.evaluate(() => window.__nav('home', null)); await page.waitForTimeout(500);
+        const ok = await page.$(`.scene.st-${st} ${sel}`);
+        const moving = await page.$$eval('.scene animateMotion', (a) => a.length);
+        check(`الشكل «${label}» يظهر في الرئيسية ويتحرك`, !!ok && moving >= 3, `${!!ok} ${moving}`);
+      }
+      check('بلا أخطاء JavaScript (3.9)', page.errors.length === 0, page.errors.join(' | '));
+      await page.context().close();
+    }
+
     // 11) التحقق من التحديثات
     {
       const page = await newPage(browser, { api: lastData(2), release: relOf('9.9.0', 'ميزة رائعة\nإصلاحات') });
@@ -618,7 +693,11 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       check(`${name} ${w}×${h}: بلا تمرير أفقي`, await noHScroll(page));
       const flowVisible = await page.$eval('.flow-card', (el) => { const r = el.getBoundingClientRect(); return r.width > 200 && r.right <= window.innerWidth + 1; });
       check(`${name}: مخطط التدفق ظاهر كاملاً`, flowVisible);
-      if (w >= 720) check(`${name}: تخطيط عمودين`, await page.$eval('.home-grid', (el) => getComputedStyle(el).display === 'grid'));
+      // اللوحي العمودي بتصميم الهاتف نفسه مكبّراً؛ العمودان للعرض الأفقي العريض فقط
+      const lay = await page.evaluate(() => ({ grid: getComputedStyle(document.querySelector('.home-grid')).display === 'grid', zoom: Number(document.documentElement.style.zoom || 1), scene: document.querySelector('.flow-card').getBoundingClientRect().width / window.innerWidth }));
+      if (w >= 720 && w > h) check(`${name}: تخطيط عمودين`, lay.grid, JSON.stringify(lay));
+      if (Math.min(w, h) >= 600 && h > w) check(`${name}: تصميم الهاتف مكبّراً بنفس النسب`, !lay.grid && lay.zoom > 1.3 && lay.scene > 0.85, JSON.stringify(lay));
+      if (Math.min(w, h) < 600) check(`${name}: بلا تكبير على الهاتف`, lay.zoom === 1, JSON.stringify(lay));
       await page.screenshot({ path: path.join(OUT, `size-${w}x${h}.png`) });
       await page.context().close();
     }
