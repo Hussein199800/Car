@@ -599,12 +599,20 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
         return rt.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ results }) });
       });
       await page.click('#demoBtn'); await page.waitForSelector('.flow-card');
-      // الجهاز اللوحي: المشهد في عمود والتفاصيل والبطارية في الآخر، بلا تمرير أفقي
+      // اللوحي العمودي: نسب الهاتف نفسها (المشهد يملأ العرض، والبطاقات عمودان كما في الهاتف)
       const lay = await page.evaluate(() => {
-        const a = document.querySelector('.col-a').getBoundingClientRect(), b = document.querySelector('.col-b').getBoundingClientRect(), c = document.querySelector('.hg-bat').getBoundingClientRect();
-        return { side: Math.abs(a.top - b.top) < 40 && (a.left > b.right - 2 || b.left > a.right - 2), batUnderB: Math.abs(c.left - b.left) < 4 && c.top > b.bottom - 2, wide: a.width > 400 };
+        const sc = document.querySelector('.flow-card').getBoundingClientRect(), g = [...document.querySelectorAll('.gcard')].map((e) => e.getBoundingClientRect());
+        return { zoom: Number(document.documentElement.style.zoom || 1), scene: +(sc.width / innerWidth).toFixed(2), cols: new Set(g.map((r) => Math.round(r.left))).size };
       });
-      check('الجهاز اللوحي: المشهد بعرض عمود كامل والبطارية تحت التفاصيل', lay.side && lay.batUnderB && lay.wide, JSON.stringify(lay));
+      check('لوحي عمودي: الواجهة مكبّرة بنسب الهاتف', lay.zoom > 1.5 && lay.scene > 0.85 && lay.cols === 2, JSON.stringify(lay));
+      // التدوير إلى الأفقي: عمودان متساويان كل منهما بعرض شاشة هاتف تقريباً
+      await page.setViewportSize({ width: 1335, height: 890 }); await page.waitForTimeout(500);
+      const land = await page.evaluate(() => {
+        const a = document.querySelector('.col-a').getBoundingClientRect(), b = document.querySelector('.col-b').getBoundingClientRect(), z = Number(document.documentElement.style.zoom || 1);
+        return { side: Math.abs(a.top - b.top) < 60, equal: Math.abs(a.width - b.width) < 8, colLogical: Math.round(a.width / z), zoom: z };
+      });
+      check('لوحي أفقي بعد التدوير: عمودان متساويان بعرض هاتف', land.side && land.equal && land.colLogical > 380 && land.colLogical < 560, JSON.stringify(land));
+      await page.setViewportSize({ width: 890, height: 1335 }); await page.waitForTimeout(500);
       check('الجهاز اللوحي: بلا تمرير أفقي', await noHScroll(page));
       await page.evaluate(() => window.__nav('more', 'settings')); await page.waitForTimeout(400);
       // اللمس في أي مكان من الصفحة لا يعيد رسمها ولا يغيّر المظهر (كان محدد [data-theme] يطابق <html>)
@@ -685,7 +693,11 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       check(`${name} ${w}×${h}: بلا تمرير أفقي`, await noHScroll(page));
       const flowVisible = await page.$eval('.flow-card', (el) => { const r = el.getBoundingClientRect(); return r.width > 200 && r.right <= window.innerWidth + 1; });
       check(`${name}: مخطط التدفق ظاهر كاملاً`, flowVisible);
-      if (w >= 720) check(`${name}: تخطيط عمودين`, await page.$eval('.home-grid', (el) => getComputedStyle(el).display === 'grid'));
+      // اللوحي العمودي بتصميم الهاتف نفسه مكبّراً؛ العمودان للعرض الأفقي العريض فقط
+      const lay = await page.evaluate(() => ({ grid: getComputedStyle(document.querySelector('.home-grid')).display === 'grid', zoom: Number(document.documentElement.style.zoom || 1), scene: document.querySelector('.flow-card').getBoundingClientRect().width / window.innerWidth }));
+      if (w >= 720 && w > h) check(`${name}: تخطيط عمودين`, lay.grid, JSON.stringify(lay));
+      if (Math.min(w, h) >= 600 && h > w) check(`${name}: تصميم الهاتف مكبّراً بنفس النسب`, !lay.grid && lay.zoom > 1.3 && lay.scene > 0.85, JSON.stringify(lay));
+      if (Math.min(w, h) < 600) check(`${name}: بلا تكبير على الهاتف`, lay.zoom === 1, JSON.stringify(lay));
       await page.screenshot({ path: path.join(OUT, `size-${w}x${h}.png`) });
       await page.context().close();
     }

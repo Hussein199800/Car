@@ -125,6 +125,28 @@ function confirmDialog(title, body) {
   });
 }
 
+// ===== الأجهزة اللوحية بنفس تناسق الهاتف =====
+// نكبّر الواجهة كلها بنسبة واحدة بدل مدّها: العمودي = تصميم الهاتف نفسه بعرض منطقي ~560،
+// والأفقي = عمودان كل منهما بعرض شاشة هاتف تقريباً. فتبقى النسب بين الخط والبطاقات والمشهد كما في الهاتف.
+let lastFit = '';
+function fitScreen() {
+  const w = window.innerWidth, h = window.innerHeight;
+  const tablet = Math.min(w, h) >= 600;
+  const portrait = h >= w;
+  const z = tablet ? Math.max(1, Math.min(portrait ? 1.7 : 1.6, w / (portrait ? 560 : 1040))) : 1;
+  const logical = w / z;
+  const key = `${z.toFixed(3)}|${portrait}|${tablet}`;
+  if (key === lastFit) return false;
+  lastFit = key;
+  const root = document.documentElement;
+  root.style.zoom = z > 1 ? z.toFixed(3) : '';
+  root.classList.toggle('tablet', tablet);
+  // العمودان فقط حين يتسع العرض فعلاً، وليس على لوحي عمودي (يبقى بتصميم الهاتف)
+  root.classList.toggle('wide', logical >= 720 && !(tablet && portrait));
+  root.classList.toggle('wider', logical >= 1100 && !(tablet && portrait));
+  return true;
+}
+
 function applyTheme() {
   const t = state.prefs.theme;
   const dark = t === 'dark' || (t === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -402,7 +424,7 @@ const WHATS_NEW = [
   'مشهد بصور واقعية للبيت يتبدّل مع الطقس والغروب والليل، وتضيء فيه شرائح البطارية بنسبتها الحقيقية.',
   'اختر شكل المشهد من الإعدادات: صور واقعية، أو رسم ثلاثي الأبعاد، أو الكلاسيكي.',
   'إصلاح خانات الإعدادات: سعة البطارية وقدرة الألواح تُكتب وتُحفظ الآن، والبحث عن المدينة يعمل أثناء الكتابة ويجد «ادلب» بلا همزة.',
-  'تنسيق أوضح على الأجهزة اللوحية: المشهد بعمود كامل والتفاصيل والبطارية بجانبه.',
+  'الأجهزة اللوحية بنفس تناسق الهاتف: عمودياً تصميم الهاتف مكبّراً، وأفقياً عمودان متساويان.',
 ];
 function openWhatsNew() {
   store.set('seenVersion', VERSION);
@@ -2465,6 +2487,10 @@ AFTER.update = () => {
 
 // ================= التشغيل =================
 async function boot() {
+  fitScreen();
+  // تدوير الجهاز أو تغيير حجم النافذة: نعيد الحساب ونعيد الرسم إن تغيّر التخطيط
+  let rt;
+  window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if (fitScreen() && (state.session || state.demo)) render(); }, 150); });
   applyTheme();
   // زر ⓘ في أي مكان يفتح شرحه، ويمنع فتح البطاقة التي يقع داخلها
   const onInfo = (e) => {
