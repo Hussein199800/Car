@@ -465,6 +465,82 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.context().close();
     }
 
+    // 15) الإصدار 3.7: الأرقام العربية، الشرح ⓘ، المشهد والطقس، التوفير، السنوي، سجل الخادم، الموقع
+    {
+      const page = await newPage(browser, { loggedIn: false });
+      await page.route(/geocoding-api\.open-meteo\.com/, (rt) => rt.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ results: [{ name: 'إدلب', admin1: 'محافظة ادلب', country: 'سوريا', latitude: 35.93, longitude: 36.63 }] }) }));
+      await page.click('#demoBtn'); await page.waitForSelector('.flow-card');
+      // المشهد: كل حالة طقس بسماء وجملة مختلفة ومنطقية
+      const scenes = {};
+      for (const k of ['clear', 'rain', 'night']) {
+        await page.click(`[data-demo-sky="${k}"]`); await page.waitForTimeout(700);
+        scenes[k] = { cls: await page.$eval('.scene', (e) => e.className), story: await text(page, '.story b'), bat: await text(page, '.n-bat .bt') };
+      }
+      check('المشهد المشمس: سماء صافية والألواح تشحن البطارية', scenes.clear.cls.includes('sky-clear') && scenes.clear.story.includes('تشحن البطارية') && scenes.clear.bat.includes('تشحن'), JSON.stringify(scenes.clear));
+      check('المشهد الماطر: إنتاج ضعيف متوقع والبطارية تكمّل', scenes.rain.cls.includes('sky-rain') && scenes.rain.story.includes('متوقع') && scenes.rain.bat.includes('تُفرّغ'), JSON.stringify(scenes.rain));
+      check('المشهد الليلي: البيت على البطارية', scenes.night.cls.includes('sky-night') && scenes.night.story.includes('ليل') && scenes.night.bat.includes('تُفرّغ'), JSON.stringify(scenes.night));
+      const arrows = await page.$$eval('animateMotion', (a) => a.length);
+      check('خطوط الطاقة متحركة في المشهد', arrows >= 6);
+      // ⓘ داخل بطاقة: يفتح الشرح ولا يفتح البطاقة
+      await page.click('[data-demo-sky=""]'); await page.waitForTimeout(500);
+      await page.click('.gcard [data-info="loadNow"]');
+      await page.waitForSelector('.isheet.show', { timeout: 3000 }).catch(() => null);
+      check('زر ⓘ يفتح الشرح دون فتح البطاقة', (await text(page, '.isheet h3')) === 'الحمل' && !(await page.$('.page-title')));
+      await page.click('.isheet [data-close]'); await page.waitForTimeout(400);
+      check('الشرح يُغلق بزر «تم»', !(await page.$('.isheet')));
+      // الألواح: الإنتاج الكلي مع ⓘ وتاريخ التسجيل، وإنتاج كل كيلوواط
+      await page.evaluate(() => window.__nav('home', 'solar')); await page.waitForTimeout(400);
+      await page.click('[data-info="totalWh"]'); await page.waitForTimeout(300);
+      const tot = await text(page, '.isheet');
+      check('شرح الإنتاج الكلي: عدّاد الإنفرتر ومنذ متى', tot.includes('منذ تشغيل الإنفرتر') && tot.includes('2024'), tot.slice(0, 120));
+      await page.click('.isheet [data-close]'); await page.waitForTimeout(300);
+      check('إنتاج كل كيلوواط ألواح يظهر عند معرفة القدرة', (await text(page, '#view')).includes('إنتاج كل كيلوواط ألواح'));
+      // سعة البطارية بالأرقام العربية
+      await page.evaluate(() => window.__nav('more', 'settings')); await page.waitForTimeout(300);
+      await page.fill('[data-pref=batteryAh]', '٢٥٠'); await page.press('[data-pref=batteryAh]', 'Enter'); await page.waitForTimeout(300);
+      const ah = await page.evaluate(() => JSON.parse(localStorage.getItem('taqati.prefs')).batteryAh);
+      check('سعة البطارية تقبل الأرقام العربية ٢٥٠', ah === 250 && (await text(page, '#batSum')).includes('12.00'), String(ah));
+      await page.fill('[data-pref=batteryAh]', '3'); await page.press('[data-pref=batteryAh]', 'Enter'); await page.waitForTimeout(300);
+      check('قيمة خارج المسموح تُصحَّح مع رسالة', (await page.inputValue('[data-pref=batteryAh]')) === '10' && (await text(page, '.toast')).includes('بين 10'));
+      // الموقع للطقس
+      await page.fill('#locQ', 'إدلب'); await page.$eval('#locGo', (e) => e.scrollIntoView({ block: 'center' })); await page.click('#locGo'); await page.waitForSelector('.loc-it', { timeout: 5000 }).catch(() => null);
+      await page.$eval('.loc-it', (e) => e.scrollIntoView({ block: 'center' })); await page.click('.loc-it'); await page.waitForTimeout(300);
+      const loc = await page.evaluate(() => JSON.parse(localStorage.getItem('taqati.prefs')).loc);
+      check('البحث عن المدينة بالعربية وحفظ موقعها', loc?.name === 'إدلب' && loc.lat === 35.93 && (await text(page, '#locCard')).includes('إدلب'));
+      // التوفير في الحاسبة
+      await page.evaluate(() => window.__nav('more', 'calc')); await page.waitForTimeout(300);
+      await page.click('[data-ctab=save]'); await page.waitForTimeout(200);
+      await page.fill('#svPrice', '١٥٠٠'); await page.waitForTimeout(900);
+      const sv = await text(page, '.sv');
+      check('التوفير: السعر بالأرقام العربية ونتائج اليوم ومنذ تشغيل الإنفرتر', sv.includes('اليوم') && sv.includes('منذ تشغيل الإنفرتر') && /\d{1,3}(,\d{3})+/.test(sv), sv.slice(0, 160));
+      // التقرير السنوي
+      await page.evaluate(() => window.__nav('reports', 'year')); await page.waitForSelector('#cYear', { timeout: 5000 }).catch(() => null);
+      const yr = await text(page, '#view');
+      check('التقرير السنوي: إنتاج السنة وأفضل شهر ومنذ أول قراءة والتوفير', ['إنتاج السنة', 'أفضل شهر', 'منذ أول قراءة', 'توفير السنة'].every((x) => yr.includes(x)) && !!(await page.$('#cYear')));
+      // سجل الإنفرتر في الخادم
+      await page.evaluate(() => window.__nav('alerts', 'srvlog')); await page.waitForSelector('.alerts .alert', { timeout: 5000 }).catch(() => null);
+      check('سجل الإنفرتر في الخادم مترجم مع النص الأصلي', (await text(page, '#view')).includes('جهد البطارية منخفض') && (await text(page, '.orig')).includes('Battery voltage low'));
+      // وحدة الواي فاي
+      await page.evaluate(() => window.__nav('home', 'device')); await page.waitForSelector('#wifiRestart', { timeout: 3000 }).catch(() => null);
+      check('وحدة الواي فاي: كل كم ترفع القراءة وزر إعادة التشغيل', (await text(page, '#view')).includes('5 دقائق') && !!(await page.$('#wifiRestart')));
+      await page.$eval('#wifiRestart', (e) => e.scrollIntoView({ block: 'center' })); await page.click('#wifiRestart'); await page.click('.modal [data-v="1"]'); await page.waitForTimeout(400);
+      check('إعادة تشغيل الوحدة تعطي نتيجة واضحة', (await page.$$eval('.toast', (t) => t.map((x) => x.textContent).join(' | '))).includes('أُعيد تشغيل الوحدة'));
+      check('بلا أخطاء JavaScript (3.7)', page.errors.length === 0, page.errors.join(' | '));
+      await page.context().close();
+    }
+    {
+      // ميزة يرفضها خادم الحساب تختفي بدل أن تبقى زراً لا يعمل
+      const page = await newPage(browser, {
+        api: (a) => (a === 'queryDeviceLastData' ? { err: 0, dat: points(Date.now() - 60000) } : a === 'queryDeviceEnergyYearPerMonth' ? { err: 260, desc: 'ERR_NO_AUTH' } : a === 'queryDeviceEnergyTotal' ? { err: 0, dat: { energy: '900' } } : null),
+      });
+      await page.waitForSelector('.flow-card');
+      await page.evaluate(() => window.__nav('reports', 'year')); await page.waitForTimeout(800);
+      check('التقرير السنوي: رسالة واضحة عند رفض الخادم', (await text(page, '#view')).includes('لا يتيح التقرير السنوي'));
+      await page.evaluate(() => window.__nav('reports', null)); await page.waitForTimeout(300);
+      check('بطاقة التقرير السنوي تختفي بعد رفض الخادم', !(await page.$('[data-page=year]')));
+      await page.context().close();
+    }
+
     // 11) التحقق من التحديثات
     {
       const page = await newPage(browser, { api: lastData(2), release: relOf('9.9.0', 'ميزة رائعة\nإصلاحات') });

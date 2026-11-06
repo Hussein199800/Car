@@ -1,9 +1,10 @@
 // بيانات الوضع التجريبي فقط — تُعرض دائماً مع شارة «تجريبي» ولا تختلط بالبيانات الحقيقية
 
-function sampleAt(t) {
+// sc: سيناريو تجريبي اختياري {hour, scale} لعرض حالات الطقس المختلفة بقيم متسقة، مع بقاء وقت القراءة «الآن»
+function sampleAt(t, sc = null) {
   const d = new Date(t);
-  const h = d.getHours() + d.getMinutes() / 60;
-  const sun = Math.max(0, Math.sin(((h - 6) / 13) * Math.PI));
+  const h = sc?.hour ?? d.getHours() + d.getMinutes() / 60;
+  const sun = Math.max(0, Math.sin(((h - 6) / 13) * Math.PI)) * (sc?.scale ?? 1);
   const wave = Math.sin(t / 7e5);
   const pvW = Math.round(sun * 4200 * (0.92 + 0.08 * wave));
   const load = Math.round(380 + 250 * Math.max(0, Math.sin(((h - 15) / 8) * Math.PI)) + 30 * wave);
@@ -39,12 +40,15 @@ function sampleAt(t) {
     ['Load Status', 'Load on', ''],
     ['Model', onGrid ? 'Line Mode' : 'Battery Mode', ''],
     ['Today generation', h < 6 ? 0 : Math.round(((4200 * 13) / Math.PI) * (1 - Math.cos((Math.PI * Math.min(h - 6, 13)) / 13))), 'Wh'],
+    ['Total generation', 9140000, 'Wh'],
     ['Inverter Fault', '-', ''],
   ];
 }
 
-export function demoPoints(t = Date.now()) {
-  return sampleAt(t).map(([title, val, unit]) => ({ title, val: String(val), unit }));
+export const DEMO_SKY = { clear: { hour: 11.5, scale: 1 }, partly: { hour: 11.5, scale: 0.5 }, rain: { hour: 11, scale: 0.05 }, night: { hour: 21.5, scale: 0 } };
+
+export function demoPoints(t = Date.now(), sky = null) {
+  return sampleAt(t, DEMO_SKY[sky] || null).map(([title, val, unit]) => ({ title, val: String(val), unit }));
 }
 
 export function demoHistory(date) {

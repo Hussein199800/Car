@@ -8,7 +8,7 @@ import {
   LinearScale, CategoryScale, Filler, Tooltip, Legend,
 } from 'chart.js';
 import { WatchPowerApi, ApiError, errorAr } from './api.js';
-import { normalize, rowsToSamples, fmt, latinDigits, LOC, countAr, DAY } from './model.js';
+import { normalize, rowsToSamples, fmt, latinDigits, LOC, countAr, DAY, parseTs } from './model.js';
 import { trTitle, trValue, trUnit, isEmptyVal, warnAr } from './i18n.js';
 import {
   store, today, addDays, dayKey, recordSample, localDay, summarize, cachedSummary, cacheSummary, toCsv, shareFile,
@@ -18,6 +18,7 @@ import { icons } from './icons.js';
 import { isNative, secure, migrateSession, monitor, deviceTools, APPS, updater } from './native.js';
 import { fetchLatest, isNewer } from './update.js';
 import { INFO, infoBtn } from './info.js';
+import { fetchWeather, searchPlace, sceneStory, SKY_AR, expectedPv } from './weather.js';
 import { analyze } from './advisor.js';
 import { CATS, catOf, levelOf, toEvents, migrateLog, addEvents } from './log.js';
 import { trendDates, change } from './trend.js';
@@ -28,7 +29,7 @@ import { TIP_SECTIONS, smartTips, tipOfDay } from './tips.js';
 Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, CategoryScale, Filler, Tooltip, Legend);
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '3.6.1';
+const VERSION = '3.7.0';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -37,6 +38,7 @@ const DEFAULT_PREFS = {
   pvKwp: null,
   price: null,
   currency: '',
+  loc: null,
   cutoffSoc: 20,
   theme: 'auto',
   notify: true,
@@ -173,7 +175,7 @@ function openInfo(key) {
   const extra = INFO_EXTRA[key]?.() || [];
   const el = document.createElement('div');
   el.className = 'isheet';
-  el.innerHTML = L(`<div class="isheet-b" role="dialog" aria-modal="true" aria-label="${esc(it[0])}"><i class="grab"></i>
+  el.innerHTML = (`<div class="isheet-b" role="dialog" aria-modal="true" aria-label="${esc(it[0])}"><i class="grab"></i>
     <h3>${esc(it[0])}</h3>${[...it[1], ...extra].map((t) => `<p>${esc(t)}</p>`).join('')}
     <button class="btn primary wide" data-close>تم</button></div>`);
   const close = () => { el.classList.remove('show'); setTimeout(() => el.remove(), 250); };
@@ -184,7 +186,7 @@ function openInfo(key) {
 }
 // معلومات تُضاف للشرح حسب جهاز المستخدم
 const INFO_EXTRA = {
-  totalWh: () => (state.plant?.install ? [`سُجّلت منظومتك على خادم WatchPower بتاريخ ${String(state.plant.install).slice(0, 10)}.`] : []),
+  totalWh: () => (state.plant?.install ? [`سُجّلت منظومتك على خادم WatchPower في ${fmt.day(String(state.plant.install).slice(0, 10), { day: 'numeric', month: 'long', year: 'numeric' })}.`] : []),
   stale: () => (state.collector?.datFetch ? [`وحدتك ترفع قراءة كل ${countAr(Math.round(state.collector.datFetch / 60) || 1, ['دقيقة', 'دقيقتين', 'دقائق', 'دقيقة'])}.`] : []),
 };
 
@@ -515,7 +517,7 @@ async function refresh(manual = false) {
   state.loading = true;
   renderHeader();
   try {
-    const points = state.demo ? demoPoints() : await api.lastData(d);
+    const points = state.demo ? demoPoints(Date.now(), state.demoSky) : await api.lastData(d);
     // تبديل الجهاز أو الخروج أثناء الطلب: نتجاهل الرد حتى لا تظهر قراءة جهاز باسم جهاز آخر
     // ولا يُستنتج منها فرق توقيت خاطئ، ثم نجلب الجهاز الحالي فوراً
     if (sn() !== d.sn) { state.switched = true; return; }
@@ -735,7 +737,7 @@ async function loadPlantInfo() {
   if (!pid) return;
   try {
     const p = await optional('plant', () => api.plantInfo(pid));
-    state.plant = p ? { install: p.install || null, nominalPower: Number(p.nominalPower) || null } : null;
+    state.plant = p ? { install: p.install || null, nominalPower: Number(p.nominalPower) || null, lat: Number(p.address?.lat) || null, lon: Number(p.address?.lon) || null } : null;
     cacheDay('plant', state.plant);
     if (['solar', 'device'].includes(leaf())) render();
   } catch { /* تبقى الميزة مخفية */ }
@@ -818,20 +820,7 @@ function viewHome() {
   ${urgentTip(m)}
   <div class="home-grid"><div class="col-a">
   <div class="mode-pill ${modeCls}">${esc(modeText)}</div>
-  <section class="card flow-card ${live ? '' : 'stale'}">
-    <svg viewBox="0 0 360 380" class="flow-svg" aria-hidden="true">
-      <circle cx="180" cy="190" r="85" class="glow"/>
-      ${flowLine('solar', 'M180 124 L180 154', live && (m.pvW ?? 0) > 5, m.pvW, false)}
-      ${flowLine('grid', 'M78 190 L144 190', live && isLine && m.gridOn, 300, false)}
-      ${flowLine('load', 'M216 190 L282 190', live && (m.outW ?? 0) > 5, m.outW, false)}
-      ${flowLine('bat', 'M180 226 L180 264', live && Math.abs(m.batW ?? 0) > 10, m.batW, (m.batW ?? 0) < 0)}
-    </svg>
-    <button class="node n-solar ${(m.pvW ?? 0) > 5 && live ? '' : 'dim'}" data-page="solar" aria-label="تفاصيل الألواح"><b><bdi>${fmt.wShort(m.pvW)}</bdi></b><small>الألواح</small><span class="ic">${icons.panel}</span></button>
-    <button class="node n-grid ${m.gridOn && live ? '' : 'dim'}" data-page="grid" aria-label="تفاصيل كهرباء الشبكة"><span class="ic">${icons.grid}</span><b><bdi>${m.gridOn ? numAr(m.gridV) + ' فولت' : 'مقطوعة'}</bdi></b><small>${live && isLine && m.gridOn ? 'تغذّي البيت' : 'الشبكة'}</small></button>
-    <button class="node n-load ${(m.outW ?? 0) > 5 && live ? '' : 'dim'}" data-page="load" aria-label="تفاصيل الحمل"><span class="ic">${icons.home}</span><b><bdi>${fmt.wShort(m.outW)}</bdi></b><small>الحمل</small></button>
-    <button class="node n-bat ${live ? '' : 'dim'}" data-page="battery" aria-label="تفاصيل البطارية"><span class="ic">${icons.battery}</span><b><bdi>${m.soc ?? '—'}%</bdi></b>${batTag(m, live)}</button>
-    <button class="node n-inv" data-page="device" aria-label="تفاصيل الإنفرتر"><span class="ic">${icons.inverter}</span></button>
-  </section>
+  ${scene(m, live, isLine)}
 
 
   <section class="card battery-card ${live ? '' : 'stale'}" data-page="battery">
@@ -862,6 +851,89 @@ function viewHome() {
   </div></div>`;
 }
 
+// ================= المشهد: البيت والألواح والبطارية والشبكة مع الطقس الحقيقي =================
+// السماء من الطقس الفعلي لموقع المنظومة، والخطوط تتحرك باتجاه الطاقة الحقيقي، وتحتها جملة تشرح ما يحدث الآن.
+function currentSky(m) {
+  const w = state.weather;
+  if (w && Date.now() - w.at < 2 * 36e5) return w.sky;
+  // بلا طقس: ليل أو نهار من الساعة والإنتاج فقط
+  const h = new Date().getHours();
+  return h < 6 || h >= 18 ? 'night' : (m?.pvW ?? 0) > 50 ? 'clear' : 'partly';
+}
+
+function scene(m, live, isLine) {
+  const sky = currentSky(m);
+  const pv = live && (m.pvW ?? 0) > 5;
+  const w = state.weather;
+  const story = sceneStory(m, w && Date.now() - w.at < 2 * 36e5 ? w : null, { kwp: pvKwp(), lowSoc: state.prefs.lowSoc });
+  const soc = Math.max(0, Math.min(100, m.soc ?? 0));
+  const loc = weatherLoc();
+  const wx = w && Date.now() - w.at < 2 * 36e5
+    ? `<span class="wx-t">${esc(SKY_AR[w.sky])}${w.temp != null ? ` ${w.temp}°` : ''}</span>${loc?.name ? `<span>${esc(loc.name)}</span>` : ''}${w.sunrise ? `<span>${w.sunrise}–${w.sunset}</span>` : ''}`
+    : loc ? '<span>جارٍ جلب الطقس…</span>' : '<button class="link" data-goto="more:settings">حدّد موقع منظومتك لعرض الطقس</button>';
+  return `
+  <section class="card flow-card scene sky-${sky} ${live ? '' : 'stale'} ${pv ? 'pv-on' : ''}">
+    <div class="sky-fx" aria-hidden="true">
+      <i class="sun"></i><i class="moon"></i><i class="stars"></i>
+      <i class="cloud c1"></i><i class="cloud c2"></i><i class="cloud c3"></i>
+      <i class="rain"></i><i class="flash"></i><i class="fog"></i>
+    </div>
+    <svg viewBox="0 0 360 300" class="flow-svg scene-svg" aria-hidden="true">
+      <path class="ground" d="M0 248 Q180 228 360 248 L360 300 L0 300 Z"/>
+      <g class="tower"><path d="M318 238 L330 120 L342 238 M322 200 H338 M325 165 H335 M312 140 H348 M316 128 H344"/></g>
+      <g class="house">
+        <path class="wall" d="M150 238 V150 L230 112 L310 150 V238 Z"/>
+        <path class="roof" d="M136 156 L230 104 L322 156"/>
+        <path class="panels" d="M152 140 L226 101 L240 116 L168 154 Z"/>
+        <path class="panel-lines" d="M170 131 L184 145 M188 121 L202 136 M207 111 L220 126 M160 147 L233 108"/>
+        <rect class="door" x="264" y="192" width="26" height="46" rx="3"/>
+        <rect class="win" x="236" y="168" width="20" height="18" rx="2"/>
+      </g>
+      <g class="battery-box"><rect x="96" y="176" width="34" height="62" rx="7"/><rect class="lvl" x="101" y="${181 + Math.round(52 * (1 - soc / 100))}" width="24" height="${Math.round(52 * (soc / 100))}" rx="4"/></g>
+      ${flowLine('solar', 'M196 128 L196 168', pv, m.pvW, false)}
+      ${flowLine('grid', 'M330 150 L330 160 L210 160 L210 168', live && isLine && m.gridOn, 300, false)}
+      ${flowLine('load', 'M212 186 L250 186 L250 214 L264 214', live && (m.outW ?? 0) > 5, m.outW, false)}
+      ${flowLine('bat', 'M182 186 L150 186 L150 206 L130 206', live && Math.abs(m.batW ?? 0) > 10, m.batW, (m.batW ?? 0) < 0)}
+      <rect class="inv-box" x="182" y="168" width="30" height="34" rx="6"/><circle class="inv-led" cx="197" cy="178" r="3"/>
+    </svg>
+    <button class="node n-solar ${pv ? '' : 'dim'}" data-page="solar" aria-label="تفاصيل الألواح"><small>الألواح</small><b><bdi>${fmt.wShort(m.pvW)}</bdi></b></button>
+    <button class="node n-grid ${m.gridOn && live ? '' : 'dim'}" data-page="grid" aria-label="تفاصيل كهرباء الشبكة"><small>${live && isLine && m.gridOn ? 'الشبكة تغذّي' : 'الشبكة'}</small><b><bdi>${m.gridOn ? numAr(m.gridV) + ' فولت' : 'مقطوعة'}</bdi></b></button>
+    <button class="node n-bat ${live ? '' : 'dim'}" data-page="battery" aria-label="تفاصيل البطارية"><b><bdi>${m.soc ?? '—'}%</bdi></b>${batTag(m, live)}</button>
+    <button class="node n-load ${(m.outW ?? 0) > 5 && live ? '' : 'dim'}" data-page="load" aria-label="تفاصيل الحمل"><small>الحمل</small><b><bdi>${fmt.wShort(m.outW)}</bdi></b></button>
+    <button class="node n-inv" data-page="device" aria-label="تفاصيل الإنفرتر"></button>
+    <div class="wx">${wx}</div>
+  </section>
+  ${story ? `<section class="story ${story.level}"><b>${esc(story.title)}</b><p>${esc(story.text)}</p></section>` : ''}
+  ${state.demo ? `<div class="chips-sel demo-sky">${[['', 'الآن'], ['clear', 'مشمس'], ['partly', 'غائم جزئياً'], ['rain', 'ماطر'], ['night', 'ليل']].map(([k, l]) => `<button data-demo-sky="${k}" class="${(state.demoSky || '') === k ? 'on' : ''}">${l}</button>`).join('')}</div>` : ''}`;
+}
+
+// موقع الطقس: ما سجّله المركّب على الخادم، وإلا ما اختاره المستخدم من الإعدادات
+const weatherLoc = () => state.prefs.loc || (state.plant?.lat && state.plant?.lon ? { lat: state.plant.lat, lon: state.plant.lon, name: '' } : null);
+
+async function loadWeather(force = false) {
+  if (state.demo) return;
+  const loc = weatherLoc();
+  if (!loc) return;
+  const key = `${(+loc.lat).toFixed(2)},${(+loc.lon).toFixed(2)}`;
+  const c = store.get('wx', null);
+  if (!force && c && c.key === key && Date.now() - c.w.at < 30 * 60000) { state.weather = c.w; return; }
+  if (state.wxLoading) return;
+  state.wxLoading = true;
+  try {
+    state.weather = await fetchWeather(loc.lat, loc.lon);
+    store.set('wx', { key, w: state.weather });
+    if (state.tab === 'home' && !state.page) render();
+  } catch { /* يبقى المشهد بلا طقس حتى المحاولة التالية */ }
+  state.wxLoading = false;
+}
+
+// طقس الوضع التجريبي: يتبع السيناريو المختار حتى يمكن رؤية كل الحالات
+function demoWeather(sky) {
+  const night = sky === 'night';
+  return { temp: night ? 9 : sky === 'rain' ? 13 : 24, code: { clear: 0, partly: 2, rain: 63, night: 0 }[sky] ?? 0, cloud: { clear: 5, partly: 45, rain: 95, night: 10 }[sky] ?? 0,
+    isDay: !night, rad: { clear: 820, partly: 520, rain: 90, night: 0 }[sky] ?? 0, sunrise: '06:31', sunset: '16:58', sky, at: Date.now() };
+}
+
 // ملاحظة عاجلة واحدة من النصائح المخصّصة تظهر في الرئيسية حتى لا تفوت المستخدم
 function urgentTip(m) {
   if (!m || m.stale || state.demo) return '';
@@ -870,6 +942,10 @@ function urgentTip(m) {
 }
 AFTER.home = () => {
   bindGoto();
+  loadPlantInfo().then(() => loadWeather());
+  document.querySelectorAll('[data-demo-sky]').forEach((b) => {
+    b.onclick = () => { state.demoSky = b.dataset.demoSky || null; state.weather = state.demoSky ? demoWeather(state.demoSky) : null; refresh(); };
+  });
   const r = $('#retryBtn');
   if (r) r.onclick = () => { r.disabled = true; r.textContent = 'جارٍ المحاولة…'; refresh(true); };
 };
@@ -1085,7 +1161,7 @@ async function loadYear() {
     if (state.demo) {
       const season = [0.55, 0.65, 0.8, 0.9, 1, 1.05, 1.05, 1, 0.9, 0.75, 0.6, 0.5];
       const now = new Date();
-      res = { months: season.map((f, i) => ({ month: i + 1, kwh: y < now.getFullYear() || i < now.getMonth() ? Math.round(f * 30 * 22 * 10) / 10 : i === now.getMonth() ? Math.round(f * now.getDate() * 22 * 10) / 10 : 0 })), total: 914 };
+      res = { months: season.map((f, i) => ({ month: i + 1, kwh: y < now.getFullYear() || i < now.getMonth() ? Math.round(f * 30 * 22 * 10) / 10 : i === now.getMonth() ? Math.round(f * now.getDate() * 22 * 10) / 10 : 0 })), total: 9140 };
     } else {
       const months = await optional('year', () => api.energyYear(d, y));
       const total = await api.energyTotal(d).catch(() => null);
@@ -1536,7 +1612,7 @@ function pageSrvLog() {
     return `<li class="alert ${lvl}"><div class="a-ic">${icons.warn}</div><div>
       <b>${esc(t.title)}</b>${t.tip ? `<p>${esc(t.tip)}</p>` : ''}
       <p class="orig"><bdi>${esc([w.code ? 'الرمز ' + w.code : '', w.desc].filter(Boolean).join(' · '))}</bdi></p>
-      <time>${esc(String(w.gts || '').slice(0, 16))}${w.handle === true ? ' · انتهى' : ''}</time></div></li>`;
+      <time>${esc(parseTs(w.gts) ? fmt.dateTime(parseTs(w.gts)) : String(w.gts || ''))}${w.handle === true ? ' · انتهى' : ''}</time></div></li>`;
   }).join('')}</ul>` : '<div class="empty">لا أعطال ولا تحذيرات في آخر 90 يوماً. ممتاز.</div>'}
   <button class="btn ghost wide" id="srvRetry">${icons.refresh} تحديث</button>`;
 }
@@ -2013,6 +2089,7 @@ function pageSettings() {
   return `${pageCustom()}
     <section class="card"><div class="card-h"><h2>البطارية</h2></div>${pageBatCfg()}</section>
     <section class="card"><div class="card-h"><h2>الاتصال</h2></div>${pageConn()}</section>
+    <section class="card" id="locCard">${pageLoc()}</section>
     <section class="card"><div class="card-h"><h2>الحساب</h2></div>
       ${kv([['الحساب', val(state.demo ? 'وضع تجريبي' : state.session?.usr)], ['الجهاز المعروض', val(d?.alias)], ['عدد الأجهزة', val(String(state.devices.length))], ['الخادم', val(state.demo ? '—' : state.session?.profile === 'shine' ? 'ShineMonitor' : 'DessMonitor')]])}
       ${state.devices.length > 1 ? '<p class="hint">للتبديل بين أجهزتك اضغط اسم الجهاز أعلى الرئيسية.</p>' : ''}</section>`;
@@ -2020,6 +2097,7 @@ function pageSettings() {
 AFTER.settings = () => {
   AFTER.custom();
   bindPrefs($('#view'));
+  bindLoc();
   loadCollector();
   loadPlantInfo();
   // ملخص البطارية يتحدث فوراً مع كل تغيير في السعة أو أدنى نسبة
@@ -2053,9 +2131,55 @@ function pageBatCfg() {
   return `<div class="form">
       ${numField('batteryAh', 'سعة البطارية', 'أمبير ساعة', 10, 5000, 'مثال: 200', 'batteryAh')}
       ${numField('cutoffSoc', 'أدنى نسبة مسموح التفريغ إليها', '%', 0, 60)}
-      ${numField('pvKwp', 'قدرة الألواح المركّبة', 'كيلوواط', 0.1, 200, state.plant?.nominalPower ? `من الخادم: ${state.plant.nominalPower}` : 'مثال: 4.4', 'pvKwp')}
+      ${numField('pvKwp', 'قدرة الألواح المركّبة', 'كيلوواط', 0.1, 200, state.plant?.nominalPower ? String(state.plant.nominalPower) : 'مثال: 4.4', 'pvKwp')}
     </div>
     <p class="hint" id="batSum">${ah ? `بطاريتك تخزن قرابة <b>${fmt.kwh((ah * v) / 1000)} ك.و.س</b> على ${v} فولت${rated ? '' : ' (مقدّر من جهد البطارية)'}، منها <b>${fmt.kwh(((ah * v) / 1000) * (1 - (state.prefs.cutoffSoc ?? 20) / 100))}</b> قابلة للاستخدام.` : 'أدخل السعة ليحسب التطبيق مدة البطارية.'}</p>`;
+}
+
+// موقع المنظومة للطقس: بحث بالاسم (بالعربية) من خدمة Open-Meteo
+function pageLoc() {
+  const loc = state.prefs.loc;
+  const srv = state.plant?.lat && state.plant?.lon;
+  const r = state.locSearch;
+  return `${cardH('موقع المنظومة للطقس')}
+    <p class="hint">${loc ? `الموقع: <b>${esc(loc.name)}</b>${loc.area ? '، ' + esc(loc.area) : ''}` : srv ? 'يُستخدم الموقع المسجّل للمنظومة على خادم WatchPower.' : 'لم يُحدَّد موقع بعد. ابحث عن مدينتك ليظهر الطقس في الرئيسية.'}</p>
+    <div class="loc-row"><input type="search" id="locQ" placeholder="اسم المدينة، مثلاً: إدلب" autocomplete="off" enterkeyhint="search"><button class="btn primary" id="locGo">بحث</button></div>
+    ${r?.loading ? '<div class="spinner sm"></div>' : ''}
+    ${r?.error ? `<p class="note bad">${icons.warn}<span>${esc(r.error)}</span></p>` : ''}
+    ${r?.list ? (r.list.length ? `<div class="loc-list">${r.list.map((x, i) => `<button class="loc-it" data-loc="${i}"><b>${esc(x.name)}</b><small>${esc(x.area)}</small></button>`).join('')}</div>` : '<p class="hint">لم يُعثر على مكان بهذا الاسم.</p>') : ''}
+    ${loc ? '<button class="link pad" id="locClear">إزالة الموقع</button>' : ''}`;
+}
+
+function bindLoc() {
+  const card = $('#locCard');
+  if (!card) return;
+  // نكتب في البطاقة الظاهرة الآن، فقد تُعاد رسم الصفحة أثناء انتظار البحث
+  const redraw = () => { const c = $('#locCard'); if (c) { c.innerHTML = pageLoc(); bindLoc(); } };
+  const go = async () => {
+    const q = $('#locQ').value.trim();
+    if (q.length < 2) { toast('اكتب اسم المدينة', 'bad'); return; }
+    state.locSearch = { loading: true };
+    redraw();
+    try { state.locSearch = { list: await searchPlace(q) }; } catch (e) { state.locSearch = { error: e.message }; }
+    redraw();
+  };
+  $('#locGo').onclick = go;
+  $('#locQ').onkeydown = (e) => { if (e.key === 'Enter') go(); };
+  card.querySelectorAll('[data-loc]').forEach((b) => {
+    b.onclick = () => {
+      const x = state.locSearch.list[Number(b.dataset.loc)];
+      state.prefs.loc = { name: x.name, area: x.area, lat: x.lat, lon: x.lon };
+      savePrefs();
+      state.locSearch = null;
+      state.weather = null;
+      store.del('wx');
+      toast(`الموقع: ${x.name}`, 'ok');
+      redraw();
+      loadWeather(true);
+    };
+  });
+  const clr = $('#locClear');
+  if (clr) clr.onclick = () => { state.prefs.loc = null; savePrefs(); state.weather = null; store.del('wx'); redraw(); };
 }
 
 function pageConn() {
