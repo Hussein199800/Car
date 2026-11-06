@@ -261,6 +261,56 @@ export class WatchPowerApi {
     return r.dat?.parameter || [];
   }
 
+  // ---------- ميزات إضافية من الخادم ----------
+  // كلها اختيارية: بعض الحسابات لا تتيحها، فالواجهة تخفي الميزة عند رفض الخادم ولا تعرض زراً لا يعمل.
+
+  // سجل الأعطال والتحذيرات الذي يحفظه الخادم للجهاز (من أقدم تاريخ يطلبه التطبيق حتى الآن)
+  async warnings(dev, sdate, edate) {
+    const out = [];
+    for (let page = 0; page < 10; page++) {
+      let r;
+      try {
+        r = await this.request('queryDeviceWarning', { ...this.devParams(dev), sdate, edate, i18n: 'en_US', page, pagesize: 50 });
+      } catch (e) {
+        if (e.code === 12 || /NO_RECORD/.test(e.message)) break;
+        throw e;
+      }
+      const list = r.dat?.warning || [];
+      out.push(...list);
+      if (list.length < 50 || out.length >= (r.dat?.total || 0)) break;
+    }
+    return out;
+  }
+
+  // إنتاج كل شهر من سنة (كيلوواط ساعة)، ومجموع الإنتاج منذ أول قراءة
+  async energyYear(dev, year) {
+    const r = await this.request('queryDeviceEnergyYearPerMonth', { ...this.devParams(dev), date: String(year) });
+    return (r.dat?.permonth || []).map((x) => ({ month: Number(String(x.ts).slice(5, 7)), kwh: Number(x.val) }));
+  }
+
+  async energyTotal(dev) {
+    const r = await this.request('queryDeviceEnergyTotal', this.devParams(dev));
+    const v = Number(r.dat?.energy);
+    return Number.isFinite(v) ? v : null;
+  }
+
+  // وحدة الواي فاي (المجمّع): كل كم ثانية ترفع القراءات، وإعادة تشغيلها عن بُعد
+  async collectorInfo(pn) {
+    const r = await this.request('queryCollectorInfo', { pn });
+    return (r.dat?.collector || []).find((c) => c.pn === pn) || null;
+  }
+
+  async restartCollector(pn) {
+    const r = await this.request('restartCollector', { pn });
+    return Number(r.dat?.ret ?? 2);
+  }
+
+  // معلومات المنظومة: القدرة المصممة للألواح وتاريخ التركيب
+  async plantInfo(pid) {
+    const r = await this.request('queryPlantInfo', { plantid: pid });
+    return r.dat || null;
+  }
+
   async setCtrl(dev, id, val) {
     const p = PROFILES[this.profile];
     return this.request('ctrlDevice', { ...this.devParams(dev), id, val, i18n: 'en_US', source: p.source });

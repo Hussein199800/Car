@@ -40,6 +40,11 @@ export const monitor = {
     if (!isNative) return;
     await Monitor.configure({ config, flags });
   },
+  // آخر قراءة لأداة الشاشة الرئيسية
+  async widget(data) {
+    if (!isNative) return;
+    await Monitor.widget(data);
+  },
   async takeOver() {
     if (!isNative) return { alerts: [], faults: [], flags: {} };
     return Monitor.takeOver();

@@ -46,6 +46,14 @@ class MonitorPlugin : Plugin() {
         call.resolve()
     }
 
+    /** الواجهة ترسل آخر قراءة لأداة الشاشة الرئيسية */
+    @PluginMethod
+    fun widget(call: PluginCall) {
+        fun int(k: String) = if (call.data.isNull(k)) null else call.data.optDouble(k).takeIf { !it.isNaN() }?.toInt()
+        TaqatiWidget.push(context, WidgetState(int("soc"), int("batW"), int("loadW"), int("pvW"), call.getBoolean("stale", false) == true, call.data.optLong("at", System.currentTimeMillis())))
+        call.resolve()
+    }
+
     /** تستلم الواجهة ما حدث في الخلفية: التنبيهات والأعطال الجديدة وحالة التنبيهات الأخيرة. */
     @PluginMethod
     fun takeOver(call: PluginCall) {

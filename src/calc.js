@@ -1,6 +1,10 @@
 // حاسبة الأحمال: تحويل أمبير الكهرباء إلى واط وإلى أمبير البطارية، وقائمة أجهزة البيت
 // مع الحمل الكلي وتيار الإقلاع والمدة على البطارية واقتراح الألواح والبطاريات.
 import { store } from './data.js';
+import { latinDigits } from './model.js';
+
+// الأرقام قد تُكتب بالعربية (٢٠٠) أو بفاصلة عشرية «٫»
+const numOf = (v) => parseFloat(latinDigits(v));
 
 // معامل القدرة: الأحمال الحرارية ≈ 1، والمحركات (مكيف، مضخة، ثلاجة) أقل
 const PF = { res: 1, motor: 0.8 };
@@ -80,10 +84,11 @@ export function viewCalc(h) {
   const { state, esc, icons } = h;
   const c = state.calc;
   const sysV = h.sysV();
-  const seg = `<div class="seg"><button data-ctab="conv" class="${c.tab === 'conv' ? 'on' : ''}">محوّل الأمبير</button><button data-ctab="list" class="${c.tab === 'list' ? 'on' : ''}">أجهزة بيتي</button></div>`;
+  const tab = (k, label) => `<button data-ctab="${k}" class="${c.tab === k ? 'on' : ''}">${label}</button>`;
+  const seg = `<div class="seg">${tab('conv', 'محوّل الأمبير')}${tab('list', 'أجهزة بيتي')}${tab('save', 'التوفير')}</div>`;
   const intro = `<section class="hero c-amber calc-hero"><span class="g-deco">${icons.calc}</span><div class="h-ic">${icons.calc}</div>
     <b class="hero-t">حاسبة الأحمال</b><span>اعرف كم واط يسحب جهازك، وكم أمبير يأخذ من بطاريتك، وهل يتحمّله الإنفرتر</span></section>`;
-  return intro + seg + (c.tab === 'conv' ? viewConverter(h, c, sysV) : viewList(h, c, sysV));
+  return intro + seg + (c.tab === 'save' ? viewSavings(h) : c.tab === 'list' ? viewList(h, c, sysV) : viewConverter(h, c, sysV));
 }
 
 const chips = (name, opts, cur) => `<div class="chips-sel">${opts.map(([v, label]) => `<button data-set="${name}" data-v="${v}" class="${String(cur) === String(v) ? 'on' : ''}">${label}</button>`).join('')}</div>`;
@@ -105,7 +110,7 @@ function viewConverter(h, c, sysV) {
   <section class="card calc-in">
     <div class="card-h"><h2>ماذا تعرف؟</h2></div>
     ${chips('mode', [['ac', 'أمبير الكهرباء'], ['w', 'الواط'], ['dc', 'أمبير البطارية']], c.mode)}
-    <label class="big-in"><input type="number" inputmode="decimal" min="0" step="any" id="calcInput" value="${esc(c.input)}"><span>${esc(label)}</span></label>
+    <label class="big-in"><input type="text" inputmode="decimal" autocomplete="off" id="calcInput" value="${esc(c.inputRaw ?? c.input)}"><span>${esc(label)}</span></label>
     ${live ? `<button class="link" id="useLive">${h.icons.flash} استخدم حمل بيتي الآن (${num(m.outW)} واط)</button>` : ''}
   </section>
 
@@ -121,7 +126,7 @@ function viewConverter(h, c, sysV) {
     <div class="form">
       <div class="set-row"><span>جهد الكهرباء</span>${chips('acV', [[220, '220'], [230, '230'], [240, '240'], [110, '110']], c.acV)}</div>
       <div class="set-row"><span>نوع الجهاز</span>${chips('kind', [['res', 'حراري / إنارة'], ['motor', 'محرك (مكيف، مضخة)']], c.kind)}</div>
-      <div class="set-row"><span>كفاءة الإنفرتر</span><span class="num-in"><input type="number" id="calcEff" min="70" max="99" value="${c.eff}"><small>%</small></span></div>
+      <div class="set-row"><span>كفاءة الإنفرتر</span><span class="num-in"><input type="text" inputmode="decimal" autocomplete="off" id="calcEff" value="${c.eff}"><small>%</small></span></div>
       ${h.state.model?.ratedV ? '' : `<div class="set-row"><span>جهد بطاريتك</span>${chips('sysV', [[12, '12'], [24, '24'], [48, '48']], sysV)}</div>`}
     </div>
   </details>
@@ -135,6 +140,38 @@ function viewConverter(h, c, sysV) {
   <section class="card"><div class="card-h"><h2>جدول سريع</h2><small class="muted">أمبير البطارية</small></div>
     <div class="table qt"><div class="tr th"><span>الكهرباء</span><span>القدرة</span><span>48 فولت</span><span>24 فولت</span><span>12 فولت</span></div>${quick}</div>
   </section>`;
+}
+
+// ---------- التوفير: ما أنتجته الألواح × سعر الكيلوواط ساعة الذي كنت ستدفعه ----------
+export function savingsOf(kwh, price) {
+  return kwh != null && price > 0 ? kwh * price : null;
+}
+
+function viewSavings(h) {
+  const { state, esc } = h;
+  const p = state.prefs;
+  const m = state.model;
+  const cur = p.currency || '';
+  const money = (v) => (v == null ? '—' : Math.round(v).toLocaleString('en-US'));
+  const today = m?.todayWh != null ? m.todayWh / 1000 : null;
+  const life = m?.totalWh != null ? m.totalWh / 1000 : null;
+  const avg = h.avgPv?.();
+  const row = (label, kwh, info = '') => `<div class="sv-row"><span>${esc(label)}${info}</span><b><bdi>${money(savingsOf(kwh, p.price))}</bdi> <small>${esc(cur)}</small></b><small class="muted">${kwh == null ? 'لا توجد بيانات' : `${kwh.toFixed(kwh >= 100 ? 0 : 1)} ك.و.س`}</small></div>`;
+  return `
+  <section class="card">
+    <div class="card-h"><h2>سعر الكهرباء${h.infoBtn('savings')}</h2></div>
+    <div class="form">
+      <label class="num-row"><span>سعر الكيلوواط ساعة</span><span class="num-in"><input type="text" inputmode="decimal" autocomplete="off" id="svPrice" value="${esc(p.price ?? '')}" placeholder="مثال: 1500"></span></label>
+      <label class="num-row"><span>العملة</span><span class="num-in"><input type="text" autocomplete="off" id="svCur" maxlength="8" value="${esc(cur)}" placeholder="ل.س"></span></label>
+    </div>
+    <p class="hint">اكتب ما كنت ستدفعه للكيلوواط ساعة: سعر كهرباء الشبكة، أو اشتراك المولدة مقسوماً على ما يعطيك.</p>
+  </section>
+  ${p.price ? `<section class="card sv">
+    ${row('اليوم', today)}
+    ${avg != null ? row('بالمتوسط شهرياً', avg * 30) : ''}
+    ${row('منذ تشغيل الإنفرتر', life, h.infoBtn('totalWh'))}
+  </section>
+` : '<div class="empty">أدخل السعر ليظهر توفيرك اليوم وشهرياً ومنذ تشغيل الإنفرتر.</div>'}`;
 }
 
 function viewList(h, c, sysV) {
@@ -153,9 +190,9 @@ function viewList(h, c, sysV) {
     <div class="ld" data-i="${i}">
       <div class="ld-h"><span class="ae">${esc(it.e)}</span><b>${esc(it.name)}</b><button class="ld-x" data-del="${i}" aria-label="حذف">×</button></div>
       <div class="ld-r">
-        <label>القدرة<span class="num-in"><input type="number" min="1" data-f="w" value="${it.w}"><small>واط</small></span></label>
+        <label>القدرة<span class="num-in"><input type="text" inputmode="decimal" autocomplete="off" data-f="w" value="${it.w}"><small>واط</small></span></label>
         <label>العدد<span class="qty"><button data-q="-1">−</button><b>${it.qty}</b><button data-q="1">+</button></span></label>
-        <label>ساعات/يوم<span class="num-in"><input type="number" min="0" max="24" step="0.5" data-f="hours" value="${it.hours}"><small>س</small></span></label>
+        <label>ساعات/يوم<span class="num-in"><input type="text" inputmode="decimal" autocomplete="off" data-f="hours" value="${it.hours}"><small>س</small></span></label>
       </div>
     </div>`).join('') : '<div class="empty">اضغط على الأجهزة بالأسفل لإضافتها إلى قائمتك.</div>';
   return `
@@ -181,8 +218,8 @@ function viewList(h, c, sysV) {
     <div class="stat c-pink"><small>بطارية تكفي ${h.fmt.hours(c.backupH)}</small><b>${num(s.batAh)}</b><span>أمبير ساعة على ${sysV} فولت</span></div>
   </div>
   <details class="card fold"><summary><h2>افتراضات الحساب</h2>${h.icons.chevL}</summary><div class="form">
-    <div class="set-row"><span>ساعات الشمس الفعّالة يومياً</span><span class="num-in"><input type="number" id="calcSun" min="2" max="9" step="0.5" value="${c.sunH}"><small>س</small></span></div>
-    <div class="set-row"><span>ساعات الاحتياط المطلوبة</span><span class="num-in"><input type="number" id="calcBackup" min="1" max="48" value="${c.backupH}"><small>س</small></span></div>
+    <div class="set-row"><span>ساعات الشمس الفعّالة يومياً</span><span class="num-in"><input type="text" inputmode="decimal" autocomplete="off" id="calcSun" value="${c.sunH}"><small>س</small></span></div>
+    <div class="set-row"><span>ساعات الاحتياط المطلوبة</span><span class="num-in"><input type="text" inputmode="decimal" autocomplete="off" id="calcBackup" value="${c.backupH}"><small>س</small></span></div>
   </div><p class="hint">القيم تقديرية للتخطيط. الثلاجة والمكيف لا يعملان طوال الوقت، لذا حُسب استهلاكهما اليومي بنسبة تشغيل تقريبية. اقتراح الألواح يشمل 25% فواقد، والبطارية محسوبة على متوسط السحب الفعلي (${num(s.avg)} واط) بتفريغ 80%.</p></details>
   <button class="btn ghost wide" id="clearLoads">مسح القائمة</button>` : ''}
   <h3 class="sec-h">أضف جهازاً</h3>
@@ -203,6 +240,7 @@ export function bindCalc(h) {
         const r = convert(c, h.sysV());
         c.input = +({ ac: r.acA, w: r.watts, dc: r.dcSys }[v]).toFixed(v === 'w' ? 0 : 2);
       }
+      if (k === 'mode') c.inputRaw = null;
       c[k] = ['acV', 'sysV'].includes(k) ? Number(v) : v;
       save();
     };
@@ -210,7 +248,9 @@ export function bindCalc(h) {
   const inp = $('#calcInput');
   if (inp) {
     inp.oninput = () => {
-      c.input = Math.max(0, Number(inp.value) || 0);
+      // نحفظ النص كما كُتب («1.» أو «٢») حتى لا يُمحى أثناء الكتابة، ونحسب بقيمته الرقمية
+      c.inputRaw = inp.value;
+      c.input = Math.max(0, numOf(inp.value) || 0);
       store.set('calc', c);
       // نحدّث النتائج دون إعادة رسم الحقل حتى لا تختفي لوحة المفاتيح
       const pos = inp.selectionStart;
@@ -221,13 +261,32 @@ export function bindCalc(h) {
   }
   const bindNum = (id, key, min, max) => {
     const el = $(id);
-    if (el) el.onchange = () => { c[key] = Math.min(max, Math.max(min, Number(el.value) || min)); save(); };
+    if (el) el.onchange = () => { c[key] = Math.min(max, Math.max(min, numOf(el.value) || min)); save(); };
   };
   bindNum('#calcEff', 'eff', 70, 99);
   bindNum('#calcSun', 'sunH', 2, 9);
   bindNum('#calcBackup', 'backupH', 1, 48);
   const live = $('#useLive');
-  if (live) live.onclick = () => { c.mode = 'w'; c.input = Math.round(state.model.outW); save(); };
+  if (live) live.onclick = () => { c.mode = 'w'; c.input = Math.round(state.model.outW); c.inputRaw = null; save(); };
+  // التوفير: يتحدث فوراً أثناء كتابة السعر
+  const price = $('#svPrice');
+  if (price) {
+    let t;
+    price.oninput = () => {
+      clearTimeout(t);
+      t = setTimeout(() => {
+        const v = numOf(price.value);
+        state.prefs.price = Number.isFinite(v) && v > 0 ? v : null;
+        h.savePrefs();
+        const pos = price.selectionStart;
+        h.render();
+        const again = $('#svPrice');
+        if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch { /* تجاهل */ } }
+      }, 500);
+    };
+  }
+  const curEl = $('#svCur');
+  if (curEl) curEl.onchange = () => { state.prefs.currency = curEl.value.trim().slice(0, 8); h.savePrefs(); h.render(); };
 
   document.querySelectorAll('[data-add]').forEach((b) => {
     b.onclick = () => {
@@ -243,7 +302,7 @@ export function bindCalc(h) {
     const it = c.list[Number(row.dataset.i)];
     row.querySelectorAll('[data-q]').forEach((b) => { b.onclick = () => { it.qty = Math.max(1, it.qty + Number(b.dataset.q)); save(); }; });
     row.querySelectorAll('[data-f]').forEach((el) => {
-      el.onchange = () => { const f = el.dataset.f; it[f] = Math.max(f === 'w' ? 1 : 0, Math.min(f === 'hours' ? 24 : 100000, Number(el.value) || 0)); save(); };
+      el.onchange = () => { const f = el.dataset.f; it[f] = Math.max(f === 'w' ? 1 : 0, Math.min(f === 'hours' ? 24 : 100000, numOf(el.value) || 0)); save(); };
     });
   });
   document.querySelectorAll('[data-del]').forEach((b) => { b.onclick = () => { c.list.splice(Number(b.dataset.del), 1); save(); }; });

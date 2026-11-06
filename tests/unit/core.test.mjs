@@ -438,3 +438,89 @@ test('نسبة 0% مع جهد بطارية صفر لا تُحسب أدنى نس�
   const real = summarize('2026-10-29', [{ ts: t0, soc: 0, batV: 44, outW: 1 }, { ts: t0 + 3e5, soc: 5, batV: 46, outW: 1 }], 'server');
   assert.equal(real.socMin, 0, 'بطارية رصاص بجهد مقروء عند 0% تبقى كما هي');
 });
+
+// ---------- الإصدار 3.7: المشهد والطقس، الشرح، الترجمات ----------
+import { skyOf, sceneStory, expectedPv, fetchWeather, searchPlace } from '../../src/weather.js';
+import { INFO, infoBtn } from '../../src/info.js';
+import { warnAr } from '../../src/i18n.js';
+
+test('حالة السماء من رمز الطقس', () => {
+  assert.equal(skyOf(0, 0, true), 'clear');
+  assert.equal(skyOf(2, 40, true), 'partly');
+  assert.equal(skyOf(3, 100, true), 'cloudy');
+  assert.equal(skyOf(63, 100, true), 'rain');
+  assert.equal(skyOf(95, 100, true), 'storm');
+  assert.equal(skyOf(45, 100, true), 'fog');
+  assert.equal(skyOf(0, 0, false), 'night');
+});
+
+test('جملة الحالة تجمع القراءة الحية مع الطقس', () => {
+  const base = { stale: false, soc: 60, mode: 'Battery Mode', gridOn: true, outW: 400 };
+  const w = (sky, rad, isDay = true) => ({ sky, rad, isDay });
+  // ماطر الساعة 11 والألواح 200 واط: ضعيف لكنه متوقع
+  const rain = sceneStory({ ...base, pvW: 200, batW: -210 }, w('rain', 90), { kwp: 5.5 });
+  assert.equal(rain.level, 'info');
+  assert.match(rain.title, /ماطر.*متوقع/);
+  assert.match(rain.text, /تكمّل الفرق/);
+  // مشمس والإنتاج أقل بكثير مما تسمح به الشمس والبطارية غير ممتلئة: يستحق الفحص
+  const low = sceneStory({ ...base, pvW: 300, batW: -100 }, w('clear', 800), { kwp: 5.5 });
+  assert.equal(low.level, 'warn');
+  assert.match(low.text, /المتوقع نحو 3\.30 كيلوواط/);
+  // مشمس والبطارية ممتلئة: الإنتاج المنخفض طبيعي
+  const full = sceneStory({ ...base, soc: 100, pvW: 400, batW: 0 }, w('clear', 800), { kwp: 5.5 });
+  assert.equal(full.title, 'البطارية ممتلئة');
+  // مشمس وإنتاج جيد يشحن البطارية
+  assert.match(sceneStory({ ...base, pvW: 3500, batW: 3000 }, w('clear', 800), { kwp: 5.5 }).title, /مشمس · الألواح تشحن البطارية/);
+  // ليل: على البطارية، وتحذير إذا انخفضت
+  const night = sceneStory({ ...base, soc: 25, pvW: 0, batW: -500 }, w('night', 0, false), { kwp: 5.5, lowSoc: 30 });
+  assert.equal(night.level, 'warn');
+  assert.match(night.title, /ليل · البيت على البطارية/);
+  // وضع الشبكة ليلاً
+  assert.match(sceneStory({ ...base, mode: 'Line Mode', pvW: 0, batW: 0 }, w('night', 0, false)).title, /كهرباء الشبكة تغذّي/);
+  // بلا طقس ولا قدرة ألواح: جملة صحيحة بلا مقارنة
+  assert.ok(sceneStory({ ...base, pvW: 1200, batW: 700 }, null).title.includes('الألواح تشحن البطارية'));
+  assert.equal(sceneStory({ ...base, stale: true }, null).level, 'bad');
+  assert.equal(expectedPv(5, 1000), 3750);
+  assert.equal(expectedPv(null, 800), null);
+});
+
+test('قراءة الطقس والبحث عن المدن من Open-Meteo', async () => {
+  const ok = (body) => async () => ({ ok: true, status: 200, json: async () => body });
+  const w = await fetchWeather(35.93, 36.63, ok({ current: { temperature_2m: 13.6, weather_code: 63, cloud_cover: 98, is_day: 1, shortwave_radiation: 85, precipitation: 1.2 }, daily: { sunrise: ['2026-11-06T06:31'], sunset: ['2026-11-06T16:58'] } }));
+  assert.deepEqual([w.sky, w.temp, w.rad, w.sunrise, w.sunset], ['rain', 14, 85, '06:31', '16:58']);
+  await assert.rejects(fetchWeather(1, 1, async () => ({ ok: false, status: 429 })), /مشغولة/);
+  await assert.rejects(fetchWeather(1, 1, async () => { throw new Error('x'); }), /تحقق من الإنترنت/);
+  const places = await searchPlace('إدلب', ok({ results: [{ name: 'إدلب', admin1: 'محافظة ادلب', country: 'سوريا', latitude: 35.93, longitude: 36.63 }] }));
+  assert.deepEqual(places[0], { name: 'إدلب', area: 'محافظة ادلب، سوريا', lat: 35.93, lon: 36.63 });
+});
+
+test('كل شرح ⓘ له عنوان ونص، والزر لا يُبنى لمفتاح غير موجود', () => {
+  for (const [k, [title, body]] of Object.entries(INFO)) assert.ok(title && body.length && body.every((p) => p.length > 10), k);
+  assert.match(infoBtn('totalWh'), /data-info="totalWh"/);
+  assert.equal(infoBtn('nope'), '');
+});
+
+test('ترجمة أعطال الإنفرتر من الخادم', () => {
+  assert.equal(warnAr('Battery voltage low').title, 'جهد البطارية منخفض');
+  assert.equal(warnAr('Over load').title, 'حمل زائد');
+  assert.equal(warnAr('Fan locked').title, 'المروحة متوقفة أو معطلة');
+  assert.equal(warnAr('Over temperature').title, 'ارتفاع حرارة الإنفرتر');
+  assert.equal(warnAr('Something new 42').title, 'Something new 42', 'غير المعروف يبقى بنصه الأصلي');
+});
+
+test('مشهد ثلاثي الأبعاد: الهندسة وخطوط الطاقة والنسبة على البطارية', async () => {
+  const { scene3d, P } = await import('../../src/scene3d.js');
+  const calls = [];
+  const flowLine = (id, d, on, w, rev) => { calls.push({ id, on, rev }); return `<path class="wire" data-id="${id}" d="${d}"/>`; };
+  const html = scene3d({ soc: 73, flows: { solar: { on: true }, grid: { on: false }, load: { on: true }, bat: { on: true, reverse: true } },
+    labels: { solar: { value: '3.6 ك.واط' }, grid: { title: 'الشبكة', value: '230 فولت' }, bat: { value: '73%', tag: '' }, load: { value: '450 واط' } }, flowLine });
+  assert.deepEqual(calls.map((c) => c.id).sort(), ['bat', 'grid', 'load', 'solar']);
+  assert.equal(calls.find((c) => c.id === 'bat').rev, true, 'التفريغ يسير عكس رسم المسار');
+  assert.match(html, />73%</, 'النسبة مكتوبة على البطارية');
+  for (const c of ['n-solar', 'n-grid', 'n-bat', 'n-load', 'n-inv']) assert.ok(html.includes(c), c);
+  // كل النقاط داخل مساحة الرسم
+  // كل العناصر داخل مساحة الرسم (الأرض وحدها تمتد خارجه عمداً لتملأ المشهد)
+  const pts = [...html.matchAll(/class="([^"]+)" points="([^"]+)"/g)].filter((m) => !m[1].startsWith('ground')).flatMap((m) => m[2].split(' ').map((p) => p.split(',').map(Number)));
+  assert.ok(pts.length > 50 && pts.every(([x, y]) => x > 0 && x < 400 && y > 0 && y < 360), 'لا شيء خارج المشهد');
+  assert.deepEqual(P(0, 0, 0).map(Math.round), [206, 96]);
+});

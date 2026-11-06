@@ -4,4 +4,6 @@
     <string name="title_activity_main">طاقتي</string>
     <string name="package_name">com.taqati.solar</string>
     <string name="custom_url_scheme">com.taqati.solar</string>
+    <string name="widget_empty">طاقتي</string>
+    <string name="widget_desc">نسبة البطارية والحمل وإنتاج الألواح</string>
 </resources>

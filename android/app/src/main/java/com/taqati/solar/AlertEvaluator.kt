@@ -21,6 +21,7 @@ data class Snapshot(
     val fault: String?,
     val batTemp: Double? = null,
     val invTemp: Double? = null,
+    val pvW: Double? = null,
 )
 
 data class MonitorConfig(
@@ -101,6 +102,10 @@ object AlertEvaluator {
             gridRatedV = num(find(points, Regex("^grid rating voltage"), Regex("^ac output rating voltage"))),
             loadPct = num(find(points, Regex("^output load percent"), Regex("^load percent"))),
             outW = num(find(points, Regex("^ac output active power"), Regex("^output active power"))),
+            pvW = listOf(
+                num(find(points, Regex("^pv1 charging power"), Regex("^pv1 .*power"), Regex("^pv charging power"), Regex("^pv input power"))),
+                num(find(points, Regex("^pv2 charging power"), Regex("^pv2 .*power"))),
+            ).filterNotNull().takeIf { it.isNotEmpty() }?.sum(),
             batW = if (batV != null && (chg != null || dis != null)) batV * ((chg ?: 0.0) - (dis ?: 0.0)) else null,
             mode = modeRaw?.takeIf { it.contains("mode", ignoreCase = true) },
             fault = fault?.takeUnless { it.isBlank() || it.trim().all { c -> c == '-' } || it.trim().all { c -> c == '0' } },

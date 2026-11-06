@@ -8,8 +8,8 @@ import {
   LinearScale, CategoryScale, Filler, Tooltip, Legend,
 } from 'chart.js';
 import { WatchPowerApi, ApiError, errorAr } from './api.js';
-import { normalize, rowsToSamples, fmt, latinDigits, LOC, countAr, DAY } from './model.js';
-import { trTitle, trValue, trUnit, isEmptyVal } from './i18n.js';
+import { normalize, rowsToSamples, fmt, latinDigits, LOC, countAr, DAY, parseTs } from './model.js';
+import { trTitle, trValue, trUnit, isEmptyVal, warnAr } from './i18n.js';
 import {
   store, today, addDays, dayKey, recordSample, localDay, summarize, cachedSummary, cacheSummary, toCsv, shareFile,
 } from './data.js';
@@ -17,6 +17,9 @@ import { demoPoints, demoHistory } from './demo.js';
 import { icons } from './icons.js';
 import { isNative, secure, migrateSession, monitor, deviceTools, APPS, updater } from './native.js';
 import { fetchLatest, isNewer } from './update.js';
+import { INFO, infoBtn } from './info.js';
+import { fetchWeather, searchPlace, sceneStory, SKY_AR } from './weather.js';
+import { scene3d } from './scene3d.js';
 import { analyze } from './advisor.js';
 import { CATS, catOf, levelOf, toEvents, migrateLog, addEvents } from './log.js';
 import { trendDates, change } from './trend.js';
@@ -27,12 +30,16 @@ import { TIP_SECTIONS, smartTips, tipOfDay } from './tips.js';
 Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, CategoryScale, Filler, Tooltip, Legend);
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '3.6.1';
+const VERSION = '3.8.0';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
   staleMin: 15,
   batteryAh: null,
+  pvKwp: null,
+  price: null,
+  currency: '',
+  loc: null,
   cutoffSoc: 20,
   theme: 'auto',
   notify: true,
@@ -135,7 +142,7 @@ function gridCards(items, cls = '') {
       <span class="g-ic">${it.icon}</span>
       ${it.badge ? `<span class="g-badge">${esc(it.badge)}</span>` : ''}
       <span class="g-val">${esc(it.value ?? '')}</span>
-      <b>${esc(it.title)}</b>
+      <b>${esc(it.title)}${infoBtn(it.info)}</b>
       <small>${esc(it.sub ?? '')}</small>
     </button>`).join('')}</div>`;
 }
@@ -154,9 +161,38 @@ function listCards(items) {
 const kv = (rows) => `<dl class="kv">${rows.filter(Boolean).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
 const val = (v, unit = '') => (v === null || v === undefined || v === '' ? '<span class="na">غير متوفر</span>' : `<bdi>${esc(v)}</bdi>${unit ? ` <small>${esc(unit)}</small>` : ''}`);
 
-function stat(label, value, unit, color = '', extra = '') {
-  return `<div class="stat ${color}"><small>${esc(label)}</small><b><bdi>${esc(value ?? '—')}</bdi></b>${unit ? `<span>${esc(unit)}</span>` : ''}${extra}</div>`;
+function stat(label, value, unit, color = '', extra = '', info = '') {
+  return `<div class="stat ${color}"><small>${esc(label)}${infoBtn(info)}</small><b><bdi>${esc(value ?? '—')}</bdi></b>${unit ? `<span>${esc(unit)}</span>` : ''}${extra}</div>`;
 }
+
+// عنوان بطاقة مع زر ⓘ اختياري
+const cardH = (title, info = '', side = '') => `<div class="card-h"><h2>${esc(title)}${infoBtn(info)}</h2>${side}</div>`;
+
+// ورقة الشرح: تنزلق من الأسفل وتُغلق بالضغط خارجها أو على «تم»
+function openInfo(key) {
+  const it = INFO[key];
+  if (!it) return;
+  tap();
+  const extra = INFO_EXTRA[key]?.() || [];
+  const el = document.createElement('div');
+  el.className = 'isheet';
+  el.innerHTML = (`<div class="isheet-b" role="dialog" aria-modal="true" aria-label="${esc(it[0])}"><i class="grab"></i>
+    <h3>${esc(it[0])}</h3>${[...it[1], ...extra].map((t) => `<p>${esc(t)}</p>`).join('')}
+    <button class="btn primary wide" data-close>تم</button></div>`);
+  const close = () => { el.classList.remove('show'); setTimeout(() => el.remove(), 250); };
+  el.addEventListener('click', (e) => { if (e.target === el || e.target.closest('[data-close]')) close(); });
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  el.querySelector('[data-close]').focus();
+}
+// معلومات تُضاف للشرح حسب جهاز المستخدم
+const INFO_EXTRA = {
+  totalWh: () => (state.plant?.install ? [`سُجّلت منظومتك على خادم WatchPower في ${fmt.day(String(state.plant.install).slice(0, 10), { day: 'numeric', month: 'long', year: 'numeric' })}.`] : []),
+  stale: () => (state.collector?.datFetch ? [`وحدتك ترفع قراءة كل ${countAr(Math.round(state.collector.datFetch / 60) || 1, ['دقيقة', 'دقيقتين', 'دقائق', 'دقيقة'])}.`] : []),
+};
+
+// اهتزاز خفيف عند اللمس (إن سمح الهاتف) كتغذية راجعة فورية
+const tap = () => { try { navigator.vibrate?.(8); } catch { /* تجاهل */ } };
 
 // ================= تسجيل الدخول =================
 function renderLogin(msg = '') {
@@ -252,7 +288,7 @@ function logout() {
   ['devices', 'devSn', 'demo'].forEach(store.del);
   secure.del('session');
   monitor.configure({ enabled: false }).catch(() => {});
-  Object.assign(state, { session: null, demo: false, devices: [], model: null, fields: null, tab: 'home', page: null });
+  Object.assign(state, { session: null, demo: false, devices: [], model: null, fields: null, tab: 'home', page: null, plant: undefined, collector: undefined });
   state.rep = { ...state.rep, day: null, week: null, month: null, adv: null };
   api = new WatchPowerApi();
   renderLogin();
@@ -294,6 +330,90 @@ function startApp(quiet = false) {
   if (quiet) return;
   takeOverFromBackground().then(() => { refresh(); syncMonitor(); });
   autoCheckUpdate();
+  // أول تثبيت: جولة تعريفية. بعد كل تحديث: «ما الجديد» مرة واحدة
+  if (!store.get('tourSeen', false)) openTour();
+  else if (store.get('seenVersion', null) !== VERSION) openWhatsNew();
+}
+
+// ================= الجولة التعريفية و«ما الجديد» =================
+// أمثلة توضيحية للمشهد (ليست بيانات جهازك): كل حالة تُظهر شكلاً مختلفاً للتدفق
+const TOUR_CASES = [
+  { sky: 'clear', title: 'الألواح تغذّي البيت وتشحن البطارية', m: { pvW: 3600, outW: 450, batW: 3100, soc: 68, gridOn: true, gridV: 230, mode: 'Battery Mode' } },
+  { sky: 'clear', title: 'البطارية ممتلئة: الألواح تغذّي البيت فقط', m: { pvW: 520, outW: 520, batW: 0, soc: 100, gridOn: true, gridV: 230, mode: 'Battery Mode' } },
+  { sky: 'night', title: 'ليلاً: البطارية تغذّي البيت', m: { pvW: 0, outW: 480, batW: -510, soc: 62, gridOn: true, gridV: 230, mode: 'Battery Mode' } },
+  { sky: 'cloudy', title: 'الكهرباء تغذّي البيت وتشحن البطارية', m: { pvW: 0, outW: 650, batW: 1200, soc: 35, gridOn: true, gridV: 228, mode: 'Line Mode' } },
+];
+const TOUR = [
+  { t: 'أهلاً بك في طاقتي', p: ['تابع منظومتك الشمسية لحظة بلحظة: الألواح والبطارية والكهرباء والبيت في مشهد واحد.', 'هذه جولة قصيرة في التطبيق. يمكنك تخطيها والعودة إليها من «المزيد».'], scene: 0 },
+  { t: 'الرئيسية', p: ['المشهد يتغيّر مع حالة منظومتك: النبضات الخضراء تسري باتجاه الطاقة، والقيم في الزوايا، والسماء من طقس موقعك.', 'اضغط أي قيمة أو عنصر لتفتح تفاصيله.'], cycle: true },
+  { t: 'التقارير', ic: 'chart', p: ['مؤشر الاستقلالية عن الكهرباء في الأعلى.', 'تقارير يومية وأسبوعية وشهرية وسنوية، و«ملاحظات على منظومتك» بتوصيات من قراءاتك.'] },
+  { t: 'التنبيهات', ic: 'bell', p: ['انقطاع الكهرباء وعودتها، انخفاض البطارية، الحمل الزائد، والأعطال، حتى والتطبيق مغلق.', 'واختر شروط التنبيه بنفسك، واطّلع على سجل أعطال الإنفرتر من الخادم.'] },
+  { t: 'المزيد', ic: 'gear', p: ['الإعدادات: سعة البطارية، قدرة الألواح، موقعك للطقس، المظهر وحجم الخط.', 'حاسبة الأحمال والتوفير بالمال، النصائح، وإعدادات الإنفرتر عن بُعد.'] },
+  { t: 'ⓘ بجانب كل رقم', ic: 'info', p: ['اضغطها لتعرف من أين جاء الرقم، وكيف حُسب، وإلى متى يبقى محفوظاً.', 'جاهز؟ لنبدأ.'] },
+];
+
+function tourScene(c) {
+  const m = { stale: false, ...c.m };
+  const parts = sceneParts(m, true, /line/i.test(m.mode));
+  return `<div class="scene flow-card sky-${c.sky} ${m.pvW > 5 ? 'pv-on' : ''} ${m.soc >= 98 ? 'bat-full' : ''} ${parts.flows.bat.on ? (parts.flows.bat.reverse ? 'bat-dis' : 'bat-chg') : ''}">
+    <div class="sky-fx" aria-hidden="true"><i class="sun"></i><i class="moon"></i><i class="stars"></i><i class="cloud c1"></i><i class="cloud c2"></i><i class="cloud c3"></i></div>
+    ${scene3d({ ...parts, flowLine })}</div>`;
+}
+
+function openTour() {
+  let i = 0, ci = 0, timer = null;
+  const el = document.createElement('div');
+  el.className = 'tour';
+  el.setAttribute('role', 'dialog');
+  el.setAttribute('aria-modal', 'true');
+  const close = () => { clearInterval(timer); store.set('tourSeen', true); store.set('seenVersion', VERSION); el.classList.remove('show'); setTimeout(() => el.remove(), 250); };
+  const draw = () => {
+    clearInterval(timer);
+    const s = TOUR[i];
+    const c = TOUR_CASES[s.cycle ? ci : s.scene ?? 0];
+    el.innerHTML = `<div class="tour-b">
+      <button class="tour-skip" data-t="skip">${i === TOUR.length - 1 ? '' : 'تخطي'}</button>
+      <div class="tour-art">${s.ic ? `<div class="tour-ic">${icons[s.ic]}</div>` : tourScene(c)}${s.cycle ? `<p class="tour-case">${esc(c.title)}</p><div class="tour-cases">${TOUR_CASES.map((_, k) => `<i class="${k === ci ? 'on' : ''}"></i>`).join('')}</div><p class="tour-note">مثال توضيحي</p>` : ''}</div>
+      <h2>${esc(s.t)}</h2>${s.p.map((x) => `<p>${esc(x)}</p>`).join('')}
+      <div class="tour-dots">${TOUR.map((_, k) => `<i class="${k === i ? 'on' : ''}"></i>`).join('')}</div>
+      <div class="tour-nav">${i ? '<button class="btn ghost" data-t="prev">السابق</button>' : '<span></span>'}<button class="btn primary" data-t="next">${i === TOUR.length - 1 ? 'ابدأ' : 'التالي'}</button></div>
+    </div>`;
+    // الحالات تتبدّل تلقائياً كل 3 ثوانٍ في شاشة الرئيسية
+    if (s.cycle) timer = setInterval(() => { ci = (ci + 1) % TOUR_CASES.length; draw(); }, 3000);
+  };
+  el.addEventListener('click', (e) => {
+    const a = e.target.closest('[data-t]')?.dataset.t;
+    if (!a) return;
+    if (a === 'skip') close();
+    if (a === 'prev') { i = Math.max(0, i - 1); draw(); }
+    if (a === 'next') { if (i === TOUR.length - 1) close(); else { i++; ci = 0; draw(); } }
+  });
+  draw();
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+}
+
+// ما الجديد في هذا الإصدار: يظهر مرة واحدة بعد التحديث
+const WHATS_NEW = [
+  'مشهد ثلاثي الأبعاد في الرئيسية: البيت والألواح والبطارية والشبكة، ونبضات تسري باتجاه الطاقة، والقيم في الزوايا.',
+  'درجة حرارة الجو من طقس موقعك، وحرارة الإنفرتر والبطارية إن كان جهازك يرسلها.',
+  'جولة تعريفية بالتطبيق، تجدها في «المزيد» متى شئت.',
+  'إصلاحات من مراجعة شاملة للدقة والتناسق.',
+];
+function openWhatsNew() {
+  store.set('seenVersion', VERSION);
+  const el = document.createElement('div');
+  el.className = 'isheet';
+  el.innerHTML = `<div class="isheet-b" role="dialog" aria-modal="true" aria-label="ما الجديد"><i class="grab"></i>
+    <h3>ما الجديد في الإصدار ${VERSION}</h3><ul class="wn">${WHATS_NEW.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
+    <div class="tour-nav"><button class="btn ghost" data-tour>جولة في التطبيق</button><button class="btn primary" data-close>تم</button></div></div>`;
+  const close = () => { el.classList.remove('show'); setTimeout(() => el.remove(), 250); };
+  el.addEventListener('click', (e) => {
+    if (e.target === el || e.target.closest('[data-close]')) close();
+    if (e.target.closest('[data-tour]')) { close(); openTour(); }
+  });
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
 }
 
 function navigate(tab, page) {
@@ -370,8 +490,10 @@ function switchDevice(snv) {
   store.set('devSn', snv);
   state.model = null;
   state.fields = null;
+  state.plant = undefined;
+  state.collector = undefined;
   resetAlertState();
-  state.rep = { ...state.rep, day: null, week: null, month: null, adv: null };
+  state.rep = { ...state.rep, day: null, week: null, month: null, adv: null, year: null, srv: null };
   loadCache();
   refresh();
   render();
@@ -394,7 +516,7 @@ function banner() {
 
 const PAGE_TITLES = {
   load: 'الحمل', battery: 'البطارية', solar: 'الألواح الشمسية', grid: 'كهرباء الشبكة',
-  day: 'التقرير اليومي', week: 'التقرير الأسبوعي', month: 'التقرير الشهري', 
+  day: 'التقرير اليومي', week: 'التقرير الأسبوعي', month: 'التقرير الشهري', year: 'التقرير السنوي', srvlog: 'سجل الإنفرتر في الخادم', 
   rules: 'شروط التنبيه', advisor: 'ملاحظات على منظومتك', device: 'الإنفرتر', update: 'التحديثات', edit: 'إعدادات الإنفرتر', setup: 'ربط الجهاز والحساب',
   tips: 'النصائح', ...Object.fromEntries(TIP_SECTIONS.map((t) => [t.id, t.title])),
   settings: 'الإعدادات', calc: 'حاسبة الأحمال', about: 'حول التطبيق',
@@ -419,10 +541,16 @@ const AFTER = {};
 
 // الحاسبة في ملف مستقل، فنمرّر لها ما تحتاجه من أدوات الواجهة
 const calcHelpers = () => ({
-  state, esc, icons, fmt, $, toast, render, confirm: confirmDialog,
+  state, esc, icons, fmt, $, toast, render, confirm: confirmDialog, infoBtn, savePrefs,
+  // متوسط إنتاج الألواح اليومي من آخر 7 أيام مكتملة (إن كانت قد حُمّلت)
+  avgPv: () => (state.rep.adv?.sums ? analyze(state.rep.adv.sums, { todayKey: today(), prefs: state.prefs }).avgPv : null),
   sysV: () => state.model?.ratedV || state.calc.sysV || nominalV(state.model),
 });
-AFTER.calc = () => bindCalc(calcHelpers());
+AFTER.calc = () => {
+  bindCalc(calcHelpers());
+  // التوفير الشهري يحتاج متوسط آخر 7 أيام: نحمّله في الخلفية مرة واحدة
+  if (state.calc.tab === 'save' && state.prefs.price && !state.rep.adv) loadAdvisor();
+};
 
 // ================= جلب البيانات =================
 // ===== فرق التوقيت بين الخادم والهاتف =====
@@ -461,13 +589,20 @@ function loadCache() {
   }
 }
 
+// أداة الشاشة الرئيسية: تُحدَّث مع كل قراءة جديدة (والفحص في الخلفية يحدّثها والتطبيق مغلق)
+function pushWidget(m) {
+  if (state.demo || !m || m.ts === state.widgetTs) return;
+  state.widgetTs = m.ts;
+  monitor.widget({ soc: m.soc, batW: m.batW, loadW: m.outW, pvW: m.pvW, stale: !!m.stale, at: m.ts || Date.now() }).catch(() => {});
+}
+
 async function refresh(manual = false) {
   const d = device();
   if (!d || state.loading) return;
   state.loading = true;
   renderHeader();
   try {
-    const points = state.demo ? demoPoints() : await api.lastData(d);
+    const points = state.demo ? demoPoints(Date.now(), state.demoSky) : await api.lastData(d);
     // تبديل الجهاز أو الخروج أثناء الطلب: نتجاهل الرد حتى لا تظهر قراءة جهاز باسم جهاز آخر
     // ولا يُستنتج منها فرق توقيت خاطئ، ثم نجلب الجهاز الحالي فوراً
     if (sn() !== d.sn) { state.switched = true; return; }
@@ -493,6 +628,7 @@ async function refresh(manual = false) {
       recordSample(d.sn, state.model);
     }
     checkAlerts(state.model);
+    pushWidget(state.model);
     if (manual) toast(state.model.stale ? 'تم التحديث — الإنفرتر ما زال غير متصل' : 'تم التحديث', state.model.stale ? 'bad' : 'ok');
   } catch (err) {
     if (sn() !== d.sn) { state.switched = true; return; }
@@ -654,6 +790,64 @@ function nominalV(m) {
   return 48;
 }
 
+// ===== ميزات الخادم الاختيارية =====
+// undefined = لم تُجرَّب بعد، true = يتيحها الخادم لهذا الحساب، false = رفضها فتُخفى الميزة.
+// «لا توجد بيانات» (ERR_NO_RECORD) ليس رفضاً، وخطأ الشبكة لا يحكم على الميزة.
+// الرفض الصريح (لا صلاحية / غير مدعوم) يخفي الميزة فوراً، وأي خطأ آخر من الخادم يُحسب، فتُخفى بعد 3 مرات متتالية
+// حتى لا يُخفي خلل مؤقت في الخادم ميزة تعمل.
+const cap = (k) => { const v = store.get(`cap.${k}.${sn()}`, undefined); return v === true ? true : v === false || v >= 3 ? false : undefined; };
+const isRefusal = (e) => /صلاحية|لا يدعم|NO_AUTH|UNSUPPORT|PERMISSION|ACTION/i.test(`${e.desc || ''} ${e.message || ''}`);
+async function optional(k, fn) {
+  if (cap(k) === false) return null;
+  const key = `cap.${k}.${sn()}`;
+  try {
+    const r = await fn();
+    store.set(key, true);
+    return r;
+  } catch (e) {
+    if (e.code !== undefined && e.code !== 12) {
+      const prev = store.get(key, 0);
+      store.set(key, isRefusal(e) ? false : (typeof prev === 'number' ? prev : 0) + 1);
+    }
+    throw e;
+  }
+}
+// معلومات تتغير نادراً تُحفظ يوماً كاملاً
+const cachedDay = (key) => { const c = store.get(`${key}.${sn()}`, null); return c && Date.now() - c.at < 864e5 ? c.v : undefined; };
+const cacheDay = (key, v) => store.set(`${key}.${sn()}`, { at: Date.now(), v });
+
+// قدرة الألواح المركّبة: ما أدخله المستخدم، وإلا ما سجّله المركّب على الخادم
+const pvKwp = () => state.prefs.pvKwp || (state.plant?.nominalPower > 0 ? Number(state.plant.nominalPower) : null);
+
+async function loadPlantInfo() {
+  if (state.plant !== undefined) return;
+  if (state.demo) { state.plant = { install: '2024-03-01 00:00:00', nominalPower: 5.5 }; return; }
+  const c = cachedDay('plant');
+  if (c !== undefined) { state.plant = c; return; }
+  const pid = device()?.pid;
+  state.plant = null;
+  if (!pid) return;
+  try {
+    const p = await optional('plant', () => api.plantInfo(pid));
+    state.plant = p ? { install: p.install || null, nominalPower: Number(p.nominalPower) || null, lat: Number(p.address?.lat) || null, lon: Number(p.address?.lon) || null } : null;
+    cacheDay('plant', state.plant);
+    if (['solar', 'device'].includes(leaf())) render();
+  } catch { /* تبقى الميزة مخفية */ }
+}
+
+async function loadCollector(force = false) {
+  if (state.demo) { state.collector = { datFetch: 300, status: 0 }; return; }
+  const c = force ? undefined : cachedDay('wifi');
+  if (c !== undefined) { state.collector = c; return; }
+  const pn = device()?.pn;
+  if (!pn) return;
+  try {
+    state.collector = await optional('wifi', () => api.collectorInfo(pn));
+    cacheDay('wifi', state.collector);
+    if (leaf() === 'device') render();
+  } catch { /* تبقى الميزة مخفية */ }
+}
+
 function eta(m) {
   const p = state.prefs;
   if (!p.batteryAh) return { known: false, text: 'أدخل سعة البطارية لحساب المدة', sub: '' };
@@ -680,8 +874,9 @@ function flowLine(id, d, on, watts, reverse) {
   if (!on) return track;
   const dur = Math.max(0.7, 2.6 - Math.log10(Math.abs(watts || 50) + 1) * 0.5).toFixed(2);
   const keys = reverse ? 'keyPoints="1;0" keyTimes="0;1" calcMode="linear" rotate="auto-reverse"' : 'rotate="auto"';
+  // نبضات ضوء تسري على السلك باتجاه الطاقة
   const arrows = [0, 1, 2].map((i) => `
-    <path class="arrow a-${id}" d="M-4.5 -5 L1.5 0 L-4.5 5">
+    <path class="arrow a-${id}" d="M-6 0 L3 0">
       <animateMotion dur="${dur}s" begin="${(-i * dur / 3).toFixed(2)}s" repeatCount="indefinite" ${keys}><mpath href="#fp-${id}"/></animateMotion>
     </path>`).join('');
   return `${track}<path id="fp-${id}" class="flow-line f-${id}" d="${d}"/>${arrows}`;
@@ -718,21 +913,8 @@ function viewHome() {
   ${urgentTip(m)}
   <div class="home-grid"><div class="col-a">
   <div class="mode-pill ${modeCls}">${esc(modeText)}</div>
-  <section class="card flow-card ${live ? '' : 'stale'}">
-    <svg viewBox="0 0 360 380" class="flow-svg" aria-hidden="true">
-      <circle cx="180" cy="190" r="85" class="glow"/>
-      ${flowLine('solar', 'M180 124 L180 154', live && (m.pvW ?? 0) > 5, m.pvW, false)}
-      ${flowLine('grid', 'M78 190 L144 190', live && isLine && m.gridOn, 300, false)}
-      ${flowLine('load', 'M216 190 L282 190', live && (m.outW ?? 0) > 5, m.outW, false)}
-      ${flowLine('bat', 'M180 226 L180 264', live && Math.abs(m.batW ?? 0) > 10, m.batW, (m.batW ?? 0) < 0)}
-    </svg>
-    <button class="node n-solar ${(m.pvW ?? 0) > 5 && live ? '' : 'dim'}" data-page="solar" aria-label="تفاصيل الألواح"><b><bdi>${fmt.wShort(m.pvW)}</bdi></b><small>الألواح</small><span class="ic">${icons.panel}</span></button>
-    <button class="node n-grid ${m.gridOn && live ? '' : 'dim'}" data-page="grid" aria-label="تفاصيل كهرباء الشبكة"><span class="ic">${icons.grid}</span><b><bdi>${m.gridOn ? numAr(m.gridV) + ' فولت' : 'مقطوعة'}</bdi></b><small>${live && isLine && m.gridOn ? 'تغذّي البيت' : 'الشبكة'}</small></button>
-    <button class="node n-load ${(m.outW ?? 0) > 5 && live ? '' : 'dim'}" data-page="load" aria-label="تفاصيل الحمل"><span class="ic">${icons.home}</span><b><bdi>${fmt.wShort(m.outW)}</bdi></b><small>الحمل</small></button>
-    <button class="node n-bat ${live ? '' : 'dim'}" data-page="battery" aria-label="تفاصيل البطارية"><span class="ic">${icons.battery}</span><b><bdi>${m.soc ?? '—'}%</bdi></b>${batTag(m, live)}</button>
-    <button class="node n-inv" data-page="device" aria-label="تفاصيل الإنفرتر"><span class="ic">${icons.inverter}</span></button>
-  </section>
-  <p class="flow-hint">اضغط على أي عنصر في المخطط لعرض تفاصيله</p>
+  ${scene(m, live, isLine)}
+
 
   <section class="card battery-card ${live ? '' : 'stale'}" data-page="battery">
     <div class="ring">
@@ -742,7 +924,7 @@ function viewHome() {
     </div>
     <div class="bat-info">
       <div class="bat-state ${live && m.batW > 10 ? 'chg' : live && m.batW < -10 ? 'dis' : ''}">${esc(batState(m))}</div>
-      <div class="bat-eta">${e.known ? esc(e.text) : `<button class="link" data-goto="more:settings">${esc(e.text)}</button>`}</div>
+      <div class="bat-eta">${e.known ? esc(e.text) + infoBtn('eta') : `<button class="link" data-goto="more:settings">${esc(e.text)}</button>`}</div>
       <div class="bat-sub"><bdi>${fmt.v(m.batV)}</bdi>${e.sub ? ' · ' + esc(e.sub) : ''}</div>
     </div>
   </section>
@@ -751,8 +933,8 @@ function viewHome() {
   <h3 class="sec-h">التفاصيل</h3>
   ${gridCards([
     ...[
-      { page: 'load', title: 'الحمل', icon: icons.home, color: 'c-sky', value: fmt.w(m.outW), sub: m.loadPct !== null ? `${m.loadPct}% من قدرة الإنفرتر` : 'استهلاك المنزل' },
-      { page: 'solar', title: 'الألواح الشمسية', icon: icons.panel, color: 'c-amber', value: fmt.w(m.pvW), sub: m.todayWh !== null ? `إنتاج اليوم ${fmt.kwh(m.todayWh / 1000)} ك.و.س` : 'الإنتاج الحالي' },
+      { page: 'load', title: 'الحمل', info: 'loadNow', icon: icons.home, color: 'c-sky', value: fmt.w(m.outW), sub: m.loadPct !== null ? `${m.loadPct}% من قدرة الإنفرتر` : 'استهلاك المنزل' },
+      { page: 'solar', title: 'الألواح الشمسية', info: 'solarNow', icon: icons.panel, color: 'c-amber', value: fmt.w(m.pvW), sub: m.todayWh !== null ? `إنتاج اليوم ${fmt.kwh(m.todayWh / 1000)} ك.و.س` : 'الإنتاج الحالي' },
       { page: 'grid', title: 'كهرباء الشبكة', icon: icons.grid, color: 'c-violet', value: m.gridV === null ? '—' : m.gridOn ? `${numAr(m.gridV, 1)} فولت` : 'مقطوعة', sub: m.gridOn ? (isLine ? 'تغذّي الحمل الآن' : 'متوفرة كاحتياط') : 'لا يوجد تيار' },
     ].map((c) => (live ? c : { ...c, sub: 'آخر قيمة مسجّلة' })),
     // البطارية ظاهرة في المخطط والحلقة، فمكانها هنا للإنفرتر نفسه
@@ -760,6 +942,96 @@ function viewHome() {
       value: m.stale ? 'غير متصل' : m.fault ? 'يوجد عطل' : 'يعمل', sub: m.stale ? fmt.ago(m.age) : m.mode ? trValue(m.mode) : 'الحالة والإعدادات' },
   ], live ? '' : 'stale')}
   </div></div>`;
+}
+
+// ================= المشهد: البيت والألواح والبطارية والشبكة مع الطقس الحقيقي =================
+// السماء من الطقس الفعلي لموقع المنظومة، والخطوط تتحرك باتجاه الطاقة الحقيقي، وتحتها جملة تشرح ما يحدث الآن.
+function currentSky(m) {
+  const w = state.weather;
+  if (w && Date.now() - w.at < 2 * 36e5) return w.sky;
+  // بلا طقس: ليل أو نهار من الساعة والإنتاج فقط
+  const h = new Date().getHours();
+  return h < 6 || h >= 18 ? 'night' : (m?.pvW ?? 0) > 50 ? 'clear' : 'partly';
+}
+
+// حالة الخطوط والتسميات من القراءة: نفس المنطق للرئيسية ولشاشات التعريف
+function sceneParts(m, live, isLine) {
+  const pv = live && (m.pvW ?? 0) > 5;
+  return {
+    soc: Math.max(0, Math.min(100, m.soc ?? 0)),
+    flows: {
+      solar: { on: pv, w: m.pvW, reverse: false },
+      grid: { on: live && isLine && m.gridOn, w: 300, reverse: false },
+      load: { on: live && (m.outW ?? 0) > 5, w: m.outW, reverse: false },
+      // المسار مرسوم من الإنفرتر إلى البطارية، فالتفريغ يسير عكسه
+      bat: { on: live && Math.abs(m.batW ?? 0) > 10, w: m.batW, reverse: (m.batW ?? 0) < 0 },
+    },
+    labels: {
+      solar: { value: fmt.wShort(m.pvW), dim: !pv },
+      grid: { title: live && isLine && m.gridOn ? 'الشبكة تغذّي' : 'الشبكة', value: m.gridOn ? numAr(m.gridV) + ' فولت' : 'مقطوعة', dim: !(m.gridOn && live) },
+      bat: { value: `${m.soc ?? '—'}%`, tag: batTag(m, live), dim: !live },
+      load: { value: fmt.wShort(m.outW), dim: !((m.outW ?? 0) > 5 && live) },
+    },
+  };
+}
+
+function scene(m, live, isLine) {
+  const sky = currentSky(m);
+  const pv = live && (m.pvW ?? 0) > 5;
+  const w = state.weather && Date.now() - state.weather.at < 2 * 36e5 ? state.weather : null;
+  const story = sceneStory(m, w, { kwp: pvKwp(), lowSoc: state.prefs.lowSoc });
+  const loc = weatherLoc();
+  const parts = sceneParts(m, live, isLine);
+  const full = (m.soc ?? 0) >= 98;
+  const wx = w
+    ? `<span class="wx-t">${esc(SKY_AR[w.sky])}</span>${loc?.name ? `<span>${esc(loc.name)}</span>` : ''}${w.sunrise ? `<span>${w.sunrise}–${w.sunset}</span>` : ''}`
+    : loc ? '<span>جارٍ جلب الطقس…</span>' : '<button class="link" data-goto="more:settings">حدّد موقع منظومتك لعرض الطقس</button>';
+  // درجات الحرارة: الجو من الطقس، والإنفرتر والبطارية إن كان الجهاز يرسلها
+  const temps = [
+    w?.temp != null ? `<span class="tchip" title="حرارة الجو">${icons.thermo}<b><bdi>${w.temp}°</bdi></b><small>الجو</small></span>` : '',
+    m.invTemp != null ? `<span class="tchip ${m.invTemp >= state.prefs.tempInv ? 'hot' : ''}">${icons.inverter}<b><bdi>${numAr(m.invTemp)}°</bdi></b><small>الإنفرتر</small></span>` : '',
+    m.batTemp != null ? `<span class="tchip ${m.batTemp >= state.prefs.tempBat ? 'hot' : ''}">${icons.battery}<b><bdi>${numAr(m.batTemp)}°</bdi></b><small>البطارية</small></span>` : '',
+  ].join('');
+  return `
+  <section class="card flow-card scene sky-${sky} ${live ? '' : 'stale'} ${pv ? 'pv-on' : ''} ${full ? 'bat-full' : ''} ${parts.flows.bat.on ? (parts.flows.bat.reverse ? 'bat-dis' : 'bat-chg') : ''}">
+    <div class="sky-fx" aria-hidden="true">
+      <i class="sun"></i><i class="moon"></i><i class="stars"></i>
+      <i class="cloud c1"></i><i class="cloud c2"></i><i class="cloud c3"></i>
+      <i class="rain"></i><i class="flash"></i><i class="fog"></i>
+    </div>
+    ${scene3d({ ...parts, flowLine })}
+    <div class="wx">${wx}</div>
+  </section>
+  ${temps ? `<div class="tchips">${temps}</div>` : ''}
+  ${story ? `<section class="story ${story.level}"><b>${esc(story.title)}</b><p>${esc(story.text)}</p></section>` : ''}
+  ${state.demo ? `<div class="chips-sel demo-sky">${[['', 'الآن'], ['clear', 'مشمس'], ['partly', 'غائم جزئياً'], ['rain', 'ماطر'], ['night', 'ليل']].map(([k, l]) => `<button data-demo-sky="${k}" class="${(state.demoSky || '') === k ? 'on' : ''}">${l}</button>`).join('')}</div>` : ''}`;
+}
+
+// موقع الطقس: ما سجّله المركّب على الخادم، وإلا ما اختاره المستخدم من الإعدادات
+const weatherLoc = () => state.prefs.loc || (state.plant?.lat && state.plant?.lon ? { lat: state.plant.lat, lon: state.plant.lon, name: '' } : null);
+
+async function loadWeather(force = false) {
+  if (state.demo) return;
+  const loc = weatherLoc();
+  if (!loc) return;
+  const key = `${(+loc.lat).toFixed(2)},${(+loc.lon).toFixed(2)}`;
+  const c = store.get('wx', null);
+  if (!force && c && c.key === key && Date.now() - c.w.at < 30 * 60000) { state.weather = c.w; return; }
+  if (state.wxLoading) return;
+  state.wxLoading = true;
+  try {
+    state.weather = await fetchWeather(loc.lat, loc.lon);
+    store.set('wx', { key, w: state.weather });
+    if (state.tab === 'home' && !state.page) render();
+  } catch { /* يبقى المشهد بلا طقس حتى المحاولة التالية */ }
+  state.wxLoading = false;
+}
+
+// طقس الوضع التجريبي: يتبع السيناريو المختار حتى يمكن رؤية كل الحالات
+function demoWeather(sky) {
+  const night = sky === 'night';
+  return { temp: night ? 9 : sky === 'rain' ? 13 : 24, code: { clear: 0, partly: 2, rain: 63, night: 0 }[sky] ?? 0, cloud: { clear: 5, partly: 45, rain: 95, night: 10 }[sky] ?? 0,
+    isDay: !night, rad: { clear: 820, partly: 520, rain: 90, night: 0 }[sky] ?? 0, sunrise: '06:31', sunset: '16:58', sky, at: Date.now() };
 }
 
 // ملاحظة عاجلة واحدة من النصائح المخصّصة تظهر في الرئيسية حتى لا تفوت المستخدم
@@ -770,6 +1042,10 @@ function urgentTip(m) {
 }
 AFTER.home = () => {
   bindGoto();
+  loadPlantInfo().then(() => loadWeather());
+  document.querySelectorAll('[data-demo-sky]').forEach((b) => {
+    b.onclick = () => { state.demoSky = b.dataset.demoSky || null; state.weather = state.demoSky ? demoWeather(state.demoSky) : null; refresh(); };
+  });
   const r = $('#retryBtn');
   if (r) r.onclick = () => { r.disabled = true; r.textContent = 'جارٍ المحاولة…'; refresh(true); };
 };
@@ -780,9 +1056,9 @@ function bindGoto() {
   });
 }
 
-function hero(icon, color, label, value, sub) {
+function hero(icon, color, label, value, sub, info = '') {
   return `<section class="hero ${color}"><span class="g-deco">${icon}</span><div class="h-ic">${icon}</div>
-    <small>${esc(label)}</small><b><bdi>${esc(value)}</bdi></b>${sub ? `<span>${esc(sub)}</span>` : ''}</section>`;
+    <small>${esc(label)}${infoBtn(info)}</small><b><bdi>${esc(value)}</bdi></b>${sub ? `<span>${esc(sub)}</span>` : ''}</section>`;
 }
 
 function miniChart(id, title) {
@@ -805,19 +1081,19 @@ function pageLoad(m) {
   const rated = m.ratedW;
   const pct = Math.max(0, Math.min(100, m.loadPct ?? 0));
   return `
-  ${hero(icons.home, 'c-sky', 'الحمل الحالي', fmt.w(m.outW), m.stale ? 'آخر قيمة مسجّلة' : trValue(m.loadStatus || ''))}
+  ${hero(icons.home, 'c-sky', 'الحمل الحالي', fmt.w(m.outW), m.stale ? 'آخر قيمة مسجّلة' : trValue(m.loadStatus || ''), 'loadNow')}
   <section class="card">
-    <div class="card-h"><h2>نسبة الحمل من قدرة الإنفرتر</h2><b>${m.loadPct ?? '—'}%</b></div>
+    ${cardH('نسبة الحمل من قدرة الإنفرتر', '', `<b>${m.loadPct ?? '—'}%</b>`)}
     <div class="bar"><i class="${pct >= state.prefs.overloadPct ? 'hot' : pct >= 50 ? 'warm' : ''}" style="width:${pct}%"></i></div>
     <div class="bar-legend"><span>0</span><span>${rated ? `القدرة القصوى ${rated} واط` : ''}</span></div>
-    ${rated && m.outW !== null ? `<p class="hint">المتبقي المتاح للتشغيل: <b>${fmt.w(Math.max(0, rated - m.outW))}</b></p>` : ''}
+    ${rated && m.outW !== null ? `<p class="hint">المتبقي المتاح للتشغيل: <b>${fmt.w(Math.max(0, rated - m.outW))}</b>${infoBtn('loadLeft')}</p>` : ''}
   </section>
   <div class="stats">
     ${stat('القدرة الفعلية', numAr(m.outW), 'واط', 'c-sky')}
-    ${stat('القدرة الظاهرية', numAr(m.outVA), 'فولت أمبير', 'c-violet')}
+    ${stat('القدرة الظاهرية', numAr(m.outVA), 'فولت أمبير', 'c-violet', '', 'apparent')}
     ${stat('جهد الخرج', numAr(m.outV, 1), 'فولت', 'c-green')}
     ${stat('تردد الخرج', numAr(m.outHz, 1), 'هرتز', 'c-amber')}
-    ${pf ? stat('معامل القدرة', pf, 'محسوب', 'c-pink') : ''}
+    ${pf ? stat('معامل القدرة', pf, 'محسوب', 'c-pink', '', 'apparent') : ''}
     ${stat('حالة الحمل', m.loadStatus ? trValue(m.loadStatus) : '—', '', 'c-slate')}
   </div>
   ${miniChart('cLoadToday', 'الحمل خلال اليوم')}`;
@@ -828,16 +1104,15 @@ function pageBattery(m) {
   const e = eta(m);
   const cfg = m.raw.filter((r) => /battery/i.test(r.title) && r.group === 'config');
   return `
-  ${hero(icons.battery, 'c-green', 'نسبة الشحن', m.soc !== null ? m.soc + '%' : '—', batState(m))}
+  ${hero(icons.battery, 'c-green', 'نسبة الشحن', m.soc !== null ? m.soc + '%' : '—', batState(m), 'soc')}
   <section class="card">
-    <div class="card-h"><h2>المدة المتوقعة</h2></div>
+    ${cardH('المدة المتوقعة', 'eta')}
     <div class="big-line">${e.known ? esc(e.text) : `<button class="link" data-goto="more:settings">${esc(e.text)}</button>`}</div>
-    ${e.sub ? `<p class="hint">${esc(e.sub)}</p>` : ''}
-    ${state.prefs.batteryAh ? `<p class="hint">مبنية على سعة ${state.prefs.batteryAh} أمبير ساعة وجهد ${nominalV(m)} فولت. التقدير تقريبي ويتغير مع الحمل.</p>` : ''}
+    ${state.prefs.batteryAh ? `<p class="hint">${e.sub ? esc(e.sub) + ' · ' : ''}بطارية ${state.prefs.batteryAh} أمبير ساعة على ${nominalV(m)} فولت</p>` : ''}
   </section>
   <div class="stats">
     ${stat('الجهد', numAr(m.batV, 1), 'فولت', 'c-green')}
-    ${stat('القدرة', m.batW === null ? '—' : numAr(Math.abs(m.batW)), m.batW > 0 ? 'واط شحن' : m.batW < 0 ? 'واط تفريغ' : 'واط', 'c-amber')}
+    ${stat('القدرة', m.batW === null ? '—' : numAr(Math.abs(m.batW)), m.batW > 0 ? 'واط شحن' : m.batW < 0 ? 'واط تفريغ' : 'واط', 'c-amber', '', 'batPower')}
     ${stat('تيار الشحن', numAr(m.chgA), 'أمبير', 'c-sky')}
     ${stat('تيار التفريغ', numAr(m.disA), 'أمبير', 'c-pink')}
     ${m.batTemp !== null ? stat('حرارة البطارية', numAr(m.batTemp), '°م', 'c-violet') : ''}
@@ -849,12 +1124,15 @@ AFTER.battery = () => { bindGoto(); drawToday('cSocToday', 'soc', '#34d399', '%'
 
 function pageSolar(m) {
   const pv2 = m.pv2V !== null || m.pv2W !== null;
+  const kwp = pvKwp();
   return `
-  ${hero(icons.panel, 'c-amber', 'إنتاج الألواح الآن', fmt.w(m.pvW), m.pvW > 5 && !m.stale ? 'الألواح تنتج الآن' : 'لا يوجد إنتاج حالياً')}
+  ${hero(icons.panel, 'c-amber', 'إنتاج الألواح الآن', fmt.w(m.pvW), m.pvW > 5 && !m.stale ? (kwp ? `${Math.round((m.pvW / (kwp * 1000)) * 100)}% من قدرة ألواحك` : 'الألواح تنتج الآن') : 'لا يوجد إنتاج حالياً', kwp && m.pvW > 5 && !m.stale ? 'pvShare' : 'solarNow')}
   <div class="stats">
-    ${stat('إنتاج اليوم', m.todayWh !== null ? fmt.kwh(m.todayWh / 1000) : '—', 'كيلوواط ساعة', 'c-amber')}
-    ${stat('الإنتاج الكلي', m.totalWh !== null ? fmt.kwh(m.totalWh / 1000) : '—', 'كيلوواط ساعة', 'c-green')}
+    ${stat('إنتاج اليوم', m.todayWh !== null ? fmt.kwh(m.todayWh / 1000) : '—', 'كيلوواط ساعة', 'c-amber', '', 'todayWh')}
+    ${stat('الإنتاج الكلي', m.totalWh !== null ? fmt.kwh(m.totalWh / 1000) : '—', state.plant?.install ? `كيلوواط ساعة · منذ ${String(state.plant.install).slice(0, 4)}` : 'كيلوواط ساعة', 'c-green', '', 'totalWh')}
+    ${kwp && m.todayWh !== null ? stat('إنتاج كل كيلوواط ألواح', (m.todayWh / 1000 / kwp).toFixed(2), 'ك.و.س اليوم', 'c-sky', '', 'yieldKwp') : ''}
   </div>
+  ${kwp ? '' : '<button class="link pad" data-goto="more:settings">أدخل قدرة ألواحك المركّبة لمقارنة إنتاج أيامك</button>'}
   <section class="card"><div class="card-h"><h2>المدخل الأول (PV1)</h2></div>
     ${kv([['الجهد', val(numAr(m.pv1V, 1), 'فولت')], ['التيار', val(m.pv1A === null ? null : numAr(m.pv1A, 1), 'أمبير')], ['القدرة', val(m.pv1W === null ? null : numAr(m.pv1W), 'واط')]])}
   </section>
@@ -864,7 +1142,7 @@ function pageSolar(m) {
   ${m.feedW !== null ? `<section class="card">${kv([['القدرة المُصدَّرة للشبكة', val(numAr(m.feedW), 'واط')]])}</section>` : ''}
   ${miniChart('cPvToday', 'إنتاج الألواح خلال اليوم')}`;
 }
-AFTER.solar = () => drawToday('cPvToday', 'pvW', '#fbbf24', 'واط', { y: { beginAtZero: true } });
+AFTER.solar = () => { bindGoto(); loadPlantInfo(); drawToday('cPvToday', 'pvW', '#fbbf24', 'واط', { y: { beginAtZero: true } }); };
 
 function pageGrid(m) {
   const cfg = m.raw.filter((r) => /input range|charger source/i.test(r.title));
@@ -939,7 +1217,7 @@ const urgentCount = () => (state.model && !state.model.stale ? smartTips(state.m
 // مؤشر الاستقلالية في رأس تبويب التقارير: من تحليل آخر 7 أيام نفسه، ويفتح الملاحظات عند الضغط
 function independenceCard() {
   const a = state.rep.adv;
-  const head = (extra) => `<div class="card-h"><h2>${icons.sun} مؤشر الاستقلالية عن الكهرباء</h2>${extra}</div>`;
+  const head = (extra) => `<div class="card-h"><h2>${icons.sun} مؤشر الاستقلالية عن الكهرباء${infoBtn('independence')}</h2>${extra}</div>`;
   if (!a || a.loading) return `<section class="card adv-ind">${head('')}<div class="bar"><i id="advProg" style="width:${a?.pct || 0}%"></i></div><p class="hint center">جارٍ حساب آخر 7 أيام…</p></section>`;
   const m = state.model;
   const r = analyze(a.sums, { todayKey: today(), prefs: state.prefs, ratedW: m?.ratedW || null, volts: m?.ratedV || nominalV(m), model: m });
@@ -954,20 +1232,90 @@ function independenceCard() {
 }
 
 function viewReports() {
-  const pages = { day: pageDay, week: () => pageRange('week'), month: () => pageRange('month'), advisor: pageAdvisor };
+  const pages = { day: pageDay, week: () => pageRange('week'), month: () => pageRange('month'), year: pageYear, advisor: pageAdvisor };
   if (state.page && pages[state.page]) return pages[state.page]();
   const urgent = urgentCount();
   return `
   ${independenceCard()}
-  <section class="intro"><h2>التقارير والتحليلات</h2><p>إنتاج الألواح واستهلاك المنزل وحالة البطارية عبر الأيام.</p></section>
+  <section class="intro"><h2>التقارير${infoBtn('report')}</h2></section>
   ${listCards([
     { page: 'advisor', title: 'ملاحظات على منظومتك', sub: 'ما يحتاج انتباهك الآن، واستخدام البطارية وتوصيات آخر 7 أيام', icon: icons.bulb, color: urgent ? 'c-pink' : 'c-green', badge: urgent ? `${urgent} مهم` : '' },
     { page: 'day', title: 'التقرير اليومي', sub: 'رسوم القدرة والبطارية والكهرباء ليوم محدد', icon: icons.calendar, color: 'c-amber' },
     { page: 'week', title: 'التقرير الأسبوعي', sub: 'الإنتاج والاستهلاك لكل يوم، والتغيّر عن الأسبوع السابق', icon: icons.week, color: 'c-sky' },
     { page: 'month', title: 'التقرير الشهري', sub: 'مجموع الشهر وأفضل يوم، والتغيّر عن الشهر السابق', icon: icons.month, color: 'c-green' },
-  ])}
-  <p class="hint center">تُجلب البيانات من سجل خادم WatchPower، وعند تعذّره تُستخدم القراءات التي حفظها التطبيق على هاتفك.</p>`;
+    cap('year') === false ? null : { page: 'year', title: 'التقرير السنوي', sub: 'إنتاج كل شهر، ومجموع ما أنتجته الألواح', icon: icons.chart, color: 'c-violet' },
+  ].filter(Boolean))}`;
 }
+
+// ================= التقرير السنوي (من عدّادات الخادم مباشرة، بلا تحميل قراءات الأيام) =================
+const MONTHS = ['كانون الثاني', 'شباط', 'آذار', 'نيسان', 'أيار', 'حزيران', 'تموز', 'آب', 'أيلول', 'تشرين الأول', 'تشرين الثاني', 'كانون الأول'];
+const money = (v) => (v == null || !Number.isFinite(v) ? '—' : Math.round(v).toLocaleString('en-US'));
+
+async function loadYear() {
+  const y = state.rep.yearY || new Date().getFullYear();
+  const d = device();
+  state.rep.year = { loading: true, y };
+  render();
+  let res;
+  try {
+    if (state.demo) {
+      const season = [0.55, 0.65, 0.8, 0.9, 1, 1.05, 1.05, 1, 0.9, 0.75, 0.6, 0.5];
+      const now = new Date();
+      res = { months: season.map((f, i) => ({ month: i + 1, kwh: y < now.getFullYear() || i < now.getMonth() ? Math.round(f * 30 * 22 * 10) / 10 : i === now.getMonth() ? Math.round(f * now.getDate() * 22 * 10) / 10 : 0 })), total: 9140 };
+    } else {
+      const months = await optional('year', () => api.energyYear(d, y));
+      const total = await api.energyTotal(d).catch(() => null);
+      res = { months: months || [], total };
+    }
+    if (device() !== d || (state.rep.yearY || new Date().getFullYear()) !== y) return;
+    state.rep.year = { y, ...res };
+  } catch (e) {
+    if (device() !== d) return;
+    state.rep.year = { y, error: cap('year') === false ? 'خادم WatchPower لا يتيح التقرير السنوي لحسابك.' : e.message };
+  }
+  if (leaf() === 'year') render();
+}
+
+function pageYear() {
+  const r = state.rep.year;
+  const y = state.rep.yearY || new Date().getFullYear();
+  const nav = `<section class="day-nav card">
+    <button class="icon-btn" data-yoff="-1" aria-label="السنة السابقة">${icons.chevR}</button>
+    <div class="day-label"><b>${y}</b></div>
+    <button class="icon-btn" data-yoff="1" aria-label="السنة التالية" ${y >= new Date().getFullYear() ? 'disabled' : ''}>${icons.chevL}</button>
+  </section>`;
+  if (!r || r.loading) return nav + '<div class="empty"><div class="spinner"></div>جارٍ تحميل إنتاج السنة…</div>';
+  if (r.error) return nav + `<div class="empty bad">${esc(r.error)}</div>`;
+  const used = r.months.filter((x) => x.kwh > 0);
+  const sum = r.months.reduce((a, x) => a + (x.kwh || 0), 0);
+  const best = used.reduce((b, x) => (!b || x.kwh > b.kwh ? x : b), null);
+  const price = state.prefs.price;
+  if (!used.length) return nav + '<div class="empty">لا يوجد إنتاج مسجّل في هذه السنة.</div>';
+  return nav + `
+  <div class="stats">
+    ${stat('إنتاج السنة', fmt.kwh(sum), 'كيلوواط ساعة', 'c-amber', '', 'year')}
+    ${stat('أفضل شهر', best ? MONTHS[best.month - 1] : '—', best ? `${fmt.kwh(best.kwh)} ك.و.س` : '', 'c-green')}
+    ${stat('متوسط الشهر', fmt.kwh(sum / used.length), 'ك.و.س', 'c-sky')}
+    ${r.total != null ? stat('منذ أول قراءة', fmt.kwh(r.total), 'كيلوواط ساعة', 'c-violet', '', 'year') : ''}
+    ${price ? stat('توفير السنة', money(sum * price), state.prefs.currency || '', 'c-green', '', 'savings') : ''}
+  </div>
+  ${price ? '' : '<button class="link pad" data-goto="more:calc">احسب توفيرك بالمال من الحاسبة</button>'}
+  <section class="card">${cardH('الإنتاج الشهري', '', '<small class="muted">كيلوواط ساعة</small>')}<div class="chart-box"><canvas id="cYear"></canvas></div></section>`;
+}
+AFTER.year = () => {
+  bindGoto();
+  $('.day-nav').onclick = (e) => {
+    const b = e.target.closest('[data-yoff]');
+    if (!b || b.disabled) return;
+    state.rep.yearY = (state.rep.yearY || new Date().getFullYear()) + Number(b.dataset.yoff);
+    loadYear();
+  };
+  const r = state.rep.year;
+  const y = state.rep.yearY || new Date().getFullYear();
+  if (!r || (r.y !== y && !r.loading)) { loadYear(); return; }
+  if (r.loading || r.error) return;
+  barChart('cYear', r.months.map((x) => MONTHS[x.month - 1]), [{ label: 'الإنتاج', data: r.months.map((x) => +(x.kwh || 0).toFixed(1)), color: '#f59e0b' }], { y: { beginAtZero: true } });
+};
 
 // جلب قراءات يوم: من سجل الخادم أولاً، ثم من القراءات المحفوظة محلياً.
 // بعد 3 إخفاقات متتالية نتوقف عن سؤال الخادم حتى نهاية التحميل الحالي (يُصفَّر مع كل تقرير جديد)
@@ -1032,21 +1380,21 @@ function pageDay() {
   const s = r.sum;
   return nav + `
   <div class="stats">
-    ${stat('إنتاج الألواح', fmt.kwh(s.pvKwh), 'كيلوواط ساعة', 'c-amber')}
+    ${stat('إنتاج الألواح', fmt.kwh(s.pvKwh), 'كيلوواط ساعة', 'c-amber', '', 'todayWh')}
     ${stat('استهلاك المنزل', fmt.kwh(s.loadKwh), 'كيلوواط ساعة', 'c-sky')}
-    ${stat('أدنى نسبة للبطارية', s.socMin === null ? '—' : `${s.socMin}%`, s.socMinAt ? 'الساعة ' + fmt.time(s.socMinAt) : '', 'c-pink')}
-    ${stat('أعلى نسبة للبطارية', s.socMax === null ? '—' : `${s.socMax}%`, s.socMaxAt ? 'الساعة ' + fmt.time(s.socMaxAt) : '', 'c-green')}
-    ${stat('شحن من الألواح', fmt.kwh(s.solarChgKwh), 'كيلوواط ساعة', 'c-amber')}
-    ${stat('شحن من الكهرباء', fmt.kwh(s.gridChgKwh), 'كيلوواط ساعة', 'c-violet')}
+    ${stat('أدنى نسبة للبطارية', s.socMin === null ? '—' : `${s.socMin}%`, s.socMinAt ? 'الساعة ' + fmt.time(s.socMinAt) : '', 'c-pink', '', 'socMinMax')}
+    ${stat('أعلى نسبة للبطارية', s.socMax === null ? '—' : `${s.socMax}%`, s.fullAt ? 'امتلأت ' + fmt.time(s.fullAt) : s.socMaxAt ? 'الساعة ' + fmt.time(s.socMaxAt) : '', 'c-green', '', 'socMinMax')}
+    ${stat('شحن من الألواح', fmt.kwh(s.solarChgKwh), 'كيلوواط ساعة', 'c-amber', '', 'chargeSplit')}
+    ${stat('شحن من الكهرباء', fmt.kwh(s.gridChgKwh), 'كيلوواط ساعة', 'c-violet', '', 'chargeSplit')}
     ${stat('تفريغ البطارية', fmt.kwh(s.disKwh), 'كيلوواط ساعة', 'c-slate')}
-    ${stat('الاستقلالية عن الكهرباء', s.independence == null ? '—' : Math.round(s.independence) + '%', s.independence == null ? 'وضع التشغيل غير متوفر' : 'من استهلاك البيت', 'c-sky')}
+    ${stat('الاستقلالية عن الكهرباء', s.independence == null ? '—' : Math.round(s.independence) + '%', s.independence == null ? 'وضع التشغيل غير متوفر' : 'من استهلاك البيت', 'c-sky', '', 'independence')}
     ${stat('ذروة الحمل', fmt.w(s.peakW), '', 'c-pink')}
-    ${stat('توفر الكهرباء', numAr(s.gridH, 1), 'ساعة', 'c-violet')}
+    ${stat('توفر الكهرباء', numAr(s.gridH, 1), 'ساعة', 'c-violet', '', 'gridHours')}
     ${stat('العمل على البطارية', numAr(s.batH, 1), 'ساعة', 'c-slate')}
+    ${pvKwp() && s.pvKwh != null ? stat('إنتاج كل كيلوواط ألواح', (s.pvKwh / pvKwp()).toFixed(2), 'ك.و.س', 'c-amber', '', 'yieldKwp') : ''}
+    ${state.prefs.price && s.pvKwh != null ? stat('التوفير', money(s.pvKwh * state.prefs.price), state.prefs.currency || '', 'c-green', '', 'savings') : ''}
   </div>
-  ${s.fullAt ? `<p class="hint">امتلأت البطارية الساعة ${esc(fmt.time(s.fullAt))}.</p>` : ''}
-  <p class="hint">الشحن مقسوم حسب مصدره: الألواح بقدر إنتاجها، والباقي من كهرباء الشبكة في وضع الشبكة فقط. الاستقلالية = نسبة استهلاك البيت التي لم تأتِ من كهرباء الشبكة مباشرة أو عبر شحن البطارية.</p>
-  <p class="hint">المصدر: ${SRC[r.source]} · ${countAr(r.samples.length, READINGS)} · ساعات مغطّاة ${numAr(s.coveredH, 1)}${s.pvFromMeter ? ' · الإنتاج من عدّاد الجهاز' : ' · الإنتاج محسوب من القدرة'}</p>
+  <p class="hint">${SRC[r.source]} · ${countAr(r.samples.length, READINGS)} · ${numAr(s.coveredH, 1)} ساعة مغطّاة${infoBtn('report')}</p>
   <section class="card"><div class="card-h"><h2>القدرة خلال اليوم</h2></div><div class="chart-box"><canvas id="cPower"></canvas></div></section>
   <section class="card"><div class="card-h"><h2>نسبة شحن البطارية</h2></div><div class="chart-box sm"><canvas id="cSoc"></canvas></div></section>
   <section class="card"><div class="card-h"><h2>جهد البطارية</h2></div><div class="chart-box sm"><canvas id="cBatV"></canvas></div></section>
@@ -1238,7 +1586,7 @@ async function loadAdvisor() {
   });
   if (state.rep.adv?.token !== token) return;
   state.rep.adv = { sums, at: Date.now() };
-  if (state.tab === 'reports' && (!state.page || leaf() === 'advisor')) render();
+  if ((state.tab === 'reports' && (!state.page || leaf() === 'advisor')) || (leaf() === 'calc' && state.calc.tab === 'save')) render();
 }
 AFTER.reports = () => {
   if (!state.rep.adv || (!state.rep.adv.loading && Date.now() - state.rep.adv.at > 30 * 60000)) loadAdvisor();
@@ -1303,13 +1651,18 @@ async function exportSummaries(name, sums) {
 // ================= تبويب التنبيهات: سجل واحد بفلاتر =================
 function viewAlerts() {
   if (state.page === 'rules') return pageRules();
+  if (state.page === 'srvlog') return pageSrvLog();
   const counts = state.log.reduce((o, e) => { const c = catOf(e); o[c] = (o[c] || 0) + 1; return o; }, {});
   if (state.logFilter && !counts[state.logFilter]) state.logFilter = null;
   const filter = state.logFilter || 'all';
   const list = filter === 'all' ? state.log : state.log.filter((e) => catOf(e) === filter);
   const chips = [['all', 'الكل', state.log.length], ...Object.entries(CATS).filter(([k]) => counts[k]).map(([k, label]) => [k, label, counts[k]])];
   const html = `
-  ${listCards([{ page: 'rules', title: 'شروط التنبيه', sub: `البطارية ${state.prefs.lowSoc}% · الحمل ${state.prefs.overloadPct}% · ${state.prefs.bgMonitor && Capacitor.isNativePlatform() ? 'المراقبة في الخلفية مفعّلة' : 'المراقبة في الخلفية متوقفة'}`, icon: icons.sliders, color: 'c-violet' }])}
+  ${listCards([
+    { page: 'rules', title: 'شروط التنبيه', sub: `البطارية ${state.prefs.lowSoc}% · الحمل ${state.prefs.overloadPct}% · ${state.prefs.bgMonitor && Capacitor.isNativePlatform() ? 'المراقبة في الخلفية مفعّلة' : 'المراقبة في الخلفية متوقفة'}`, icon: icons.sliders, color: 'c-violet' },
+    cap('warn') === false ? null : { page: 'srvlog', title: 'سجل الإنفرتر في الخادم', sub: 'أعطال وتحذيرات آخر 90 يوماً، حتى وهاتفك مطفأ', icon: icons.warn, color: 'c-pink' },
+  ].filter(Boolean))}
+  <h3 class="sec-h">سجل التطبيق${infoBtn('log')}</h3>
   ${state.log.length ? `<div class="chips-sel log-filter">${chips.map(([k, label, n]) => `<button data-filter="${k}" class="${filter === k ? 'on' : ''}">${label} <b>${n}</b></button>`).join('')}</div>
   <div class="row-end"><button class="link" id="clearList">مسح السجل</button></div>` : ''}
   ${eventList(list, 'لا توجد أحداث بعد. ستظهر هنا عند انقطاع الكهرباء أو انخفاض البطارية أو انقطاع الإنفرتر أو أي عطل.')}`;
@@ -1327,6 +1680,46 @@ AFTER.alerts = () => {
     render();
   };
   setTimeout(renderHeader, 0);
+};
+
+// ===== سجل الإنفرتر في الخادم =====
+async function loadSrvLog() {
+  const d = device();
+  state.rep.srv = { loading: true };
+  render();
+  const ymd = (t) => fmt.iso(t).slice(0, 10) + ' 00:00:00';
+  try {
+    const list = state.demo
+      ? [{ desc: 'Battery voltage low', code: '04', level: 1, handle: true, gts: fmt.iso(Date.now() - 2 * 864e5) }, { desc: 'Over load', code: '07', level: 2, handle: true, gts: fmt.iso(Date.now() - 9 * 864e5) }]
+      : await optional('warn', () => api.warnings(d, ymd(Date.now() - 90 * 864e5), ymd(Date.now() + 864e5)));
+    if (device() !== d) return;
+    state.rep.srv = { list: (list || []).sort((a, b) => String(b.gts).localeCompare(String(a.gts))), at: Date.now() };
+  } catch (e) {
+    if (device() !== d) return;
+    state.rep.srv = { error: cap('warn') === false ? 'خادم WatchPower لا يتيح هذا السجل لحسابك.' : e.message };
+  }
+  if (leaf() === 'srvlog') render();
+}
+
+function pageSrvLog() {
+  const r = state.rep.srv;
+  if (!r || r.loading) return '<div class="empty"><div class="spinner"></div>جارٍ جلب السجل من الخادم…</div>';
+  if (r.error) return `<div class="empty bad">${esc(r.error)}</div><button class="btn ghost wide" id="srvRetry">${icons.refresh} إعادة المحاولة</button>`;
+  return `<p class="hint">${r.list.length ? countAr(r.list.length, ['حدث واحد', 'حدثان', 'أحداث', 'حدثاً']) + ' في آخر 90 يوماً' : ''}${infoBtn('srvlog')}</p>
+  ${r.list.length ? `<ul class="alerts">${r.list.map((w) => {
+    const t = warnAr(w.desc);
+    const lvl = Number(w.level) >= 2 ? 'bad' : 'warn';
+    return `<li class="alert ${lvl}"><div class="a-ic">${icons.warn}</div><div>
+      <b>${esc(t.title)}</b>${t.tip ? `<p>${esc(t.tip)}</p>` : ''}
+      <p class="orig"><bdi>${esc([w.code ? 'الرمز ' + w.code : '', w.desc].filter(Boolean).join(' · '))}</bdi></p>
+      <time>${esc(parseTs(w.gts) ? fmt.dateTime(parseTs(w.gts)) : String(w.gts || ''))}${w.handle === true ? ' · انتهى' : ''}</time></div></li>`;
+  }).join('')}</ul>` : '<div class="empty">لا أعطال ولا تحذيرات في آخر 90 يوماً. ممتاز.</div>'}
+  <button class="btn ghost wide" id="srvRetry">${icons.refresh} تحديث</button>`;
+}
+AFTER.srvlog = () => {
+  if (!state.rep.srv || (!state.rep.srv.loading && state.rep.srv.at && Date.now() - state.rep.srv.at > 10 * 60000)) { loadSrvLog(); return; }
+  const b = $('#srvRetry');
+  if (b) b.onclick = loadSrvLog;
 };
 
 const CAT_IC = { grid: icons.grid, conn: icons.offline, bat: icons.battery, fault: icons.warn, set: icons.wrench };
@@ -1347,8 +1740,9 @@ function eventList(list, empty) {
 function toggle(key, label, sub = '') {
   return `<label class="sw-row"><span>${esc(label)}${sub ? `<small>${esc(sub)}</small>` : ''}</span><input type="checkbox" class="sw" data-pref="${key}" ${state.prefs[key] ? 'checked' : ''}></label>`;
 }
-function numField(key, label, unit, min, max, placeholder = '') {
-  return `<label class="num-row"><span>${esc(label)}</span><span class="num-in"><input type="number" inputmode="numeric" data-pref="${key}" value="${state.prefs[key] ?? ''}" min="${min}" max="${max}" placeholder="${esc(placeholder)}"><small>${esc(unit)}</small></span></label>`;
+// حقل نصي بلوحة أرقام: يقبل الأرقام العربية ٠-٩ والفاصلة، لأن حقل type=number يرفضها فيُمسح ما كتبه المستخدم
+function numField(key, label, unit, min, max, placeholder = '', info = '') {
+  return `<label class="num-row"><span>${esc(label)}${infoBtn(info)}</span><span class="num-in"><input type="text" inputmode="decimal" autocomplete="off" data-pref="${key}" data-min="${min}" data-max="${max}" value="${state.prefs[key] ?? ''}" placeholder="${esc(placeholder)}"><small>${esc(unit)}</small><i class="saved" aria-hidden="true"></i></span></label>`;
 }
 
 function pageRules() {
@@ -1394,12 +1788,15 @@ function bindPrefs(root) {
       const k = el.dataset.pref;
       if (el.type === 'checkbox') state.prefs[k] = el.checked;
       else if (el.tagName === 'SELECT') state.prefs[k] = el.value;
-      else if (el.value === '' && DEFAULT_PREFS[k] === null) state.prefs[k] = null;
+      else if (el.value.trim() === '' && DEFAULT_PREFS[k] === null) state.prefs[k] = null;
       else {
-        const v = Number(el.value);
-        const min = Number(el.min), max = Number(el.max);
-        state.prefs[k] = Math.min(max, Math.max(min, Number.isFinite(v) ? v : DEFAULT_PREFS[k] ?? min));
-        el.value = state.prefs[k];
+        const v = parseFloat(latinDigits(el.value));
+        const min = Number(el.dataset.min), max = Number(el.dataset.max);
+        if (!Number.isFinite(v)) { el.value = state.prefs[k] ?? ''; toast('أدخل رقماً', 'bad'); return; }
+        const clamped = Math.min(max, Math.max(min, v));
+        if (clamped !== v) toast(`القيمة المسموحة بين ${min} و${max}`, 'bad');
+        state.prefs[k] = clamped;
+        el.value = clamped;
       }
       savePrefs();
       if (k === 'notify' && el.checked && Capacitor.isNativePlatform()) {
@@ -1409,8 +1806,23 @@ function bindPrefs(root) {
       syncMonitor();
       if (k === 'staleMin' && state.model) state.model = normalize(state.model.raw.map((r) => ({ title: r.title, val: r.val, unit: r.unit })), state.prefs.staleMin, tzOffset());
       if (k === 'theme') { applyTheme(); render(); }
-      toast('تم الحفظ', 'ok');
+      // علامة «محفوظ» بجانب الحقل نفسه بدل رسالة عامة
+      const ok = el.parentElement?.querySelector('.saved');
+      if (ok) { ok.classList.remove('on'); void ok.offsetWidth; ok.classList.add('on'); } else toast('تم الحفظ', 'ok');
     };
+    // الحقول الرقمية تُحفظ أثناء الكتابة بعد توقف قصير، دون انتظار مغادرة الحقل
+    if (el.dataset.min !== undefined) {
+      let t;
+      // نحفظ أثناء الكتابة فقط إذا كانت القيمة ضمن المسموح، حتى لا نصحّح رقماً لم يكتمل بعد (مثل «2» قبل «200»)
+      el.oninput = () => {
+        clearTimeout(t);
+        t = setTimeout(() => {
+          const v = parseFloat(latinDigits(el.value));
+          if (Number.isFinite(v) && v >= Number(el.dataset.min) && v <= Number(el.dataset.max)) el.onchange();
+        }, 900);
+      };
+      el.onkeydown = (e) => { if (e.key === 'Enter') el.blur(); };
+    }
   });
 }
 
@@ -1436,10 +1848,42 @@ function pageDevice(m) {
   ${section('معلومات الجهاز', kv([['اسم الجهاز', val(d?.alias)], ['رقم الجهاز في الحساب', val(d?.sn)], ['رقم وحدة الواي فاي', val(d?.pn)], ...rows(product)]))}
   ${group('rated').length ? section('القيم المقنّنة', kv(rows(group('rated')))) : ''}
   ${group('config').length ? section('الإعدادات الحالية', kv(rows(group('config'))) + '<p class="hint">للعرض فقط. لتغييرها: «المزيد ← إعدادات الإنفرتر».</p>') : ''}
-  <button class="btn ghost wide" data-goto="more:edit">${icons.wrench} تعديل إعدادات الإنفرتر</button>
-  <p class="hint">يُعتبر الإنفرتر غير متصل إذا لم تصل منه قراءة جديدة منذ أكثر من ${countAr(state.prefs.staleMin, ['دقيقة', 'دقيقتين', 'دقائق', 'دقيقة'])}.</p>`;
+  ${wifiCard()}
+  <button class="btn ghost wide" data-goto="more:edit">${icons.wrench} تعديل إعدادات الإنفرتر</button>`;
 }
-AFTER.device = () => bindGoto();
+
+// وحدة الواي فاي: كل كم ترفع القراءات، وإعادة تشغيلها عن بُعد
+function wifiCard() {
+  const c = state.collector;
+  const canRestart = cap('restart') !== false;
+  if (!c && !canRestart) return '';
+  const every = c?.datFetch ? countAr(Math.max(1, Math.round(c.datFetch / 60)), ['دقيقة', 'دقيقتين', 'دقائق', 'دقيقة']) : null;
+  return `<section class="card">${cardH('وحدة الواي فاي', 'wifi')}
+    ${kv([['الرقم', val(device()?.pn)], every ? ['ترفع قراءة كل', val(every)] : null])}
+    ${canRestart ? `<button class="btn ghost wide" id="wifiRestart">${icons.refresh} إعادة تشغيل الوحدة</button>` : ''}
+  </section>`;
+}
+AFTER.device = () => {
+  bindGoto();
+  loadCollector();
+  loadPlantInfo();
+  const b = $('#wifiRestart');
+  if (!b) return;
+  b.onclick = async () => {
+    if (!(await confirmDialog('إعادة تشغيل وحدة الواي فاي', 'ستنقطع القراءات دقيقة أو اثنتين ثم تعود. الإنفرتر نفسه لا يتأثر ويبقى يعمل. هل تريد المتابعة؟'))) return;
+    b.disabled = true;
+    b.innerHTML = '<span class="spinner"></span> جارٍ الإرسال…';
+    try {
+      const ret = state.demo ? 0 : await optional('restart', () => api.restartCollector(device().pn));
+      const msg = { 0: ['أُعيد تشغيل الوحدة. ستعود القراءات خلال دقيقة أو اثنتين', 'ok'], 1: ['أُرسل الأمر إلى الوحدة', 'ok'], 2: ['الوحدة لا ترد: يبدو أنها مفصولة عن الإنترنت. افصلها عن الإنفرتر وأعد وصلها بيدك', 'bad'] }[ret] || ['أُرسل الأمر', 'ok'];
+      toast(msg[0], msg[1]);
+      if (ret !== 2) logEvent('set', 'info', 'إعادة تشغيل وحدة الواي فاي', msg[0]);
+    } catch (e) {
+      toast(cap('restart') === false ? 'خادمك لا يتيح إعادة تشغيل الوحدة من التطبيق' : e.message, 'bad');
+    }
+    render();
+  };
+};
 
 // ===== إعدادات الإنفرتر =====
 // اسم عربي وشرح مبسّط لكل إعداد من settings-info.js، وما لا نعرفه يبقى باسمه الأصلي
@@ -1714,12 +2158,16 @@ function viewMore() {
     { page: 'setup', title: 'ربط الجهاز والحساب', sub: 'إنشاء حساب، إعداد الواي فاي (Wi-Fi Config)، البلوتوث', icon: icons.wifi, color: 'c-sky' },
     { page: 'settings', title: 'الإعدادات', sub: `${themeName} · ${state.prefs.batteryAh ? `البطارية ${state.prefs.batteryAh} أمبير ساعة` : 'أدخل سعة البطارية'}`, icon: icons.gauge, color: 'c-violet' },
     { page: 'update', title: 'التحقق من التحديثات', sub: updateAvailable() ? `يتوفر الإصدار ${state.update.version}` : 'الإصدار الحالي ' + VERSION, icon: icons.upgrade, color: 'c-amber', badge: updateAvailable() ? 'جديد' : '' },
+    { page: 'tour', title: 'جولة في التطبيق', sub: 'كيف تستخدم طاقتي، مع أمثلة لحالات المنظومة', icon: icons.star, color: 'c-sky' },
     { page: 'about', title: 'حول التطبيق', sub: 'طاقتي · الإصدار ' + VERSION, icon: icons.info, color: 'c-slate' },
   ])}
   <button class="btn danger wide logout-btn" id="logoutBtn">${icons.logout} ${state.demo ? 'الخروج من الوضع التجريبي' : 'تسجيل الخروج'}</button>
   <p class="foot">طاقتي · الإصدار ${VERSION}</p>`;
 }
 AFTER.more = () => {
+  // الجولة نافذة فوق الصفحة وليست صفحة مستقلة
+  const t = $('[data-page="tour"]');
+  if (t) t.addEventListener('click', (e) => { e.stopPropagation(); openTour(); }, true);
   $('#logoutBtn').onclick = async () => {
     if (await confirmDialog('تسجيل الخروج', state.demo ? 'هل تريد الخروج من الوضع التجريبي؟' : 'هل تريد تسجيل الخروج؟ ستبقى التقارير المحفوظة على الهاتف.')) logout();
   };
@@ -1745,11 +2193,29 @@ function pageSettings() {
   return `${pageCustom()}
     <section class="card"><div class="card-h"><h2>البطارية</h2></div>${pageBatCfg()}</section>
     <section class="card"><div class="card-h"><h2>الاتصال</h2></div>${pageConn()}</section>
+    <section class="card" id="locCard">${pageLoc()}</section>
     <section class="card"><div class="card-h"><h2>الحساب</h2></div>
       ${kv([['الحساب', val(state.demo ? 'وضع تجريبي' : state.session?.usr)], ['الجهاز المعروض', val(d?.alias)], ['عدد الأجهزة', val(String(state.devices.length))], ['الخادم', val(state.demo ? '—' : state.session?.profile === 'shine' ? 'ShineMonitor' : 'DessMonitor')]])}
       ${state.devices.length > 1 ? '<p class="hint">للتبديل بين أجهزتك اضغط اسم الجهاز أعلى الرئيسية.</p>' : ''}</section>`;
 }
-AFTER.settings = () => { AFTER.custom(); bindPrefs($('#view')); };
+AFTER.settings = () => {
+  AFTER.custom();
+  bindPrefs($('#view'));
+  bindLoc();
+  loadCollector();
+  loadPlantInfo();
+  // ملخص البطارية يتحدث فوراً مع كل تغيير في السعة أو أدنى نسبة
+  const v = $('#view');
+  if (v.dataset.batSum) return;
+  v.dataset.batSum = '1';
+  v.addEventListener('change', (e) => {
+    if (leaf() !== 'settings' || !['batteryAh', 'cutoffSoc'].includes(e.target.dataset?.pref)) return;
+    const box = document.createElement('div');
+    box.innerHTML = pageBatCfg();
+    const fresh = box.querySelector('#batSum');
+    if (fresh) $('#batSum').innerHTML = fresh.innerHTML;
+  });
+};
 
 function pageTheme() {
   const opt = (v, label, ic) => `<button class="theme-opt ${state.prefs.theme === v ? 'on' : ''}" data-theme="${v}">${ic}<b>${label}</b></button>`;
@@ -1764,20 +2230,69 @@ AFTER.theme = () => {
 
 function pageBatCfg() {
   const rated = state.model?.ratedV;
+  const v = rated || nominalV(state.model);
+  const ah = state.prefs.batteryAh;
   return `<div class="form">
-      ${numField('batteryAh', 'سعة البطارية', 'أمبير ساعة', 10, 5000, 'مثال: 200')}
+      ${numField('batteryAh', 'سعة البطارية', 'أمبير ساعة', 10, 5000, 'مثال: 200', 'batteryAh')}
       ${numField('cutoffSoc', 'أدنى نسبة مسموح التفريغ إليها', '%', 0, 60)}
+      ${numField('pvKwp', 'قدرة الألواح المركّبة', 'كيلوواط', 0.1, 200, state.plant?.nominalPower ? String(state.plant.nominalPower) : 'مثال: 4.4', 'pvKwp')}
     </div>
-    <p class="hint">تُستخدم السعة مع جهد البطارية المقنّن ${rated ? `(${rated} فولت من الإنفرتر)` : `(${nominalV(state.model)} فولت، مقدّر من جهد البطارية)`} لحساب المدة المتبقية للتفريغ أو الشحن. بدون السعة لا يعرض التطبيق أي تقدير حتى لا يكون مضلّلاً.</p>
-    <p class="hint">إذا كانت لديك عدة بطاريات على التوازي فاجمع سعاتها (مثلاً بطاريتان 100 أمبير = 200).</p>`;
+    <p class="hint" id="batSum">${ah ? `بطاريتك تخزن قرابة <b>${fmt.kwh((ah * v) / 1000)} ك.و.س</b> على ${v} فولت${rated ? '' : ' (مقدّر من جهد البطارية)'}، منها <b>${fmt.kwh(((ah * v) / 1000) * (1 - (state.prefs.cutoffSoc ?? 20) / 100))}</b> قابلة للاستخدام.` : 'أدخل السعة ليحسب التطبيق مدة البطارية.'}</p>`;
+}
+
+// موقع المنظومة للطقس: بحث بالاسم (بالعربية) من خدمة Open-Meteo
+function pageLoc() {
+  const loc = state.prefs.loc;
+  const srv = state.plant?.lat && state.plant?.lon;
+  const r = state.locSearch;
+  return `${cardH('موقع المنظومة للطقس')}
+    <p class="hint">${loc ? `الموقع: <b>${esc(loc.name)}</b>${loc.area ? '، ' + esc(loc.area) : ''}` : srv ? 'يُستخدم الموقع المسجّل للمنظومة على خادم WatchPower.' : 'لم يُحدَّد موقع بعد. ابحث عن مدينتك ليظهر الطقس في الرئيسية.'}</p>
+    <div class="loc-row"><input type="search" id="locQ" placeholder="اسم المدينة، مثلاً: إدلب" autocomplete="off" enterkeyhint="search"><button class="btn primary" id="locGo">بحث</button></div>
+    ${r?.loading ? '<div class="spinner sm"></div>' : ''}
+    ${r?.error ? `<p class="note bad">${icons.warn}<span>${esc(r.error)}</span></p>` : ''}
+    ${r?.list ? (r.list.length ? `<div class="loc-list">${r.list.map((x, i) => `<button class="loc-it" data-loc="${i}"><b>${esc(x.name)}</b><small>${esc(x.area)}</small></button>`).join('')}</div>` : '<p class="hint">لم يُعثر على مكان بهذا الاسم.</p>') : ''}
+    ${loc ? '<button class="link pad" id="locClear">إزالة الموقع</button>' : ''}`;
+}
+
+function bindLoc() {
+  const card = $('#locCard');
+  if (!card) return;
+  // نكتب في البطاقة الظاهرة الآن، فقد تُعاد رسم الصفحة أثناء انتظار البحث
+  const redraw = () => { const c = $('#locCard'); if (c) { c.innerHTML = pageLoc(); bindLoc(); } };
+  const go = async () => {
+    const q = $('#locQ').value.trim();
+    if (q.length < 2) { toast('اكتب اسم المدينة', 'bad'); return; }
+    state.locSearch = { loading: true };
+    redraw();
+    try { state.locSearch = { list: await searchPlace(q) }; } catch (e) { state.locSearch = { error: e.message }; }
+    redraw();
+  };
+  $('#locGo').onclick = go;
+  $('#locQ').onkeydown = (e) => { if (e.key === 'Enter') go(); };
+  card.querySelectorAll('[data-loc]').forEach((b) => {
+    b.onclick = () => {
+      const x = state.locSearch.list[Number(b.dataset.loc)];
+      state.prefs.loc = { name: x.name, area: x.area, lat: x.lat, lon: x.lon };
+      savePrefs();
+      state.locSearch = null;
+      state.weather = null;
+      store.del('wx');
+      toast(`الموقع: ${x.name}`, 'ok');
+      redraw();
+      loadWeather(true);
+    };
+  });
+  const clr = $('#locClear');
+  if (clr) clr.onclick = () => { state.prefs.loc = null; savePrefs(); state.weather = null; store.del('wx'); redraw(); };
 }
 
 function pageConn() {
+  const c = state.collector;
+  const rec = c?.datFetch ? Math.max(5, Math.ceil((c.datFetch * 3) / 60)) : null;
   return `<div class="form">
-      ${numField('staleMin', 'اعتبار الإنفرتر غير متصل بعد', 'دقيقة', 5, 180)}
+      ${numField('staleMin', 'اعتبار الإنفرتر غير متصل بعد', 'دقيقة', 5, 180, '', 'stale')}
     </div>
-    <p class="hint">يرسل الإنفرتر قراءة جديدة إلى الخادم كل بضع دقائق. إذا مرّت المدة أعلاه دون قراءة جديدة يُعرض الإنفرتر «غير متصل» وتتوقف الحسابات المبنية على القيم الحية.</p>
-    <p class="hint">آخر بيانات تُحفظ على الهاتف وتظهر حتى بدون إنترنت، مع توضيح وقتها.</p>`;
+    ${rec && rec > state.prefs.staleMin ? `<p class="note warn">${icons.warn}<span>وحدتك ترفع قراءة كل ${Math.round(c.datFetch / 60)} دقائق، فالمدة الحالية قصيرة وقد تُظهر «غير متصل» خطأً. ننصح بـ ${rec} دقيقة.</span></p>` : ''}`;
 }
 
 function pageAbout() {
@@ -1893,6 +2408,18 @@ AFTER.update = () => {
 // ================= التشغيل =================
 async function boot() {
   applyTheme();
+  // زر ⓘ في أي مكان يفتح شرحه، ويمنع فتح البطاقة التي يقع داخلها
+  const onInfo = (e) => {
+    const i = e.target.closest?.('[data-info]');
+    if (!i) return false;
+    e.preventDefault(); e.stopPropagation();
+    openInfo(i.dataset.info);
+    return true;
+  };
+  document.addEventListener('click', onInfo, true);
+  document.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && onInfo(e)) return; }, true);
+  // تغذية راجعة لمسية لكل زر وبطاقة وتبويب
+  document.addEventListener('pointerdown', (e) => { if (e.target.closest?.('button, [data-page], [data-tab], .lcard')) tap(); }, { passive: true });
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { if (state.prefs.theme === 'auto') { applyTheme(); if (state.session || state.demo) render(); } });
   if (Capacitor.isNativePlatform()) {
     CapApp.addListener('resume', async () => {

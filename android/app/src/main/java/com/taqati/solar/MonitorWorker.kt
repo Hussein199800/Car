@@ -57,7 +57,12 @@ class MonitorWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params
         if (points.isEmpty()) return Result.success()
 
         val flags = JSONObject(prefs.getString(MonitorStore.FLAGS, "{}") ?: "{}")
-        val out = AlertEvaluator.evaluate(AlertEvaluator.snapshot(points), cfg, flags, System.currentTimeMillis())
+        val snap = AlertEvaluator.snapshot(points)
+        val now = System.currentTimeMillis()
+        val out = AlertEvaluator.evaluate(snap, cfg, flags, now)
+        // أداة الشاشة الرئيسية تبقى محدّثة والتطبيق مغلق
+        val ts = snap.tsRaw?.plus(cfg.tzOffsetMs) ?: now
+        TaqatiWidget.push(ctx, WidgetState(snap.soc?.toInt(), snap.batW?.toInt(), snap.outW?.toInt(), snap.pvW?.toInt(), now - ts > cfg.staleMin * 60_000L, ts))
         prefs.edit().putString(MonitorStore.FLAGS, out.flags.toString()).apply()
         MonitorStore.queue(ctx, out.alerts, out.faults)
         if (cfg.notify) out.alerts.forEach { notify(ctx, it.title, it.body) }
