@@ -508,21 +508,24 @@ test('ترجمة أعطال الإنفرتر من الخادم', () => {
   assert.equal(warnAr('Something new 42').title, 'Something new 42', 'غير المعروف يبقى بنصه الأصلي');
 });
 
-test('مشهد ثلاثي الأبعاد: الهندسة وخطوط الطاقة والنسبة على البطارية', async () => {
+test('مشهد ثلاثي الأبعاد: الهندسة وخطوط الطاقة وشرائح البطارية بلون حالتها', async () => {
   const { scene3d, P } = await import('../../src/scene3d.js');
   const calls = [];
-  const flowLine = (id, d, on, w, rev) => { calls.push({ id, on, rev }); return `<path class="wire" data-id="${id}" d="${d}"/>`; };
-  const html = scene3d({ soc: 73, flows: { solar: { on: true }, grid: { on: false }, load: { on: true }, bat: { on: true, reverse: true } },
-    labels: { solar: { value: '3.6 ك.واط' }, grid: { title: 'الشبكة', value: '230 فولت' }, bat: { value: '73%', tag: '' }, load: { value: '450 واط' } }, flowLine });
+  const flowLine = (id, d, on, w, rev, kind) => { calls.push({ id, on, rev, kind }); return `<path class="wire" data-id="${id}" d="${d}"/>`; };
+  const html = scene3d({ flows: { solar: { on: true, kind: 'sun' }, grid: { on: false, kind: 'grid' }, load: { on: true, kind: 'load' }, bat: { on: true, reverse: true, kind: 'dis' } },
+    labels: { solar: { value: '3.6 ك.واط' }, grid: { title: 'الشبكة', value: '230 فولت' }, bat: { value: '73%', tag: '' }, load: { value: '450 واط' } }, flowLine, bat: { lit: 4, color: 'amber', charging: false } });
   assert.deepEqual(calls.map((c) => c.id).sort(), ['bat', 'grid', 'load', 'solar']);
   assert.equal(calls.find((c) => c.id === 'bat').rev, true, 'التفريغ يسير عكس رسم المسار');
-  assert.match(html, />73%</, 'النسبة مكتوبة على البطارية');
+  assert.equal(calls.find((c) => c.id === 'bat').kind, 'dis', 'التفريغ بلون مختلف عن الشحن');
+  // 4 من 6 شرائح في الصور = 3 من 5 هنا، بلون التفريغ
+  assert.equal((html.match(/class="bseg on amber/g) || []).length, 3);
+  assert.equal((html.match(/class="bseg/g) || []).length, 5);
   for (const c of ['n-solar', 'n-grid', 'n-bat', 'n-load', 'n-inv']) assert.ok(html.includes(c), c);
   // كل النقاط داخل مساحة الرسم
   // كل العناصر داخل مساحة الرسم (الأرض وحدها تمتد خارجه عمداً لتملأ المشهد)
   const pts = [...html.matchAll(/class="([^"]+)" points="([^"]+)"/g)].filter((m) => !m[1].startsWith('ground')).flatMap((m) => m[2].split(' ').map((p) => p.split(',').map(Number)));
   assert.ok(pts.length > 50 && pts.every(([x, y]) => x > 0 && x < 400 && y > 0 && y < 360), 'لا شيء خارج المشهد');
-  assert.deepEqual(P(0, 0, 0).map(Math.round), [206, 96]);
+  assert.deepEqual(P(0, 0, 0).map(Math.round), [198, 104]);
 });
 
 test('مشهد الصور: اختيار الصورة حسب الحالة والطقس والغروب', async () => {
@@ -559,4 +562,18 @@ test('البحث عن المدينة: صيغ الهمزة والتاء المر�
   const r = await searchPlace('ادلب', fake);
   assert.equal(r[0].name, 'إدلب');
   assert.equal(r.length, 2);
+});
+
+test('صيغة الوقت: 12 ساعة افتراضياً و24 عند الطلب', async () => {
+  const { fmt, setClock12 } = await import('../../src/model.js');
+  const t = new Date(2026, 10, 9, 17, 5).getTime();
+  setClock12(true);
+  assert.equal(fmt.time(t), '5:05 م');
+  assert.equal(fmt.hm('06:31'), '6:31 ص');
+  assert.equal(fmt.hm('00:15'), '12:15 ص');
+  assert.equal(fmt.hm('12:00'), '12:00 م');
+  setClock12(false);
+  assert.equal(fmt.time(t), '17:05');
+  assert.equal(fmt.hm('06:31'), '06:31');
+  setClock12(true);
 });

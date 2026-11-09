@@ -1,7 +1,7 @@
 // المشهد الكلاسيكي (إصدار 3.7): رسم مسطّح بسيط لبيت وألواح وبطارية وبرج، مع سماء متحركة من الطقس
-export function sceneClassic({ soc = 0, flows, labels, flowLine }) {
+export function sceneClassic({ soc = 0, flows, labels, flowLine, bat = { color: '' } }) {
   const lvl = Math.max(0, Math.min(100, soc));
-  const line = (id, d) => flowLine(id, d, flows[id].on, flows[id].w, flows[id].reverse);
+  const line = (id, d) => flowLine(id, d, flows[id].on, flows[id].w, flows[id].reverse, flows[id].kind);
   return `<svg viewBox="0 0 360 300" class="flow-svg scene-svg classic" aria-hidden="true">
       <path class="ground" d="M0 248 Q180 228 360 248 L360 300 L0 300 Z"/>
       <g class="tower"><path d="M318 238 L330 120 L342 238 M322 200 H338 M325 165 H335 M312 140 H348 M316 128 H344"/></g>
@@ -13,7 +13,7 @@ export function sceneClassic({ soc = 0, flows, labels, flowLine }) {
         <rect class="door" x="264" y="192" width="26" height="46" rx="3"/>
         <rect class="win" x="236" y="168" width="20" height="18" rx="2"/>
       </g>
-      <g class="battery-box"><rect x="96" y="176" width="34" height="62" rx="7"/><rect class="lvl" x="101" y="${181 + Math.round(52 * (1 - lvl / 100))}" width="24" height="${Math.round(52 * (lvl / 100))}" rx="4"/></g>
+      <g class="battery-box"><rect x="96" y="176" width="34" height="62" rx="7"/><rect class="lvl ${bat.color}${bat.charging ? ' chg' : ''}" x="101" y="${181 + Math.round(52 * (1 - lvl / 100))}" width="24" height="${Math.round(52 * (lvl / 100))}" rx="4"/></g>
       ${line('solar', 'M196 128 L196 168')}
       ${line('grid', 'M330 150 L330 160 L210 160 L210 168')}
       ${line('load', 'M212 186 L250 186 L250 214 L264 214')}
