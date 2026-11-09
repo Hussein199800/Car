@@ -164,6 +164,11 @@ export function countAr(n, [one, two, few, many]) {
 export const LOC = 'ar-u-nu-latn';
 const p2 = (x) => String(x).padStart(2, '0');
 
+// صيغة الوقت: 12 ساعة (5:30 م) افتراضياً، أو 24 ساعة (17:30) من الإعدادات
+let CLOCK12 = true;
+export const setClock12 = (v) => { CLOCK12 = v !== false; };
+const clock = (h, mi) => (CLOCK12 ? `${h % 12 || 12}:${p2(mi)} ${h < 12 ? 'ص' : 'م'}` : `${p2(h)}:${p2(mi)}`);
+
 export const fmt = {
   // نسبة داخل نص عربي: نعزلها اتجاهياً حتى لا تظهر «(%45)» بين الأقواس
   pct: (n) => `\u2066${n}%\u2069`,
@@ -192,8 +197,10 @@ export const fmt = {
     if (h < 24) return 'قبل ' + countAr(h, HOUR) + (m % 60 ? ' و' + countAr(m % 60, MIN) : '');
     return 'قبل ' + countAr(Math.floor(h / 24), DAY);
   },
-  time: (t) => new Date(t).toLocaleTimeString(LOC, { hour: '2-digit', minute: '2-digit' }),
-  dateTime: (t) => new Date(t).toLocaleString(LOC, { dateStyle: 'medium', timeStyle: 'short' }),
+  time: (t) => { const d = new Date(t); return clock(d.getHours(), d.getMinutes()); },
+  // وقت نصي «HH:MM» (مثل الشروق والغروب من خدمة الطقس) بالصيغة نفسها
+  hm: (s) => { const [h, mi] = String(s || '').split(':').map(Number); return Number.isFinite(h) ? clock(h, mi || 0) : '—'; },
+  dateTime: (t) => `${new Date(t).toLocaleDateString(LOC, { dateStyle: 'medium' })} ${fmt.time(t)}`,
   // تاريخ يوم بصيغة YYYY-MM-DD (منتصف النهار لتجنّب مشاكل التوقيت الصيفي)
   day: (date, opts) => new Date(date + 'T12:00:00').toLocaleDateString(LOC, opts),
   // للملفات المصدّرة: صيغة ثابتة يفهمها Excel بلا رموز اتجاه مخفية

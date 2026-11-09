@@ -8,7 +8,7 @@ import {
   LinearScale, CategoryScale, Filler, Tooltip, Legend,
 } from 'chart.js';
 import { WatchPowerApi, ApiError, errorAr } from './api.js';
-import { normalize, rowsToSamples, fmt, latinDigits, LOC, countAr, DAY, parseTs } from './model.js';
+import { normalize, rowsToSamples, fmt, latinDigits, LOC, countAr, DAY, parseTs, setClock12 } from './model.js';
 import { trTitle, trValue, trUnit, isEmptyVal, warnAr } from './i18n.js';
 import {
   store, today, addDays, dayKey, recordSample, localDay, summarize, cachedSummary, cacheSummary, toCsv, shareFile,
@@ -32,7 +32,7 @@ import { TIP_SECTIONS, smartTips, tipOfDay } from './tips.js';
 Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, CategoryScale, Filler, Tooltip, Legend);
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '3.9.0';
+const VERSION = '3.10.0';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -46,6 +46,9 @@ const DEFAULT_PREFS = {
   theme: 'auto',
   // شكل المشهد في الرئيسية: صور واقعية، أو رسم ثلاثي الأبعاد، أو الكلاسيكي
   sceneStyle: 'photo',
+  // صيغة الوقت 12 ساعة (ص/م) أو 24 ساعة، ونوع الخط
+  clock12: true,
+  fontFamily: 'Cairo',
   notify: true,
   lowSoc: 30,
   overloadPct: 80,
@@ -147,11 +150,18 @@ function fitScreen() {
   return true;
 }
 
+// الخطوط المضمّنة في التطبيق (تعمل بلا إنترنت)
+const FONTS = [['Cairo', 'القاهرة'], ['Tajawal', 'تجوّل'], ['IBM Plex Sans Arabic', 'بلكس'], ['Almarai', 'المراعي']];
+
 function applyTheme() {
   const t = state.prefs.theme;
   const dark = t === 'dark' || (t === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
   document.documentElement.style.setProperty('--fs', String(state.prefs.fontScale || 1));
+  const font = FONTS.find((f) => f[0] === state.prefs.fontFamily)?.[0] || 'Cairo';
+  document.documentElement.style.setProperty('--font', `'${font}'`);
+  Chart.defaults.font.family = `'${font}', Cairo, system-ui, sans-serif`;
+  setClock12(state.prefs.clock12 !== false);
   Chart.defaults.color = dark ? '#9aa7c7' : '#5b6785';
   Chart.defaults.locale = LOC;
   if (Capacitor.isNativePlatform()) {
@@ -371,7 +381,7 @@ const TOUR_CASES = [
 ];
 const TOUR = [
   { t: 'أهلاً بك في طاقتي', p: ['تابع منظومتك الشمسية لحظة بلحظة: الألواح والبطارية والكهرباء والبيت في مشهد واحد.', 'هذه جولة قصيرة في التطبيق. يمكنك تخطيها والعودة إليها من «المزيد».'], scene: 0 },
-  { t: 'الرئيسية', p: ['المشهد يتغيّر مع حالة منظومتك: النبضات الخضراء تسري باتجاه الطاقة، والقيم في الزوايا، والسماء من طقس موقعك.', 'اضغط أي قيمة أو عنصر لتفتح تفاصيله.'], cycle: true },
+  { t: 'الرئيسية', p: ['المشهد يتغيّر مع حالة منظومتك، وأسهم ملوّنة تسري باتجاه الطاقة: أصفر من الألواح، بنفسجي من الشبكة، أخضر شحن البطارية، برتقالي سحب منها، أزرق إلى البيت.', 'اضغط أي قيمة أو عنصر لتفتح تفاصيله.'], cycle: true },
   { t: 'التقارير', ic: 'chart', p: ['مؤشر الاستقلالية عن الكهرباء في الأعلى.', 'تقارير يومية وأسبوعية وشهرية وسنوية، و«ملاحظات على منظومتك» بتوصيات من قراءاتك.'] },
   { t: 'التنبيهات', ic: 'bell', p: ['انقطاع الكهرباء وعودتها، انخفاض البطارية، الحمل الزائد، والأعطال، حتى والتطبيق مغلق.', 'واختر شروط التنبيه بنفسك، واطّلع على سجل أعطال الإنفرتر من الخادم.'] },
   { t: 'المزيد', ic: 'gear', p: ['الإعدادات: سعة البطارية، قدرة الألواح، موقعك للطقس، المظهر وحجم الخط.', 'حاسبة الأحمال والتوفير بالمال، النصائح، وإعدادات الإنفرتر عن بُعد.'] },
@@ -421,10 +431,10 @@ function openTour() {
 
 // ما الجديد في هذا الإصدار: يظهر مرة واحدة بعد التحديث
 const WHATS_NEW = [
-  'مشهد بصور واقعية للبيت يتبدّل مع الطقس والغروب والليل، وتضيء فيه شرائح البطارية بنسبتها الحقيقية.',
-  'اختر شكل المشهد من الإعدادات: صور واقعية، أو رسم ثلاثي الأبعاد، أو الكلاسيكي.',
-  'إصلاح خانات الإعدادات: سعة البطارية وقدرة الألواح تُكتب وتُحفظ الآن، والبحث عن المدينة يعمل أثناء الكتابة ويجد «ادلب» بلا همزة.',
-  'الأجهزة اللوحية بنفس تناسق الهاتف: عمودياً تصميم الهاتف مكبّراً، وأفقياً عمودان متساويان.',
+  'لكل اتجاه طاقة لون: أصفر من الألواح، بنفسجي من الشبكة، أخضر شحن البطارية، برتقالي سحب منها، أزرق إلى البيت، ودليل للألوان تحت المشهد.',
+  'سطر حالة واضح: متصل · الوضع · تشحن أو تُفرّغ · تكتمل أو تكفي حتى ساعة محددة.',
+  'صيغة الوقت 12 ساعة (ص/م) أو 24 ساعة، وأربعة خطوط عربية، وحجم «أصغر» للخط.',
+  'المشهد ثلاثي الأبعاد أنظف: شرائح بطارية مضيئة بدل النص المائل، وزوايا موحّدة في كل التطبيق.',
 ];
 function openWhatsNew() {
   store.set('seenVersion', VERSION);
@@ -882,12 +892,24 @@ function eta(m) {
   const wh = p.batteryAh * nominal;
   if (m.batW < -10) {
     const usable = Math.max(0, (m.soc - p.cutoffSoc) / 100) * wh;
-    return { known: true, text: 'تكفي لمدة ' + fmt.hours(usable / -m.batW), sub: `حتى ${p.cutoffSoc}% بمعدل السحب الحالي` };
+    return { known: true, hours: usable / -m.batW, text: 'تكفي لمدة ' + fmt.hours(usable / -m.batW), sub: `حتى ${p.cutoffSoc}% بمعدل السحب الحالي` };
   }
   if (m.batW > 10) {
-    return { known: true, text: 'يكتمل الشحن خلال ' + fmt.hours((Math.max(0, 100 - m.soc) / 100) * wh / m.batW), sub: 'بمعدل الشحن الحالي' };
+    const hrs = (Math.max(0, 100 - m.soc) / 100) * wh / m.batW;
+    return { known: true, hours: hrs, text: 'يكتمل الشحن خلال ' + fmt.hours(hrs), sub: `نحو الساعة ${fmt.time(Date.now() + hrs * 36e5)} بمعدل الشحن الحالي` };
   }
   return { known: true, text: m.soc >= 99 ? 'البطارية ممتلئة' : 'البطارية مستقرة', sub: '' };
+}
+
+// سطر الحالة: الاتصال · الوضع · ما تفعله البطارية · متى تكتمل أو إلى متى تكفي (بساعة فعلية)
+function statusBar(m, modeText, modeCls, e, live) {
+  const parts = [`<span class="sb-conn"><i></i>${live ? 'متصل' : 'غير متصل'}</span>`];
+  if (live) parts.push(`<span>${esc(modeText)}</span>`);
+  if (live && m.batW > 10) parts.push(`<span class="sb-chg">تشحن <bdi>${fmt.wShort(m.batW)}</bdi></span>`);
+  else if (live && m.batW < -10) parts.push(`<span class="sb-dis">تُفرّغ <bdi>${fmt.wShort(-m.batW)}</bdi></span>`);
+  else if (live && (m.soc ?? 0) >= 99) parts.push('<span class="sb-chg">ممتلئة</span>');
+  if (live && e.known && e.hours > 0 && e.hours < 72) parts.push(`<span>${m.batW > 10 ? 'تكتمل' : 'تكفي حتى'} <bdi>${fmt.time(Date.now() + e.hours * 36e5)}</bdi></span>`);
+  return `<div class="status-bar ${modeCls}">${parts.join('<b class="sb-sep">·</b>')}</div>`;
 }
 
 const batState = (m) => (m.stale ? 'لا توجد قراءة حيّة' : m.batW > 10 ? `تشحن بقدرة ${fmt.w(m.batW)}` : m.batW < -10 ? `تُفرّغ بقدرة ${fmt.w(-m.batW)}` : 'في وضع الراحة');
@@ -895,17 +917,18 @@ const batState = (m) => (m.stale ? 'لا توجد قراءة حيّة' : m.batW 
 // ================= الرئيسية =================
 // خط تدفق بأسهم تتحرك باتجاه الطاقة الفعلي، وسرعتها تزيد مع القدرة.
 // reverse يعني أن الطاقة تسير عكس اتجاه رسم الخط (مثل خروجها من البطارية عند التفريغ).
-function flowLine(id, d, on, watts, reverse) {
+function flowLine(id, d, on, watts, reverse, kind = id) {
   const track = `<path class="wire" d="${d}"/>`;
   if (!on) return track;
   const dur = Math.max(0.7, 2.6 - Math.log10(Math.abs(watts || 50) + 1) * 0.5).toFixed(2);
   const keys = reverse ? 'keyPoints="1;0" keyTimes="0;1" calcMode="linear" rotate="auto-reverse"' : 'rotate="auto"';
   // نبضات ضوء تسري على السلك باتجاه الطاقة
+  // أسهم (›) تسري باتجاه الطاقة، بلون نوع التدفق: ألواح، شبكة، شحن، تفريغ، البيت
   const arrows = [0, 1, 2].map((i) => `
-    <path class="arrow a-${id}" d="M-6 0 L3 0">
+    <path class="arrow a-${id} k-${kind}" d="M-4 -4 L1 0 L-4 4">
       <animateMotion dur="${dur}s" begin="${(-i * dur / 3).toFixed(2)}s" repeatCount="indefinite" ${keys}><mpath href="#fp-${id}"/></animateMotion>
     </path>`).join('');
-  return `${track}<path id="fp-${id}" class="flow-line f-${id}" d="${d}"/>${arrows}`;
+  return `${track}<path id="fp-${id}" class="flow-line f-${id} k-${kind}" d="${d}"/>${arrows}`;
 }
 
 // اتجاه البطارية مكتوباً تحت النسبة حتى يكون واضحاً بلا حاجة لمتابعة الحركة
@@ -938,7 +961,7 @@ function viewHome() {
   ${banner()}
   ${urgentTip(m)}
   <div class="home-grid"><div class="col-a">
-  <div class="mode-pill ${modeCls}">${esc(modeText)}</div>
+  ${statusBar(m, modeText, modeCls, e, live)}
   ${scene(m, live, isLine)}
 
 
@@ -986,11 +1009,11 @@ function sceneParts(m, live, isLine) {
   return {
     soc: Math.max(0, Math.min(100, m.soc ?? 0)),
     flows: {
-      solar: { on: pv, w: m.pvW, reverse: false },
-      grid: { on: live && isLine && m.gridOn, w: 300, reverse: false },
-      load: { on: live && (m.outW ?? 0) > 5, w: m.outW, reverse: false },
-      // المسار مرسوم من الإنفرتر إلى البطارية، فالتفريغ يسير عكسه
-      bat: { on: live && Math.abs(m.batW ?? 0) > 10, w: m.batW, reverse: (m.batW ?? 0) < 0 },
+      solar: { on: pv, w: m.pvW, reverse: false, kind: 'sun' },
+      grid: { on: live && isLine && m.gridOn, w: 300, reverse: false, kind: 'grid' },
+      load: { on: live && (m.outW ?? 0) > 5, w: m.outW, reverse: false, kind: 'load' },
+      // المسار مرسوم من الإنفرتر إلى البطارية، فالتفريغ يسير عكسه وبلون مختلف عن الشحن
+      bat: { on: live && Math.abs(m.batW ?? 0) > 10, w: m.batW, reverse: (m.batW ?? 0) < 0, kind: (m.batW ?? 0) < 0 ? 'dis' : 'chg' },
     },
     labels: {
       solar: { value: fmt.wShort(m.pvW), dim: !pv },
@@ -1019,8 +1042,16 @@ function sceneBody(m, live, isLine, sky, parts, sunset) {
     const led = !live ? 'off' : m.fault ? 'bad' : 'ok';
     return { cls: `st-photo ph-${img} ${photoIsDark(img) ? 'ph-dark' : ''}`, html: scenePhoto({ img, ...parts, flowLine, bat, led }) };
   }
-  if (style === 'classic') return { cls: 'st-classic', html: SKY_FX + sceneClassic({ ...parts, flowLine }) };
-  return { cls: 'st-3d', html: SKY_FX + scene3d({ ...parts, flowLine }) };
+  const look = batLook({ soc: m.soc, batW: m.batW, live, low: state.prefs.lowSoc, gridCharging: live && isLine && m.gridOn && (m.pvW ?? 0) < 50 });
+  if (style === 'classic') return { cls: 'st-classic', html: SKY_FX + sceneClassic({ ...parts, flowLine, bat: look }) };
+  return { cls: 'st-3d', html: SKY_FX + scene3d({ ...parts, flowLine, bat: look }) };
+}
+
+const FLOW_NAMES = { sun: 'من الألواح', grid: 'من الشبكة', chg: 'شحن البطارية', dis: 'من البطارية', load: 'إلى البيت' };
+function flowLegend(flows) {
+  const on = ['solar', 'grid', 'bat', 'load'].filter((k) => flows[k].on).map((k) => flows[k].kind);
+  if (!on.length) return '<div class="flow-legend"><span class="fl-none">لا تمر طاقة الآن</span></div>';
+  return `<div class="flow-legend">${on.map((k) => `<span class="fl k-${k}"><i></i>${FLOW_NAMES[k]}</span>`).join('')}</div>`;
 }
 
 function scene(m, live, isLine) {
@@ -1032,20 +1063,21 @@ function scene(m, live, isLine) {
   const parts = sceneParts(m, live, isLine);
   const full = (m.soc ?? 0) >= 98;
   const body = sceneBody(m, live, isLine, sky, parts, w?.sunset);
-  const wx = w
-    ? `<span class="wx-t">${esc(SKY_AR[w.sky])}</span>${loc?.name ? `<span>${esc(loc.name)}</span>` : ''}${w.sunrise ? `<span>${w.sunrise}–${w.sunset}</span>` : ''}`
-    : loc ? '<span>جارٍ جلب الطقس…</span>' : '<button class="link" data-goto="more:settings">حدّد موقع منظومتك لعرض الطقس</button>';
+  // الطقس في صف الشرائح تحت المشهد، فلا يزاحم القيم فوق الصورة
+  const wxNote = w ? '' : loc ? '<span class="tchip"><small>جارٍ جلب الطقس…</small></span>' : '<button class="tchip link" data-goto="more:settings">حدّد موقع منظومتك لعرض الطقس</button>';
   // درجات الحرارة: الجو من الطقس، والإنفرتر والبطارية إن كان الجهاز يرسلها
   const temps = [
-    w?.temp != null ? `<span class="tchip" title="حرارة الجو">${icons.thermo}<b><bdi>${w.temp}°</bdi></b><small>الجو</small></span>` : '',
+    wxNote,
+    w?.temp != null ? `<span class="tchip" title="حرارة الجو">${icons.thermo}<b><bdi>${w.temp}°</bdi></b><small>الجو · ${esc(SKY_AR[w.sky] || '')}${loc?.name ? ' · ' + esc(loc.name) : ''}</small></span>` : '',
+    w?.sunrise && w?.sunset ? `<span class="tchip sun-t" title="الشروق والغروب">${icons.sun}<b><bdi>${fmt.hm(w.sunrise)}</bdi></b><small>إلى</small><b><bdi>${fmt.hm(w.sunset)}</bdi></b></span>` : '',
     m.invTemp != null ? `<span class="tchip ${m.invTemp >= state.prefs.tempInv ? 'hot' : ''}">${icons.inverter}<b><bdi>${numAr(m.invTemp)}°</bdi></b><small>الإنفرتر</small></span>` : '',
     m.batTemp != null ? `<span class="tchip ${m.batTemp >= state.prefs.tempBat ? 'hot' : ''}">${icons.battery}<b><bdi>${numAr(m.batTemp)}°</bdi></b><small>البطارية</small></span>` : '',
   ].join('');
   return `
   <section class="card flow-card scene ${body.cls} sky-${sky} ${live ? '' : 'stale'} ${pv ? 'pv-on' : ''} ${full ? 'bat-full' : ''} ${parts.flows.bat.on ? (parts.flows.bat.reverse ? 'bat-dis' : 'bat-chg') : ''}">
     ${body.html}
-    <div class="wx">${wx}</div>
   </section>
+  ${flowLegend(parts.flows)}
   ${temps ? `<div class="tchips">${temps}</div>` : ''}
   ${story ? `<section class="story ${story.level}"><b>${esc(story.title)}</b><p>${esc(story.text)}</p></section>` : ''}
   ${state.demo ? `<div class="chips-sel demo-sky">${[['', 'الآن'], ['clear', 'مشمس'], ['partly', 'غائم جزئياً'], ['rain', 'ماطر'], ['night', 'ليل']].map(([k, l]) => `<button data-demo-sky="${k}" class="${(state.demoSky || '') === k ? 'on' : ''}">${l}</button>`).join('')}</div>` : ''}`;
@@ -2219,15 +2251,20 @@ AFTER.more = () => {
 };
 
 function pageCustom() {
-  const sizes = [[0.9, 'صغير'], [1, 'عادي'], [1.1, 'كبير'], [1.2, 'أكبر']];
+  const sizes = [[0.8, 'أصغر'], [0.9, 'صغير'], [1, 'عادي'], [1.1, 'كبير'], [1.2, 'أكبر']];
+  const cur = state.prefs.fontFamily || 'Cairo';
   const scenes = [['photo', 'صور واقعية', 'day'], ['3d', 'رسم ثلاثي الأبعاد', 'thumb-3d'], ['classic', 'الكلاسيكي', 'thumb-classic']];
   return `<section class="card"><div class="card-h"><h2>المظهر</h2></div>${pageTheme()}</section>
   <section class="card"><div class="card-h"><h2>شكل المشهد في الرئيسية</h2></div>
     <div class="scene-opts">${scenes.map(([v, l, img]) => `<button class="scene-opt ${sceneStyle() === v ? 'on' : ''}" data-scene-opt="${v}"><img src="scene/${img}.webp" alt="" loading="lazy"><b>${l}</b></button>`).join('')}</div>
     <p class="hint center">«صور واقعية» تتبدّل مع الطقس والليل وحالة البطارية.</p></section>
   <section class="card"><div class="card-h"><h2>حجم الخط</h2></div>
-    <div class="theme-opts">${sizes.map(([v, l]) => `<button class="theme-opt fs-opt ${Number(state.prefs.fontScale || 1) === v ? 'on' : ''}" data-fs="${v}"><b style="font-size:${Math.round(15 * v)}px">أ</b><b>${l}</b></button>`).join('')}</div>
-    <p class="hint center">يغيّر حجم النصوص في كل التطبيق، وتتكيّف البطاقات معه.</p></section>`;
+    <div class="theme-opts fs-opts">${sizes.map(([v, l]) => `<button class="theme-opt fs-opt ${Number(state.prefs.fontScale || 1) === v ? 'on' : ''}" data-fs="${v}"><b style="font-size:${Math.round(15 * v)}px">أ</b><b>${l}</b></button>`).join('')}</div>
+    <p class="hint center">يغيّر حجم النصوص في كل التطبيق، وتتكيّف البطاقات معه.</p></section>
+  <section class="card"><div class="card-h"><h2>نوع الخط</h2></div>
+    <div class="font-opts">${FONTS.map(([f, l]) => `<button class="font-opt ${cur === f ? 'on' : ''}" data-font="${f}" style="font-family:'${f}'"><b>طاقتي 123</b><small>${l}</small></button>`).join('')}</div></section>
+  <section class="card"><div class="card-h"><h2>صيغة الوقت</h2></div>
+    <div class="seg clock-seg">${[[true, '12 ساعة · 5:30 م'], [false, '24 ساعة · 17:30']].map(([v, l]) => `<button class="${(state.prefs.clock12 !== false) === v ? 'on' : ''}" data-clock="${v ? 12 : 24}">${l}</button>`).join('')}</div></section>`;
 }
 AFTER.custom = () => {
   AFTER.theme();
@@ -2236,6 +2273,12 @@ AFTER.custom = () => {
   });
   document.querySelectorAll('[data-fs]').forEach((b) => {
     b.onclick = () => { state.prefs.fontScale = Number(b.dataset.fs); savePrefs(); applyTheme(); render(); };
+  });
+  document.querySelectorAll('[data-font]').forEach((b) => {
+    b.onclick = () => { state.prefs.fontFamily = b.dataset.font; savePrefs(); applyTheme(); render(); };
+  });
+  document.querySelectorAll('[data-clock]').forEach((b) => {
+    b.onclick = () => { state.prefs.clock12 = b.dataset.clock === '12'; savePrefs(); applyTheme(); render(); };
   });
 };
 
@@ -2528,7 +2571,7 @@ async function boot() {
   else renderLogin();
 }
 
-// للاختبارات الآلية في المتصفح فقط
-if (!isNative) window.__nav = navigate;
+// أدوات للاختبارات في المتصفح فقط
+if (!isNative) { window.__nav = navigate; window.__state = state; window.__render = render; }
 
 boot();

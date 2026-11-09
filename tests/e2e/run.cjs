@@ -486,7 +486,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       check('مشهد الصور افتراضياً: صورة النهار والمطر والليل حسب الطقس', scenes.clear.img.endsWith('day.webp') && scenes.rain.img.endsWith('rain.webp') && scenes.night.img.endsWith('night.webp'), [scenes.clear.img, scenes.rain.img, scenes.night.img].join(' '));
       {
         const soc = parseInt((await text(page, '.n-bat b')).replace(/\D/g, ''), 10);
-        const lit = await page.$$eval('.bat-segs .seg.on', (a) => a.length);
+        const lit = await page.$$eval('.bat-segs .bseg.on', (a) => a.length);
         check('شرائح البطارية على الصورة بنسبة الشحن الحقيقية', lit === Math.max(1, Math.round((soc / 100) * 6)), `${soc}% → ${lit}`);
         const imgOk = await page.$eval('.ph-img', (e) => e.complete && e.naturalWidth === 1088);
         check('صورة المشهد تُحمَّل من التطبيق نفسه', imgOk);
@@ -643,7 +643,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       check('ثلاثة أشكال للمشهد، والصور مختارة افتراضياً', (await page.$$('[data-scene-opt]')).length === 3 && !!(await page.$('[data-scene-opt=photo].on')));
       const thumbs = await page.$$eval('.scene-opt img', (a) => a.map((i) => i.complete && i.naturalWidth > 0));
       check('صور مصغّرة لكل شكل', thumbs.length === 3 && thumbs.every(Boolean), JSON.stringify(thumbs));
-      for (const [st, sel, label] of [['3d', '.bat-pct', 'رسم ثلاثي الأبعاد'], ['classic', '.battery-box', 'الكلاسيكي']]) {
+      for (const [st, sel, label] of [['3d', '.bseg', 'رسم ثلاثي الأبعاد'], ['classic', '.battery-box', 'الكلاسيكي']]) {
         await page.evaluate(() => window.__nav('more', 'settings')); await page.waitForTimeout(300);
         await page.$eval(`[data-scene-opt="${st}"]`, (e) => e.scrollIntoView({ block: 'center' }));
         await page.click(`[data-scene-opt="${st}"]`); await page.waitForTimeout(300);
@@ -653,6 +653,44 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
         check(`الشكل «${label}» يظهر في الرئيسية ويتحرك`, !!ok && moving >= 3, `${!!ok} ${moving}`);
       }
       check('بلا أخطاء JavaScript (3.9)', page.errors.length === 0, page.errors.join(' | '));
+      await page.context().close();
+    }
+
+    // 18) 3.10: ألوان التدفق حسب الاتجاه، شريط الحالة، صيغة الوقت، نوع الخط
+    {
+      const page = await newPage(browser, { loggedIn: false });
+      await page.click('#demoBtn'); await page.waitForSelector('.flow-card');
+      const kinds = async () => page.$$eval('.scene .arrow', (a) => [...new Set(a.map((e) => [...e.classList].find((c) => c.startsWith('k-'))))].sort().join(','));
+      const legend = async () => page.$$eval('.flow-legend .fl', (a) => a.map((e) => e.textContent.trim()).join('|'));
+      await page.click('[data-demo-sky="clear"]'); await page.waitForTimeout(600);
+      const day = { k: await kinds(), l: await legend(), bar: await text(page, '.status-bar') };
+      await page.click('[data-demo-sky="night"]'); await page.waitForTimeout(600);
+      const night = { k: await kinds(), l: await legend(), bar: await text(page, '.status-bar') };
+      check('نهاراً: أسهم الألواح والشحن والبيت بألوان مختلفة', day.k === 'k-chg,k-load,k-sun', JSON.stringify(day));
+      check('ليلاً: سحب البطارية بلون التفريغ وليس لون الشحن أو الألواح', night.k === 'k-dis,k-load' && night.l.includes('من البطارية'), JSON.stringify(night));
+      check('شريط الحالة: متصل والوضع وما تفعله البطارية', day.bar.includes('متصل') && day.bar.includes('تشحن') && night.bar.includes('تُفرّغ'), `${day.bar} / ${night.bar}`);
+      const gap = await page.evaluate(() => document.querySelector('.flow-card').getBoundingClientRect().top - document.querySelector('.status-bar').getBoundingClientRect().bottom);
+      check('شريط الحالة منفصل عن المشهد بمسافة', gap >= 10, String(gap));
+      // البطارية ممتلئة ولا يمر فيها شيء: لا أسهم لها
+      await page.evaluate(() => { const m = window.__state.model; window.__state.model = { ...m, soc: 100, batW: 0 }; window.__render(); });
+      await page.waitForTimeout(300);
+      check('بطارية ممتلئة بلا شحن ولا تفريغ: لا أسهم دخول أو خروج لها', (await page.$$('.scene .arrow.a-bat')).length === 0 && !(await legend()).includes('البطارية'));
+      // الشروق والغروب بصيغة 12 ساعة افتراضياً، و24 من الإعدادات
+      await page.click('[data-demo-sky="clear"]'); await page.waitForTimeout(500);
+      const t12 = await text(page, '.sun-t');
+      check('الشروق والغروب بصيغة 12 ساعة (ص/م)', /\d{1,2}:\d{2} ص/.test(t12) && /\d{1,2}:\d{2} م/.test(t12), t12);
+      await page.evaluate(() => window.__nav('more', 'settings')); await page.waitForTimeout(300);
+      await page.click('[data-clock="24"]'); await page.waitForTimeout(200);
+      await page.$eval('[data-font="Tajawal"]', (e) => e.scrollIntoView({ block: 'center' }));
+      await page.click('[data-font="Tajawal"]'); await page.waitForTimeout(200);
+      await page.$eval('[data-fs="0.8"]', (e) => e.scrollIntoView({ block: 'center' }));
+      await page.click('[data-fs="0.8"]'); await page.waitForTimeout(200);
+      await page.evaluate(() => window.__nav('home', null)); await page.waitForTimeout(500);
+      const t24 = await text(page, '.sun-t');
+      check('صيغة 24 ساعة تُطبَّق على الأوقات', /\d{2}:\d{2}/.test(t24) && !/[صم]\b/.test(t24.replace('إلى', '')), t24);
+      const look = await page.evaluate(() => ({ font: getComputedStyle(document.body).fontFamily, fs: getComputedStyle(document.documentElement).getPropertyValue('--fs').trim(), loaded: document.fonts.check("16px 'Tajawal'", 'طاقتي') }));
+      check('تغيير نوع الخط وتصغيره يُطبّقان على التطبيق كله', look.font.startsWith('Tajawal') && look.fs === '0.8' && look.loaded, JSON.stringify(look));
+      check('بلا أخطاء JavaScript (3.10)', page.errors.length === 0, page.errors.join(' | '));
       await page.context().close();
     }
 

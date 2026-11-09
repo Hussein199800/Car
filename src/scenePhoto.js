@@ -49,9 +49,9 @@ export function scenePhoto({ img, flows, labels, flowLine, bat, led }) {
     const on = i < bat.lit;
     const sy = y + h - (i + 1) * sh - i * gap;
     const top = on && i === bat.lit - 1 && bat.charging ? ' top' : '';
-    return `<rect class="seg${on ? ' on ' + bat.color : ''}${top}" x="${x}" y="${sy.toFixed(1)}" width="${w}" height="${sh.toFixed(1)}" rx="2.5"/>`;
+    return `<rect class="bseg${on ? ' on ' + bat.color : ''}${top}" x="${x}" y="${sy.toFixed(1)}" width="${w}" height="${sh.toFixed(1)}" rx="2.5"/>`;
   }).join('');
-  const line = (id) => flowLine(id, PATHS[id], flows[id].on, flows[id].w, flows[id].reverse);
+  const line = (id) => flowLine(id, PATHS[id], flows[id].on, flows[id].w, flows[id].reverse, flows[id].kind);
   return `<img class="ph-img" src="scene/${img}.webp" alt="" decoding="async" draggable="false">
   <svg viewBox="0 0 ${PHOTO_W} ${PHOTO_H}" class="flow-svg scene-svg photo" aria-hidden="true">
     ${line('grid')}${line('solar')}${line('bat')}${line('load')}

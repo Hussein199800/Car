@@ -1,9 +1,9 @@
 // مشهد ثلاثي الأبعاد (إسقاط متساوي القياس) بأسلوب نظيف: بيت أبيض بسقف ألواح داكنة، مرآب بسيارة، بطارية
-// مكتوبة نسبتها عليها، إنفرتر على الجدار، وبرج كهرباء. القيم في الزوايا الأربع تصلها خطوط برتقالية متقطعة بالعناصر،
-// والأسلاك الداكنة تسري فيها نبضات ضوء باتجاه الطاقة الحقيقي.
+// تضيء شرائحها بنسبة الشحن، إنفرتر على الجدار، وبرج كهرباء. القيم في الزوايا الأربع،
+// والأسلاك تسري فيها أسهم ملوّنة باتجاه الطاقة الحقيقي (لون لكل نوع تدفق).
 
-const S = 25; // حجم الوحدة بالبكسل
-const OX = 206, OY = 96;
+const S = 23; // حجم الوحدة بالبكسل
+const OX = 198, OY = 104;
 const C30 = Math.cos(Math.PI / 6), S30 = 0.5;
 
 // من إحداثيات العالم إلى الشاشة
@@ -20,11 +20,6 @@ function box(cls, x0, x1, y0, y1, z0, z1) {
     + poly(`${cls} sy`, [x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]);
 }
 
-// نص مرسوم على وجه يواجه +y (يميل مع اتجاه x)
-const faceText = (cls, x, y, z, txt) => {
-  const [sx, sy] = P(x, y, z);
-  return `<text class="${cls}" transform="matrix(${C30.toFixed(3)},${S30},0,1,${sx.toFixed(1)},${sy.toFixed(1)})">${txt}</text>`;
-};
 
 function house() {
   const [x0, x1, y0, y1, h, ridge] = [3.2, 8.4, 3.2, 7.4, 3.1, 5.2];
@@ -61,7 +56,8 @@ function garage() {
   s += poly('gar-open', [0.75, 7.4, 0], [3.05, 7.4, 0], [3.05, 7.4, 1.8], [0.75, 7.4, 1.8]);
   for (let i = 0; i < 4; i++) s += `<path class="slat" d="${path([0.75, 7.41, 1.75 - i * 0.12], [3.05, 7.41, 1.75 - i * 0.12])}"/>`;
   s += box('car', 1.0, 2.8, 6.4, 8.4, 0.25, 0.85) + box('car cab', 1.25, 2.55, 6.6, 7.7, 0.85, 1.35);
-  for (const [x, y] of [[1.15, 8.4], [2.65, 8.4]]) { const [cx, cy] = P(x, y, 0.25); s += `<ellipse class="wheel" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" rx="5" ry="6"/>`; }
+  // العجلات على جانب السيارة الظاهر، ملامسة للأرض
+  for (const y of [6.85, 7.95]) { const [cx, cy] = P(2.8, y, 0.28); s += `<ellipse class="wheel" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" rx="3.6" ry="4.6"/>`; }
   return s;
 }
 
@@ -78,21 +74,24 @@ function pylon() {
   return `<path class="tower" d="${d}"/>`;
 }
 
-// خط برتقالي متقطع من قيمة الزاوية إلى العنصر: أفقي ثم عمودي
-const leader = (from, to) => `<path class="leader" d="M${pt(from)} L${pt([to[0], from[1]])} L${pt(to)}"/>`;
 
 /**
  * يبني المشهد. flowLine تأتي من الواجهة (نبضات متحركة على مسار)، فتبقى سلوكياتها واختباراتها كما هي.
  */
-export function scene3d({ soc = 0, flows, labels, flowLine }) {
-  const lvl = Math.max(0, Math.min(1, soc / 100));
-  const bat = box('bat', 3.3, 4.3, 7.8, 8.8, 0, 2.6)
-    + poly('bat-lvl', [3.4, 8.8, 0.15], [3.5, 8.8, 0.15], [3.5, 8.8, 0.15 + 2.3 * lvl], [3.4, 8.8, 0.15 + 2.3 * lvl])
-    + `<circle class="bat-led" cx="${P(3.8, 8.8, 2.25)[0].toFixed(1)}" cy="${P(3.8, 8.8, 2.25)[1].toFixed(1)}" r="2.2"/>`
-    + faceText('bat-pct', 3.55, 8.8, 0.95, `${Math.round(soc)}%`);
+export function scene3d({ flows, labels, flowLine, bat: look = { lit: 0, color: '' } }) {
+  // شرائح البطارية على وجهها الأمامي بنسبة الشحن الحقيقية ولون حالتها (نفس منطق مشهد الصور)
+  const N = 5, z0 = 0.3, z1 = 2.2, gap = 0.08, hh = (z1 - z0 - gap * (N - 1)) / N;
+  let segs = poly('bat-win', [3.55, 8.8, z0 - 0.08], [4.05, 8.8, z0 - 0.08], [4.05, 8.8, z1 + 0.08], [3.55, 8.8, z1 + 0.08]);
+  const litN = look.lit ? Math.max(1, Math.round((look.lit / 6) * N)) : 0;
+  for (let i = 0; i < N; i++) {
+    const a = z0 + i * (hh + gap), b = a + hh, on = i < litN;
+    const top = on && look.charging && i === litN - 1 ? ' top' : '';
+    segs += poly(`bseg${on ? ' on ' + look.color : ''}${top}`, [3.62, 8.8, a], [3.98, 8.8, a], [3.98, 8.8, b], [3.62, 8.8, b]);
+  }
+  const bat = box('bat', 3.3, 4.3, 7.8, 8.8, 0, 2.6) + segs;
   const inv = box('inv', 4.9, 5.8, 7.4, 7.75, 1.3, 2.5) + poly('inv-band', [5.05, 7.75, 1.8], [5.65, 7.75, 1.8], [5.65, 7.75, 1.95], [5.05, 7.75, 1.95]);
   const ground = poly('ground top', [-0.5, -0.5, 0], [12, -0.5, 0], [12, 11.5, 0], [-0.5, 11.5, 0]);
-  const line = (id, pts, f) => flowLine(id, path(...pts), f.on, f.w, f.reverse);
+  const line = (id, pts, f) => flowLine(id, path(...pts), f.on, f.w, f.reverse, f.kind);
   return `<svg viewBox="0 0 400 360" class="flow-svg scene-svg iso" aria-hidden="true">
     ${ground}${pylon()}${garage()}${house()}
     <path class="cable" d="${path([9.1, 1.5, 5.4], [8.4, 3.4, 3.4])}"/>
@@ -101,10 +100,6 @@ export function scene3d({ soc = 0, flows, labels, flowLine }) {
     ${line('bat', [[4.9, 7.6, 1.6], [4.6, 7.6, 1.6], [4.6, 8.3, 1.6], [4.3, 8.3, 1.6]], flows.bat)}
     ${line('load', [[5.8, 7.55, 1.6], [7.0, 7.45, 1.6], [8.4, 7.45, 1.6], [8.4, 5.6, 1.6]], flows.load)}
     ${bat}${inv}
-    ${leader([92, 52], P(5.5, 5.6, 4.6))}
-    ${leader([318, 52], P(9.1, 1.5, 6.2))}
-    ${leader([92, 318], P(3.8, 8.8, 0))}
-    ${leader([318, 318], P(8.8, 4.8, 0))}
   </svg>
   <button class="node corner n-solar ${labels.solar.dim ? 'dim' : ''}" data-page="solar" aria-label="تفاصيل الألواح"><small>الألواح</small><b><bdi>${labels.solar.value}</bdi></b></button>
   <button class="node corner n-grid ${labels.grid.dim ? 'dim' : ''}" data-page="grid" aria-label="تفاصيل كهرباء الشبكة"><small>${labels.grid.title}</small><b><bdi>${labels.grid.value}</bdi></b></button>
