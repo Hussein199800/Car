@@ -694,6 +694,136 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.context().close();
     }
 
+    // 19) 3.11: أولوية مصدر الطاقة بتحقق من الجهاز (محاكاة)، التقدير، عدّاد الشبكة
+    {
+      const OUT_ITEMS = [{ key: '0', val: 'Utility first' }, { key: '1', val: 'Solar first' }, { key: '2', val: 'SBU' }];
+      const CHG_ITEMS = [{ key: '0', val: 'Solar first' }, { key: '3', val: 'Only solar charging permitted' }];
+      const dev = { out: '2', chg: '3', apply: true, reject: false, sent: [] };
+      const page = await newPage(browser, {
+        storage: { devCtlDelayMs: 250 },
+        api: (a, q) => {
+          if (a === 'queryDeviceLastData') return { err: 0, dat: points(Date.now() - 60000) };
+          if (a === 'queryDeviceCtrlField') return { err: 0, dat: { field: [{ id: 'bse_output_source_priority', name: 'Output Source Priority', item: OUT_ITEMS }, { id: 'bse_charger_source_priority', name: 'Charger Source Priority', item: CHG_ITEMS }] } };
+          if (a === 'queryDeviceCtrlValue') return { err: 0, dat: { val: q.get('id').includes('output') ? dev.out : dev.chg } };
+          if (a === 'queryDeviceParsEs') return { err: 0, dat: { parameter: [] } };
+          if (a === 'ctrlDevice') {
+            dev.sent.push([q.get('id'), q.get('val')]);
+            if (dev.reject) return { err: 1, desc: 'ERR_DEVICE_RESPONSE_TIMEOUT' };
+            if (dev.apply) dev.out = q.get('val');
+            return { err: 0, dat: {} };
+          }
+          return null;
+        },
+      });
+      await page.waitForSelector('.flow-card');
+      await page.evaluate(() => window.__nav('more', 'power'));
+      await page.waitForSelector('.ctl-cur .ctl-name', { timeout: 8000 }).catch(() => null);
+      check('يقرأ الوضع الحالي من الجهاز ويعرض ترتيب مصادره', (await text(page, '.ctl-cur .src-order')).replace(/\s/g, '') === 'الألواح←البطارية←الشبكة', await text(page, '.ctl-cur'));
+      check('يعرض الأوضاع التي يدعمها الجهاز فقط، والحالي بلا زر', (await page.$$('.ctl-opt')).length === 3 && (await page.$$('[data-ctl]')).length === 2);
+      check('أولوية الشحن تُعرض للقراءة فقط', (await text(page, '#view')).includes('أولوية مصدر الشحن الآن') && dev.sent.length === 0);
+      // إلغاء التأكيد: لا يُرسل شيء
+      await page.click('[data-ctl="0"]'); await page.click('.modal [data-v="0"]'); await page.waitForTimeout(200);
+      check('إلغاء التأكيد لا يرسل أي أمر', dev.sent.length === 0);
+      // تحويل ناجح: يُرسل مرة واحدة لإعداد الخرج فقط، ثم يتأكد من الجهاز
+      await page.click('[data-ctl="0"]');
+      check('نافذة التأكيد تذكر الوضعين وأن أولوية الشحن لن تتغيّر', (await text(page, '.modal')).includes('لن تتغيّر') && (await text(page, '.modal')).includes('الشبكة ثم الألواح ثم البطارية'), await text(page, '.modal'));
+      await page.click('.modal [data-v="1"]');
+      await page.waitForSelector('.ctl-state.wait', { timeout: 3000 }).catch(() => null);
+      check('أثناء التحقق يُعرض «المطلوب» لا «تم»', (await text(page, '.ctl-state')).includes('المطلوب'));
+      await page.waitForSelector('.ctl-state.confirmed', { timeout: 6000 }).catch(() => null);
+      check('بعد أن يعيد الجهاز الوضع الجديد يظهر «تأكّد»', !!(await page.$('.ctl-state.confirmed')) && (await page.$eval('.ctl-opt.on', (e) => e.textContent)).includes('الشبكة'));
+      check('أُرسل أمر واحد لإعداد أولوية الخرج وحده', dev.sent.length === 1 && dev.sent[0][0] === 'bse_output_source_priority' && dev.sent[0][1] === '0', JSON.stringify(dev.sent));
+      // الجهاز يقبل الأمر ولا يطبّقه: لا يظهر نجاح
+      dev.apply = false;
+      await page.click('[data-ctl="2"]'); await page.click('.modal [data-v="1"]');
+      await page.waitForSelector('.ctl-state.unconfirmed', { timeout: 8000 }).catch(() => null);
+      check('أمر لم يطبّقه الجهاز لا يُعرض كنجاح', !!(await page.$('.ctl-state.unconfirmed')) && !(await page.$('.ctl-state.confirmed')) && dev.sent.length === 2);
+      // رفض الأمر (انتهاء المهلة) برسالة عربية
+      dev.reject = true;
+      await page.click('[data-ctl="2"]'); await page.click('.modal [data-v="1"]');
+      await page.waitForSelector('.ctl-state.rejected', { timeout: 6000 }).catch(() => null);
+      check('رفض الأمر يظهر بسببه بالعربية', (await text(page, '.ctl-state')).includes('لم يرد في الوقت المحدد'), await text(page, '.ctl-state'));
+      const log = await page.$$eval('.ctl-log li', (a) => a.map((e) => e.className));
+      check('سجل التحويلات يحفظ النتائج الثلاث', log.join(',') === 'rejected,unconfirmed,confirmed', log.join(','));
+      const saved = await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('taqati.ctl.')).length);
+      check('السجل محفوظ دائماً', saved === 1);
+      // الجدولة المرنة: قواعد بأيام وأوقات مختلفة، ومنع التداخل، وتسليم الإعدادات لأندرويد
+      dev.reject = false; dev.apply = true;
+      const sent0 = dev.sent.length;
+      await page.click('[data-mode="schedule"]'); await page.waitForTimeout(150);
+      check('الجدولة تبدأ بقاعدة 5:00 م إلى 10:00 م كل يوم قابلة للتعديل', (await page.$$('.slot')).length === 1 && (await page.inputValue('[data-slot="0"] [data-s=start]')) === '17:00' && (await page.inputValue('[data-slot="0"] [data-s=end]')) === '22:00');
+      // القاعدة الأولى: السبت فقط ساعتان من 3 م
+      await page.fill('[data-slot="0"] [data-s=start]', '15:00'); await page.$eval('[data-slot="0"] [data-s=start]', (e) => e.dispatchEvent(new Event('change')));
+      await page.fill('[data-slot="0"] [data-s=end]', '17:00'); await page.$eval('[data-slot="0"] [data-s=end]', (e) => e.dispatchEvent(new Event('change')));
+      for (const d of [0, 1, 2, 3, 4, 5]) { await page.click(`[data-slot="0"] [data-day="${d}"]`); await page.waitForTimeout(40); }
+      check('قاعدة السبت وحده من 3:00 م إلى 5:00 م', (await text(page, '[data-slot="0"] .hint')).includes('السبت: من 3:00 م إلى 5:00 م'), await text(page, '[data-slot="0"] .hint'));
+      // قاعدة ثانية: الأحد أربع ساعات من 7 م، وثالثة لمرة واحدة تعبر منتصف الليل
+      await page.click('#slotAdd'); await page.waitForTimeout(100);
+      await page.fill('[data-slot="1"] [data-s=start]', '19:00'); await page.$eval('[data-slot="1"] [data-s=start]', (e) => e.dispatchEvent(new Event('change')));
+      await page.fill('[data-slot="1"] [data-s=end]', '23:00'); await page.$eval('[data-slot="1"] [data-s=end]', (e) => e.dispatchEvent(new Event('change')));
+      for (const d of [1, 2, 3, 4, 5, 6]) { await page.click(`[data-slot="1"] [data-day="${d}"]`); await page.waitForTimeout(40); }
+      await page.click('#slotAdd'); await page.waitForTimeout(100);
+      await page.click('[data-slot="2"] [data-kind="date"]'); await page.waitForTimeout(100);
+      await page.fill('[data-slot="2"] [data-s=start]', '22:00'); await page.$eval('[data-slot="2"] [data-s=start]', (e) => e.dispatchEvent(new Event('change')));
+      await page.fill('[data-slot="2"] [data-s=end]', '02:00'); await page.$eval('[data-slot="2"] [data-s=end]', (e) => e.dispatchEvent(new Event('change')));
+      check('قاعدة لمرة واحدة تعبر منتصف الليل', (await text(page, '[data-slot="2"] .hint')).includes('(اليوم التالي)') && !!(await page.$('[data-slot="2"] input[type=date]')));
+      // نجعل القاعدة الثانية كل يوم (7 م إلى 11 م) فتتداخل مع قاعدة اليوم (10 م إلى 2 ص): يُرفض الحفظ
+      for (const d of [1, 2, 3, 4, 5, 6]) { await page.click(`[data-slot="1"] [data-day="${d}"]`); await page.waitForTimeout(40); }
+      await page.click('#ctlSave'); await page.waitForTimeout(200);
+      check('القواعد المتداخلة تُرفض قبل التأكيد', (await text(page, '.toast')).includes('تتداخلان') && !(await page.$('.modal')), await text(page, '.toast'));
+      for (const d of [1, 2, 3, 4, 5, 6]) { await page.click(`[data-slot="1"] [data-day="${d}"]`); await page.waitForTimeout(40); }
+      await page.click('[data-del="2"]'); await page.waitForTimeout(80);
+      await page.screenshot({ path: path.join(OUT, 'power-schedule.png'), fullPage: true });
+      await page.click('#ctlSave');
+      const sumTxt = await text(page, '.modal');
+      check('نافذة التأكيد تلخّص القواعد بتوقيت سوريا', sumTxt.includes('السبت: من 3:00 م إلى 5:00 م') && sumTxt.includes('الأحد: من 7:00 م إلى 11:00 م') && sumTxt.includes('بتوقيت سوريا'), sumTxt);
+      await page.click('.modal [data-v="1"]'); await page.waitForTimeout(300);
+      const handed = await page.evaluate(() => JSON.parse(localStorage.getItem('taqati.ctlNative')));
+      check('الإعدادات المسلَّمة لأندرويد: الإعداد والأوضاع والقواعد والجهاز وتوقيت سوريا', handed.mode === 'schedule' && handed.fieldId === 'bse_output_source_priority' && handed.slots.length === 2 && handed.slots[0].days.join() === '6' && handed.slots[1].startMin === 1140 && handed.utcOffsetMin === 180 && handed.items['2'] === 'SBU' && handed.device.sn && handed.defaultKey === '2', JSON.stringify(handed));
+      check('حالة الجدولة والتحويل التالي ظاهرة', (await text(page, '.ctl-now')).includes('الجدولة فعّالة') && (await text(page, '.ctl-now')).includes('التحويل التالي'), await text(page, '.ctl-now'));
+      check('تفعيل الجدولة لا يرسل أي أمر من الواجهة', dev.sent.length === sent0);
+      // الإدارة الذكية: حدود متسقة
+      await page.evaluate(() => { window.__state.prefs.batteryAh = 200; });
+      await page.click('[data-mode="smart"]'); await page.waitForTimeout(200);
+      {
+        const sg = await text(page, '.sugg');
+        const low = Number(await page.inputValue('[data-sm="low"]')), target = Number(await page.inputValue('[data-sm="target"]'));
+        check('الإدارة الذكية تبدأ بترتيب محسوب من البطارية واستهلاك الليل مع أسبابه', sg.includes('الترتيب المقترح لمنظومتك') && sg.includes('احتياطياً للانقطاع') && low >= 35 && low <= 70 && low % 5 === 0 && target === low + 20, `${low}/${target} ${sg.slice(0, 120)}`);
+      }
+      await page.fill('[data-sm="low"]', '40'); await page.$eval('[data-sm="low"]', (e) => e.dispatchEvent(new Event('change')));
+      await page.fill('[data-sm="target"]', '45'); await page.$eval('[data-sm="target"]', (e) => e.dispatchEvent(new Event('change')));
+      await page.click('#ctlSave'); await page.waitForTimeout(200);
+      { const last = await page.$$eval('.toast', (a) => a.map((e) => e.textContent).pop() || ''); check('الإدارة الذكية ترفض نسبة عودة قريبة من حد التحويل (منعاً للتذبذب)', last.includes('10%') && !(await page.$('.modal')), last); }
+      await page.fill('[data-sm="target"]', '٦٠'); await page.$eval('[data-sm="target"]', (e) => e.dispatchEvent(new Event('change')));
+      await page.click('#ctlSave'); await page.click('.modal [data-v="1"]'); await page.waitForTimeout(300);
+      const sm = await page.evaluate(() => JSON.parse(localStorage.getItem('taqati.ctlNative')));
+      check('الإدارة الذكية تُفعَّل بحدودها ووضعيها', sm.mode === 'smart' && sm.low === 40 && sm.target === 60 && sm.gridKey === '0' && sm.solarKey === '2', JSON.stringify(sm));
+      check('نمط واحد فعّال: تفعيل الذكية أوقف الجدولة', (await text(page, '.ctl-now')).includes('الإدارة الذكية فعّالة') && !(await text(page, '.ctl-now')).includes('الجدولة'));
+      await page.click('[data-mode="manual"]'); await page.click('#ctlSave'); await page.click('.modal [data-v="1"]'); await page.waitForTimeout(300);
+      check('العودة للتحكم اليدوي توقف التلقائي', (await page.evaluate(() => JSON.parse(localStorage.getItem('taqati.ctlNative')).mode)) === 'manual' && !(await page.$('.ctl-now')));
+      check('بلا أخطاء JavaScript (التحكم)', page.errors.length === 0, page.errors.join(' | '));
+      await page.context().close();
+
+      // التقدير وعدّاد الشبكة (وضع تجريبي)
+      const d = await newPage(browser, { loggedIn: false, prefs: { batteryAh: 200 } });
+      await d.click('#demoBtn'); await d.waitForSelector('.flow-card');
+      await d.evaluate(() => window.__nav('reports', null)); await d.waitForTimeout(300);
+      check('التقارير فيها «تقدير الأسبوعين القادمين» و«كهرباء الشبكة»', !!(await d.$('[data-page=forecast]')) && !!(await d.$('[data-page=gridmeter]')));
+      await d.evaluate(() => window.__nav('reports', 'forecast'));
+      await d.waitForSelector('.fc-rows', { timeout: 30000 }).catch(() => null);
+      const ft = await text(d, '#view');
+      check('التقدير موسوم بأنه ليس توقعاً مؤكداً ولا يغيّر الإعدادات', ft.includes('تقدير وليس توقعاً مؤكداً') && ft.includes('لا يُطبَّق أي اقتراح تلقائياً'));
+      check('مقارنة الأسبوعين وتقدير 14 يوماً', (await d.$$('table.cmp tbody tr')).length === 5 && (await d.$$('.fc-r')).length === 14);
+      check('اقتراح الاحتياطي يظهر عند إدخال سعة البطارية', ft.includes('احتياطي البطارية المقترح'));
+      await d.evaluate(() => window.__nav('reports', 'gridmeter'));
+      await d.waitForSelector('.stats', { timeout: 60000 }).catch(() => null);
+      const gt = await text(d, '#view');
+      check('عدّاد الشبكة موسوم بأنه تقدير ويعرض بداية السجل', gt.includes('تقدير محسوب، لا عدّاد من الجهاز') && gt.includes('بداية السجل المتاح') && (await d.$$('.stats .stat')).length === 4);
+      check('بلا تمرير أفقي في الصفحات الجديدة', await noHScroll(d));
+      check('بلا أخطاء JavaScript (التقدير والعدّاد)', d.errors.length === 0, d.errors.join(' | '));
+      await d.context().close();
+    }
+
     // 11) التحقق من التحديثات
     {
       const page = await newPage(browser, { api: lastData(2), release: relOf('9.9.0', 'ميزة رائعة\nإصلاحات') });

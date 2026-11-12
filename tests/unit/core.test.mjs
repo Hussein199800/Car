@@ -577,3 +577,81 @@ test('صيغة الوقت: 12 ساعة افتراضياً و24 عند الطلب
   assert.equal(fmt.hm('06:31'), '06:31');
   setClock12(true);
 });
+
+test('أولوية الخرج: تفسير الأوضاع، والتحقق من الجهاز بعد الإرسال', async () => {
+  const { orderOf, matchItem, changeAndVerify, findField, isOutputPriority, isChargerPriority } = await import('../../src/control.js');
+  assert.deepEqual(orderOf('SBU').order, ['الألواح', 'البطارية', 'الشبكة']);
+  assert.deepEqual(orderOf('Solar Bat Utility').code, 'SBU');
+  assert.deepEqual(orderOf('Solar Utility Bat').code, 'SUB');
+  assert.deepEqual(orderOf('Utility first').order, ['الشبكة', 'الألواح', 'البطارية']);
+  assert.equal(orderOf('Mystery mode 7'), null, 'وضع غير معروف لا يُفسَّر');
+  const items = [{ key: '0', val: 'Utility first' }, { key: '2', val: 'SBU' }];
+  const fields = [{ id: 'c1', name: 'Charger Source Priority', item: items }, { id: 'o1', name: 'Output Source Priority', item: items }];
+  assert.equal(findField(fields, isOutputPriority).id, 'o1');
+  assert.equal(findField(fields, isChargerPriority).id, 'c1');
+  assert.equal(matchItem(items, 'sbu').key, '2');
+  const sleep = async () => {};
+  // الجهاز يطبّق الأمر بعد قراءتين
+  let dev = '2', sent = [], reads = 0;
+  let r = await changeAndVerify({ read: async () => (++reads >= 3 ? dev : '2'), send: async (k) => { sent.push(k); dev = k; }, items, key: '0', sleep });
+  assert.equal(r.status, 'confirmed'); assert.deepEqual(sent, ['0']); assert.equal(r.before.key, '2');
+  // أُرسل الأمر والجهاز لم يتغيّر: لا يُعدّ نجاحاً
+  sent = [];
+  r = await changeAndVerify({ read: async () => '2', send: async (k) => { sent.push(k); }, items, key: '0', sleep, tries: 3 });
+  assert.equal(r.status, 'unconfirmed'); assert.equal(r.after.key, '2'); assert.equal(sent.length, 1, 'لا إعادة إرسال تلقائية');
+  // رفض الخادم
+  r = await changeAndVerify({ read: async () => '2', send: async () => { throw new Error('الإنفرتر لم يرد في الوقت المحدد'); }, items, key: '0', sleep });
+  assert.equal(r.status, 'rejected'); assert.match(r.error, /لم يرد/);
+  // الوضع الحالي نفسه: لا إرسال
+  sent = [];
+  r = await changeAndVerify({ read: async () => '2', send: async (k) => sent.push(k), items, key: '2', sleep });
+  assert.equal(r.status, 'same'); assert.equal(sent.length, 0);
+  // تعذّرت قراءة الوضع الحالي أو كان غير معروف: لا إرسال إطلاقاً
+  r = await changeAndVerify({ read: async () => { throw new Error('تعذّر الاتصال'); }, send: async (k) => sent.push(k), items, key: '0', sleep });
+  assert.equal(r.status, 'error'); assert.equal(sent.length, 0);
+  r = await changeAndVerify({ read: async () => '9', send: async (k) => sent.push(k), items, key: '0', sleep });
+  assert.equal(r.status, 'error'); assert.equal(sent.length, 0);
+});
+
+test('تحليل الأسبوعين والتقدير وعدّاد الشبكة', async () => {
+  const { analyzeTwoWeeks, gridMeter, rememberForecast, accuracy } = await import('../../src/forecast.js');
+  const T = '2026-11-15';
+  const day = (i, o = {}) => { const d = new Date(T + 'T12:00:00'); d.setDate(d.getDate() + i); const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; return { v: 2, date, count: 200, coveredH: 23, pvKwh: 10, loadKwh: 12, solarChgKwh: 4, gridChgKwh: 1, gridLoadKwh: 2, nightLoadKwh: 7, nightH: 14, ...o }; };
+  // الأسبوع السابق: استهلاك 10 وإنتاج 12. الأخير: استهلاك 12 وإنتاج 10. يوم ناقص لا يُحسب
+  const sums = [];
+  for (let i = -14; i <= -8; i++) sums.push(day(i, { pvKwh: 12, loadKwh: 10 }));
+  for (let i = -7; i <= -1; i++) sums.push(day(i));
+  sums[9] = { ...sums[9], coveredH: 5, loadKwh: 1 };
+  const radPast = Object.fromEntries(sums.map((s) => [s.date, s.pvKwh]));   // إشعاع = الإنتاج: المردود 1 ك.و.س لكل وحدة
+  const radFuture = Array.from({ length: 10 }, (_, i) => ({ date: day(i).date, rad: i < 7 ? 6 : 8 }));
+  const r = analyzeTwoWeeks(sums, T, { radPast, radFuture, capKwh: 10.24, cutoffSoc: 20, reserveHours: 6 });
+  assert.equal(r.last.n, 6); assert.equal(r.prev.n, 7); assert.equal(r.missing, 1); assert.ok(r.comparable);
+  assert.equal(Math.round(r.delta.loadKwh), 20); assert.equal(Math.round(r.delta.pvKwh), -17);
+  assert.equal(r.last.gridKwh, 3, 'استيراد الشبكة = تغذية البيت + الشحن');
+  assert.equal(r.method, 'weather'); assert.ok(Math.abs(r.yieldPerRad - 1) < 1e-9);
+  assert.equal(r.days.length, 14);
+  assert.ok(Math.abs(r.days[0].pv - 6) < 1e-9 && r.days[0].fromWeather);
+  assert.ok(!r.days[12].fromWeather && Math.abs(r.days[12].pv - 10) < 1e-9, 'بعد مدى الطقس: المتوسط');
+  // الاتجاه 1.2: نصفه في الأسبوع الأول وكاملاً في الثاني، ولا يتجاوز السقف 1.25
+  assert.ok(Math.abs(r.days[0].load - 13.2) < 1e-9 && Math.abs(r.days[7].load - 14.4) < 1e-9);
+  assert.ok(r.days.every((d) => d.pvLo < d.pv && d.pv < d.pvHi && d.deficitHi >= d.deficit));
+  assert.ok(Math.abs(r.weeks[0].deficit - 7.2) < 1e-9);
+  // الاحتياطي: 6 ساعات × 0.5 ك.و = 3 ك.و.س من 10.24 ≈ 29% فوق حد الفصل 20% ← 50%
+  assert.equal(r.suggest.reserveSoc, 50);
+  assert.ok(Math.abs(r.suggest.gridHours - 14.4) < 1e-9);
+  // بلا طقس: متوسط الأسبوع الأخير
+  const r2 = analyzeTwoWeeks(sums, T, {});
+  assert.equal(r2.method, 'average'); assert.equal(r2.days[0].pv, 10); assert.equal(r2.suggest, undefined);
+  // بيانات قليلة: لا تقدير
+  assert.equal(analyzeTwoWeeks(sums.slice(0, 7), T, {}).ok, false);
+  // دقة تقدير الأمس
+  const saved = rememberForecast({}, { days: [{ pv: 9, load: 11 }] }, day(-1).date);
+  assert.deepEqual(accuracy(saved, sums, T), { date: day(-1).date, pvF: 9, pvA: 10, loadF: 11, loadA: 12 });
+  // عدّاد الشبكة: يتجاهل الأيام مجهولة الوضع، ويحترم تاريخ البداية المختار، ولا يعدّ يوماً مرتين
+  const g = gridMeter([...sums, day(0, { gridLoadKwh: 0.5, gridChgKwh: 0 }), day(-20, { gridLoadKwh: null })], T);
+  assert.equal(g.start, day(-14).date); assert.equal(g.all.days, 15);
+  assert.equal(g.today.load, 0.5); assert.equal(g.week.days, 7);
+  assert.ok(Math.abs(g.all.load - 28.5) < 1e-9 && Math.abs(g.all.chg - 14) < 1e-9);
+  assert.equal(g.all.partial, 1);
+  assert.equal(gridMeter(sums, T, day(-3).date).all.days, 3);
+});

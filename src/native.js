@@ -8,6 +8,7 @@ const SecureStore = isNative ? registerPlugin('SecureStore') : null;
 const Monitor = isNative ? registerPlugin('Monitor') : null;
 const DeviceTools = isNative ? registerPlugin('DeviceTools') : null;
 const Updater = isNative ? registerPlugin('Updater') : null;
+const Control = isNative ? registerPlugin('Control') : null;
 
 export const secure = {
   async get(key) {
@@ -84,4 +85,21 @@ export const updater = {
     if (!isNative) return false;
     return (await Updater.status()).ready;
   },
+};
+
+// الجدولة والإدارة الذكية: تُنفَّذ في أندرويد (تعمل والتطبيق مغلق). في المتصفح تُحفظ الإعدادات فقط
+export const control = {
+  available: isNative,
+  async configure(config) {
+    if (!isNative) { store.set('ctlNative', config); return { log: [], state: {}, nextAt: 0, exact: true, battery: true, web: true }; }
+    return Control.configure({ config });
+  },
+  async status() {
+    if (!isNative) return { log: [], state: {}, nextAt: 0, exact: true, battery: true, web: true };
+    return Control.status();
+  },
+  async manualOverride() { if (isNative) await Control.manualOverride(); },
+  async runNow() { if (isNative) await Control.runNow(); },
+  async openExactAlarmSettings() { return isNative ? (await Control.openExactAlarmSettings()).opened : false; },
+  async openBatterySettings() { return isNative ? (await Control.openBatterySettings()).opened : false; },
 };
