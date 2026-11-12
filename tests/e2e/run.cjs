@@ -783,7 +783,13 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       check('حالة الجدولة والتحويل التالي ظاهرة', (await text(page, '.ctl-now')).includes('الجدولة فعّالة') && (await text(page, '.ctl-now')).includes('التحويل التالي'), await text(page, '.ctl-now'));
       check('تفعيل الجدولة لا يرسل أي أمر من الواجهة', dev.sent.length === sent0);
       // الإدارة الذكية: حدود متسقة
-      await page.click('[data-mode="smart"]'); await page.waitForTimeout(150);
+      await page.evaluate(() => { window.__state.prefs.batteryAh = 200; });
+      await page.click('[data-mode="smart"]'); await page.waitForTimeout(200);
+      {
+        const sg = await text(page, '.sugg');
+        const low = Number(await page.inputValue('[data-sm="low"]')), target = Number(await page.inputValue('[data-sm="target"]'));
+        check('الإدارة الذكية تبدأ بترتيب محسوب من البطارية واستهلاك الليل مع أسبابه', sg.includes('الترتيب المقترح لمنظومتك') && sg.includes('احتياطياً للانقطاع') && low >= 35 && low <= 70 && low % 5 === 0 && target === low + 20, `${low}/${target} ${sg.slice(0, 120)}`);
+      }
       await page.fill('[data-sm="low"]', '40'); await page.$eval('[data-sm="low"]', (e) => e.dispatchEvent(new Event('change')));
       await page.fill('[data-sm="target"]', '45'); await page.$eval('[data-sm="target"]', (e) => e.dispatchEvent(new Event('change')));
       await page.click('#ctlSave'); await page.waitForTimeout(200);

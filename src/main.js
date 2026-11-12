@@ -2205,6 +2205,8 @@ AFTER.power = () => {
   bindGoto();
   const c = state.ctl || (state.ctl = {});
   if (c.field) bindCtl(c);
+  bindGoto();
+  if (c.edit?.mode === 'smart' && !state.rep.fc && !state.demo) loadTwoWeeks();
   // حالة الجدولة والإدارة الذكية وسجلهما من أندرويد
   if (c.field && !c.nativeAt) { c.nativeAt = Date.now(); control.status().then((ns) => { c.native = ns; if (leaf() === 'power') render(); }).catch(() => {}); }
   if (!state.demo && !state.model?.stale && !c.field && !c.error && !c.loading) loadPower();
@@ -2268,6 +2270,28 @@ function nativeCtlConfig(cfg) {
   };
 }
 
+// الترتيب المقترح للإدارة الذكية من منظومتك نفسها: سعة البطارية، حد الفصل، واستهلاك الليل الفعلي
+function smartSuggestion() {
+  const m = state.model;
+  const volts = m?.ratedV || nominalV(m);
+  const cap = capacityKwh(state.prefs.batteryAh, volts);
+  const cut = state.prefs.cutoffSoc ?? 20;
+  const hours = state.prefs.reserveHours ?? 6;
+  let nightKw = null, from = 'تقدير عام';
+  const f = state.rep.fc;
+  if (f?.sums) {
+    const r = analyzeTwoWeeks(f.sums, today(), {});
+    if (r.night?.kw) { nightKw = r.night.kw; from = 'من استهلاكك الفعلي ليلاً في الأسبوع الأخير'; }
+  }
+  if (!nightKw) nightKw = 0.5;
+  if (!cap) return { ok: false, cut, hours };
+  // حد التحويل = حد الفصل + ما يكفي ساعات الانقطاع بمعدل الليل، مقرّباً لـ5، بين (الفصل+15) و70
+  const reserve = Math.min(70, Math.max(cut + 15, Math.round((cut + ((nightKw * hours) / cap) * 100) / 5) * 5));
+  // العودة بعد 20% فوق الحد: شحن جزئي من الشبكة يكفي ويترك مكاناً لشمس الغد، ويلائم بطاريات الليثيوم
+  const target = Math.min(90, reserve + 20);
+  return { ok: true, cap, cut, hours, nightKw, from, low: reserve, target, gapMin: 30 };
+}
+
 function ctlSection(c) {
   const items = c.field.item;
   const saved = ctlCfg() || ctlDefaults(items);
@@ -2310,14 +2334,33 @@ function ctlSection(c) {
       ${['low', 'target', 'gapMin'].map((k) => `<label class="num-row"><span>${{ low: 'التحويل للشبكة عند نسبة البطارية', target: 'العودة عند بلوغ النسبة', gapMin: 'أقل مدة بين تحويلين' }[k]}</span><span class="num-in"><input type="text" inputmode="numeric" data-sm="${k}" value="${e[k]}"><small>${k === 'gapMin' ? 'دقيقة' : '%'}</small></span></label>`).join('')}
     </div>
     <p class="hint">يتحول إلى الشبكة إذا بلغت البطارية الحد والألواح لا تغطي الحمل والشبكة موجودة، ويعود عند بلوغ النسبة المستهدفة أو إذا غطّت الألواح الحمل في قراءتين متتاليتين. لا يتخذ قراراً على قراءة أقدم من ${state.prefs.staleMin} دقيقة، ولا يرسل شيئاً أثناء انقطاع الشبكة. يُفحص كل 15 دقيقة تقريباً.</p>
-    ${state.rep.fc?.sums ? '' : ''}</section>` : '';
+    </section>
+    ${(() => {
+      const g = smartSuggestion();
+      if (!g.ok) return `<section class="card"><p class="hint">أدخل سعة البطارية في الإعدادات ليُحسب الترتيب المقترح لمنظومتك.</p><button class="link" data-goto="more:settings">فتح الإعدادات</button></section>`;
+      const same = e.low === g.low && e.target === g.target && e.gapMin === g.gapMin;
+      return `<section class="card sugg"><div class="card-h"><h2>الترتيب المقترح لمنظومتك</h2></div>
+        ${kv([
+          ['التحويل للشبكة عند', `<bdi>${g.low}%</bdi>`],
+          ['العودة للألواح والبطارية عند', `<bdi>${g.target}%</bdi>`],
+          ['بين تحويلين', `<bdi>${g.gapMin}</bdi> <small>دقيقة</small>`],
+        ])}
+        <ul class="wn">
+          <li>بطاريتك <b><bdi>${fmt.kwh(g.cap)}</bdi> ك.و.س</b>، وحد الفصل في الإعدادات ${g.cut}%.</li>
+          <li>استهلاك الليل نحو <b>${fmt.w(g.nightKw * 1000)}</b> (${esc(g.from)})، فـ${countAr(g.hours, ['ساعة', 'ساعتين', 'ساعات', 'ساعة'])} انقطاع تحتاج نحو <bdi>${Math.round((g.nightKw * g.hours / g.cap) * 100)}%</bdi> من البطارية. لذلك يبقى ${g.low}% احتياطياً للانقطاع، ولا ينزل التطبيق تحته ما دامت الشبكة موجودة.</li>
+          <li>العودة عند ${g.target}% لا 100%: شحن جزئي من الشبكة يكفي المساء، ويترك مكاناً لشمس الغد، ويناسب بطاريات الليثيوم.</li>
+          <li>الفرق 20% بين الحدين و30 دقيقة بين تحويلين يمنعان التبديل المتكرر.</li>
+        </ul>
+        <p class="hint">تقدير يُعاد حسابه كل يوم من قراءاتك. يمكنك تعديل ساعات الانقطاع من «تقدير الأسبوعين القادمين».</p>
+        ${same ? '<span class="tag ok">مطبّق في الخانات أعلاه</span>' : '<button class="btn ghost wide" id="ctlSuggest">اعتمد هذا الترتيب</button>'}</section>`;
+    })()}` : '';
   const logs = (ns.log || []).slice(0, 15);
   return `
   <h3 class="sec-h">نمط التحكم</h3>
   <div class="seg ctl-mode">${CTL_MODES.map(([k, l]) => `<button class="${e.mode === k ? 'on' : ''}" data-mode="${k}">${l}</button>`).join('')}</div>
   ${status}${perms}
   ${editSchedule}${editSmart}
-  ${JSON.stringify(e) !== JSON.stringify(saved) ? `<button class="btn primary wide" id="ctlSave">${e.mode === 'manual' ? 'إيقاف التحكم التلقائي' : 'حفظ وتفعيل'}</button><button class="link pad" id="ctlCancel">تراجع عن التعديلات</button>` : ''}
+  ${JSON.stringify({ ...e, tuned: undefined }) !== JSON.stringify(saved) ? `<button class="btn primary wide" id="ctlSave">${e.mode === 'manual' ? 'إيقاف التحكم التلقائي' : 'حفظ وتفعيل'}</button><button class="link pad" id="ctlCancel">تراجع عن التعديلات</button>` : ''}
   ${!isNative && saved.mode !== 'manual' ? '<p class="note warn">' + icons.warn + '<span>التنفيذ التلقائي يعمل في تطبيق أندرويد فقط.</span></p>' : ''}
   ${logs.length ? `<h3 class="sec-h">ما نفّذته الجدولة والإدارة الذكية</h3><ul class="ctl-log card">${logs.map((x) => `
     <li class="${esc(x.status)}"><b>${esc(x.from || '؟')} ← ${esc(x.to)}</b><span>${{ confirmed: 'تأكّد من الجهاز', unconfirmed: 'لم يتأكد', rejected: 'مرفوض', error: 'لم يُرسل' }[x.status] || esc(x.status)}${x.error ? ' · ' + esc(x.error) : ''}</span><small>${esc(fmt.dateTime(x.at))} · ${x.by === 'schedule' ? 'الجدولة' : 'الإدارة الذكية'} · ${esc(x.reason || '')}</small></li>`).join('')}</ul>` : ''}`;
@@ -2329,7 +2372,18 @@ function bindCtl(c) {
   const items = c.field.item;
   // إعادة الرسم بعد انتهاء حدث الحقل (change يصل أحياناً أثناء blur فيُستبدل الحقل وهو يُزال)
   const redraw = () => setTimeout(() => { if (leaf() === 'power') render(); }, 0);
-  document.querySelectorAll('[data-mode]').forEach((b) => { b.onclick = () => { e.mode = b.dataset.mode; redraw(); }; });
+  document.querySelectorAll('[data-mode]').forEach((b) => {
+    b.onclick = () => {
+      e.mode = b.dataset.mode;
+      if (e.mode === 'smart' && ctlCfg()?.mode !== 'smart' && !e.tuned) {
+        const g = smartSuggestion();
+        if (g.ok) Object.assign(e, { low: g.low, target: g.target, gapMin: g.gapMin });
+      }
+      redraw();
+    };
+  });
+  const sg = $('#ctlSuggest');
+  if (sg) sg.onclick = () => { const g = smartSuggestion(); if (g.ok) Object.assign(e, { low: g.low, target: g.target, gapMin: g.gapMin }); redraw(); };
   document.querySelectorAll('[data-slot]').forEach((el) => {
     const s = e.slots[Number(el.dataset.slot)];
     el.querySelector('[data-s=key]').onchange = (ev) => { s.key = ev.target.value; redraw(); };
@@ -2348,7 +2402,7 @@ function bindCtl(c) {
   const g = $('#ctlGrid'), so = $('#ctlSolar');
   if (g) g.onchange = () => { e.gridKey = g.value; redraw(); };
   if (so) so.onchange = () => { e.solarKey = so.value; redraw(); };
-  document.querySelectorAll('[data-sm]').forEach((inp) => { inp.onchange = () => { const v = parseInt(latinDigits(inp.value), 10); if (Number.isFinite(v)) e[inp.dataset.sm] = v; redraw(); }; });
+  document.querySelectorAll('[data-sm]').forEach((inp) => { inp.onchange = () => { const v = parseInt(latinDigits(inp.value), 10); if (Number.isFinite(v)) { e[inp.dataset.sm] = v; e.tuned = true; } redraw(); }; });
   const cancel = $('#ctlCancel');
   if (cancel) cancel.onclick = () => { c.edit = null; redraw(); };
   const ex = $('#ctlExact');
@@ -2375,6 +2429,7 @@ function bindCtl(c) {
     } else summary = 'يتوقف التحويل التلقائي، وتبقى على الوضع الحالي حتى تغيّره بنفسك.';
     if (!(await confirmDialog(e.mode === 'manual' ? 'إيقاف التحكم التلقائي' : 'تفعيل ' + CTL_MODES.find((m) => m[0] === e.mode)[1], summary + (e.mode === 'manual' ? '' : '<br>التحويل اليدوي يوقف الجدولة حتى موعدها التالي، والإدارة الذكية ساعتين.')))) return;
     const cfg = JSON.parse(JSON.stringify(e));
+    delete cfg.tuned;
     store.set('ctlcfg.' + sn(), cfg);
     try { c.native = await control.configure(nativeCtlConfig(cfg)); } catch (err) { toast(err.message, 'bad'); }
     c.edit = null;
@@ -2411,7 +2466,7 @@ async function loadTwoWeeks() {
   }
   if (state.rep.fc?.token !== token) return;
   state.rep.fc = { sums, rad, radError, hasLoc: !!loc, at: Date.now() };
-  if (state.tab === 'reports' && leaf() === 'forecast') render();
+  if ((state.tab === 'reports' && leaf() === 'forecast') || leaf() === 'power') render();
 }
 
 const kwhU = (v) => (v == null ? '—' : `<bdi>${fmt.kwh(v)}</bdi> <small>ك.و.س</small>`);
