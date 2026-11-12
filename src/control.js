@@ -68,3 +68,60 @@ export const CTL_LOG_MAX = 100;
 export function addLog(log, entry) {
   return [entry, ...(log || [])].slice(0, CTL_LOG_MAX);
 }
+
+// ===== الجدولة: نفس منطق ControlEngine.kt (للعرض والتحقق في الواجهة؛ التنفيذ في أندرويد) =====
+export const SYRIA_OFFSET_MIN = 180;          // سوريا: UTC+3 طوال السنة
+const DAYMS = 864e5;
+export const DAY_NAMES = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+export const DAY_SHORT = ['ح', 'ن', 'ث', 'ر', 'خ', 'ج', 'س'];
+
+export const localDay = (t, off = SYRIA_OFFSET_MIN) => Math.floor((t + off * 60000) / DAYMS);
+export const localMin = (t, off = SYRIA_OFFSET_MIN) => (((Math.floor(t / 60000) + off) % 1440) + 1440) % 1440;
+export const weekday = (day) => (((day + 4) % 7) + 7) % 7;
+export const dateOf = (day) => new Date(day * DAYMS).toISOString().slice(0, 10);
+export const hm = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+export const toMin = (s) => { const [h, m] = String(s || '').split(':').map(Number); return Number.isFinite(h) ? h * 60 + (m || 0) : null; };
+
+const startsOn = (s, day) => (s.date ? s.date === dateOf(day) : (s.days || []).includes(weekday(day)));
+
+export function activeSlot(t, slots, off = SYRIA_OFFSET_MIN) {
+  const day = localDay(t, off), m = localMin(t, off);
+  return (slots || []).find((s) => s.startMin !== s.endMin && (s.startMin < s.endMin
+    ? startsOn(s, day) && m >= s.startMin && m < s.endMin
+    : (startsOn(s, day) && m >= s.startMin) || (startsOn(s, day - 1) && m < s.endMin))) || null;
+}
+
+/** الموعد التالي بعد t: {at, key} حيث key الوضع المطلوب بعده؛ أو null بلا قواعد */
+export function nextSwitch(t, slots, defaultKey, off = SYRIA_OFFSET_MIN) {
+  const d0 = localDay(t, off);
+  let best = null;
+  for (let k = -1; k <= 8; k++) {
+    const day = d0 + k, base = day * DAYMS - off * 60000;
+    for (const s of slots || []) {
+      if (s.startMin === s.endMin || !startsOn(s, day)) continue;
+      for (const at of [base + s.startMin * 60000, base + (s.endMin > s.startMin ? s.endMin : s.endMin + 1440) * 60000]) {
+        if (at > t && (!best || at < best.at)) best = { at };
+      }
+    }
+  }
+  if (!best) return null;
+  return { at: best.at, key: activeSlot(best.at, slots, off)?.key ?? defaultKey };
+}
+
+/** قاعدتان تتداخلان في أي دقيقة من الأسبوع (أو في تاريخ محدد): أول تعارض أو null */
+export function overlap(slots) {
+  const covers = (s, day, m) => s.startMin !== s.endMin && (s.startMin < s.endMin
+    ? startsOn(s, day) && m >= s.startMin && m < s.endMin
+    : (startsOn(s, day) && m >= s.startMin) || (startsOn(s, day - 1) && m < s.endMin));
+  // أسبوعان يكفيان لأي قاعدة أسبوعية؛ ونضيف أيام القواعد المحددة بتاريخ
+  const ref = Math.floor(Date.now() / DAYMS);
+  const days = new Set(Array.from({ length: 15 }, (_, i) => ref + i));
+  (slots || []).forEach((s) => { if (s.date) { const d = Math.floor(Date.parse(s.date + 'T00:00:00Z') / DAYMS); days.add(d); days.add(d + 1); } });
+  for (const day of days) {
+    for (let m = 0; m < 1440; m += 5) {
+      const hit = (slots || []).map((s, i) => (covers(s, day, m) ? i : -1)).filter((i) => i >= 0);
+      if (hit.length > 1) return { a: hit[0], b: hit[1], day, m };
+    }
+  }
+  return null;
+}

@@ -42,6 +42,16 @@
             </intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_taqati_info" />
         </receiver>
+
+        <!-- الجدولة: منبّه عند موعد التحويل، وإعادة ضبطه بعد تشغيل الهاتف أو تحديث التطبيق -->
+        <receiver android:name=".ControlAlarmReceiver" android:exported="false" />
+        <receiver android:name=".ControlBootReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
     </application>
 
     <!-- لمعرفة إن كان تطبيق WatchPower مثبتاً لفتحه مباشرة (Android 11+) -->
@@ -56,6 +66,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- لتثبيت تحديثات «طاقتي» نفسها بعد تنزيلها من صفحة إصداراتها؛ أندرويد يطلب موافقة المستخدم ويرفض أي توقيع مختلف -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-    <!-- لا نجدول إشعارات بمواعيد دقيقة، فنحذف هذه الصلاحية التي يضيفها ملحق الإشعارات (أقل صلاحيات ممكنة) -->
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" tools:node="remove" />
+    <!-- جدولة تحويل أولوية الخرج في وقتها بالضبط؛ يمنحها المستخدم من إعدادات الهاتف (بدونها يتأخر الموعد دقائق) -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- إعادة ضبط موعد الجدولة بعد إعادة تشغيل الهاتف -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 </manifest>

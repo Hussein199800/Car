@@ -15,7 +15,7 @@ import {
 } from './data.js';
 import { demoPoints, demoHistory } from './demo.js';
 import { icons } from './icons.js';
-import { isNative, secure, migrateSession, monitor, deviceTools, APPS, updater } from './native.js';
+import { isNative, secure, migrateSession, monitor, deviceTools, APPS, updater, control } from './native.js';
 import { fetchLatest, isNewer } from './update.js';
 import { INFO, infoBtn } from './info.js';
 import { fetchWeather, fetchRadiation, searchPlace, sceneStory, SKY_AR } from './weather.js';
@@ -23,7 +23,7 @@ import { scene3d } from './scene3d.js';
 import { scenePhoto, photoFor, batLook, photoIsDark } from './scenePhoto.js';
 import { sceneClassic } from './sceneClassic.js';
 import { analyze, capacityKwh } from './advisor.js';
-import { findField, isOutputPriority, isChargerPriority, orderOf, matchItem, changeAndVerify, addLog } from './control.js';
+import { findField, isOutputPriority, isChargerPriority, orderOf, matchItem, changeAndVerify, addLog, SYRIA_OFFSET_MIN, DAY_NAMES, DAY_SHORT, localDay as sLocalDay, weekday, dateOf, hm, toMin, activeSlot, nextSwitch, overlap } from './control.js';
 import { analyzeTwoWeeks, rememberForecast, accuracy, gridMeter } from './forecast.js';
 import { CATS, catOf, levelOf, toEvents, migrateLog, addEvents } from './log.js';
 import { trendDates, change } from './trend.js';
@@ -34,7 +34,7 @@ import { TIP_SECTIONS, smartTips, tipOfDay } from './tips.js';
 Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, CategoryScale, Filler, Tooltip, Legend);
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '3.11.0';
+const VERSION = '3.12.0';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -435,9 +435,10 @@ function openTour() {
 
 // ما الجديد في هذا الإصدار: يظهر مرة واحدة بعد التحديث
 const WHATS_NEW = [
-  'أولوية مصدر الطاقة من «المزيد»: تبديل بين الألواح والبطارية والشبكة، ولا يُعدّ التحويل ناجحاً حتى يؤكده الجهاز نفسه، مع سجل لكل تحويل.',
-  'تقدير الأسبوعين القادمين في التقارير: مقارنة آخر أسبوعين، والعجز المتوقع، واقتراح احتياطي البطارية وساعات الشبكة (للعرض فقط).',
-  'كهرباء الشبكة: ما سحبته من الشبكة يومياً وأسبوعياً وشهرياً، مفصولاً بين تغذية البيت وشحن البطارية (تقدير).',
+  'جدولة مرنة لأولوية مصدر الطاقة: قواعد بقدر ما تريد، لكل منها أيامها وساعاتها ووضعها، أو لمرة واحدة بتاريخ، بتوقيت سوريا، وتعمل والتطبيق مغلق.',
+  'إدارة ذكية اختيارية: تحويل للشبكة عند حد للبطارية تختاره، وعودة عند نسبة مستهدفة، بلا تذبذب ولا قرار على قراءة قديمة.',
+  'كل تحويل تلقائي يُتحقق منه بقراءة الجهاز، ويُسجَّل ويصلك به إشعار. والتحويل اليدوي يوقف التلقائي مؤقتاً.',
+  'تقدير الأسبوعين القادمين، وعدّاد كهرباء الشبكة، والتحويل اليدوي المتحقق منه.',
 ];
 function openWhatsNew() {
   store.set('seenVersion', VERSION);
@@ -2192,6 +2193,7 @@ function pagePower() {
       ${cur ? '<span class="tag ok">الحالي</span>' : `<button class="btn primary" data-ctl="${esc(it.key)}" ${b || !c.cur ? 'disabled' : ''}>حوّل إليه</button>`}</div>`;
   }).join('')}</div>
   <p class="hint">الترتيب المعروض هو المتعارف عليه لهذه العائلة من الأجهزة. تأكد منه على جهازك مرة واحدة: حوّل، ثم راقب في الرئيسية من أين يتغذى البيت.</p>
+  ${ctlSection(c)}
   <section class="card"><div class="card-h"><h2>شحن البطارية من الشبكة</h2></div>
     ${c.chgCur ? kv([['أولوية مصدر الشحن الآن', val(optionAr(c.chgCur.val))]]) : '<p class="hint">تعذّرت قراءة أولوية مصدر الشحن.</p>'}
     <p class="hint">إعداد مستقل لا يغيّره التطبيق هنا. عند جعل الشبكة أولاً قد تُشحن البطارية منها إن كان هذا الإعداد يسمح بذلك.</p>
@@ -2202,6 +2204,9 @@ function pagePower() {
 AFTER.power = () => {
   bindGoto();
   const c = state.ctl || (state.ctl = {});
+  if (c.field) bindCtl(c);
+  // حالة الجدولة والإدارة الذكية وسجلهما من أندرويد
+  if (c.field && !c.nativeAt) { c.nativeAt = Date.now(); control.status().then((ns) => { c.native = ns; if (leaf() === 'power') render(); }).catch(() => {}); }
   if (!state.demo && !state.model?.stale && !c.field && !c.error && !c.loading) loadPower();
   const retry = $('#ctlRetry') || $('#ctlRead');
   if (retry) retry.onclick = () => { c.result = null; loadPower(true); };
@@ -2214,6 +2219,8 @@ AFTER.power = () => {
       if (!(await confirmDialog('تأكيد التحويل', `سيتحوّل الإنفرتر من <b>${esc(optionAr(c.cur.val))}</b> إلى <b>${esc(optionAr(it.val))}</b>${o ? ` (${o.order.join(' ثم ')})` : ''}.${chg}<br>هل أنت متأكد؟`))) return;
       c.busy = it; c.result = null;
       render();
+      // تحويل يدوي أثناء الجدولة أو الإدارة الذكية: يوقفهما مؤقتاً حتى لا يعكسا اختيارك فوراً
+      if ((ctlCfg()?.mode || 'manual') !== 'manual') control.manualOverride().catch(() => {});
       const field = c.field;
       const res = await changeAndVerify({ read: () => readFresh(field), send: (key) => api.setCtrl(device(), field.id, key), items: field.item, key: it.key, delayMs: isNative ? 4000 : store.get('devCtlDelayMs', 4000) });
       c.busy = null; c.result = res;
@@ -2227,6 +2234,155 @@ AFTER.power = () => {
     };
   });
 };
+
+// ================= أنماط التحكم: يدوي، جدولة مرنة، إدارة ذكية =================
+// الإعدادات تُحفظ لكل جهاز، وتُسلَّم لأندرويد الذي ينفّذها والتطبيق مغلق ويتحقق من كل تحويل.
+const CTL_MODES = [['manual', 'يدوي'], ['schedule', 'جدولة'], ['smart', 'إدارة ذكية']];
+const keyOfCode = (items, code) => items.find((it) => orderOf(it.val)?.code === code)?.key;
+
+function ctlDefaults(items) {
+  const grid = keyOfCode(items, 'USB') ?? items[0]?.key;
+  const solar = keyOfCode(items, 'SBU') ?? items.find((it) => it.key !== grid)?.key;
+  return { mode: 'manual', gridKey: grid, solarKey: solar, defaultKey: solar, low: 45, target: 65, gapMin: 30,
+    slots: [{ startMin: 17 * 60, endMin: 22 * 60, key: grid, days: [0, 1, 2, 3, 4, 5, 6] }] };
+}
+const ctlCfg = () => store.get('ctlcfg.' + sn(), null);
+const itemLabel = (items, key) => optionAr(items.find((it) => String(it.key) === String(key))?.val ?? key);
+const clock12 = (min) => fmt.time(new Date(2000, 0, 1, Math.floor(min / 60), min % 60).getTime());
+
+function slotText(s, items) {
+  const when = s.date ? `يوم ${fmt.day(s.date, { weekday: 'long', day: 'numeric', month: 'long' })}` : s.days.length === 7 ? 'كل يوم' : s.days.map((d) => DAY_NAMES[d]).join('، ');
+  return `${when}: من ${clock12(s.startMin)} إلى ${clock12(s.endMin)}${s.endMin <= s.startMin ? ' (اليوم التالي)' : ''} ← ${itemLabel(items, s.key)}`;
+}
+
+function nativeCtlConfig(cfg) {
+  const c = state.ctl, d = device();
+  const items = c.field.item;
+  return {
+    ...cfg, fieldId: c.field.id, utcOffsetMin: SYRIA_OFFSET_MIN,
+    items: Object.fromEntries(items.map((it) => [String(it.key), String(it.val)])),
+    gridLabel: String(items.find((it) => String(it.key) === String(cfg.gridKey))?.val ?? ''),
+    solarLabel: String(items.find((it) => String(it.key) === String(cfg.solarKey))?.val ?? ''),
+    staleMin: state.prefs.staleMin, tzOffsetMs: tzOffset(), notify: state.prefs.notify,
+    device: { pn: d.pn, sn: d.sn, devcode: String(d.devcode), devaddr: String(d.devaddr ?? 1) },
+  };
+}
+
+function ctlSection(c) {
+  const items = c.field.item;
+  const saved = ctlCfg() || ctlDefaults(items);
+  const e = c.edit || (c.edit = JSON.parse(JSON.stringify(saved)));
+  const opt = (sel) => items.map((it) => `<option value="${esc(it.key)}" ${String(it.key) === String(sel) ? 'selected' : ''}>${esc(optionAr(it.val))}</option>`).join('');
+  const ns = c.native || {};
+  const now = Date.now();
+  // الحالة الحالية للنمط المحفوظ
+  let status = '';
+  if (saved.mode === 'schedule') {
+    const n = nextSwitch(now, saved.slots, saved.defaultKey);
+    const act = activeSlot(now, saved.slots);
+    status = `<p class="ctl-now"><b>الجدولة فعّالة</b> · المطلوب الآن: ${esc(itemLabel(items, act?.key ?? saved.defaultKey))}${n ? ` · التحويل التالي ${esc(fmt.day(dateOf(sLocalDay(n.at)), { weekday: 'long' }))} ${esc(fmt.time(n.at))} ← ${esc(itemLabel(items, n.key))}` : ''} · بتوقيت سوريا</p>`;
+  } else if (saved.mode === 'smart') {
+    status = `<p class="ctl-now"><b>الإدارة الذكية فعّالة</b> · إلى ${esc(itemLabel(items, saved.gridKey))} عند ${saved.low}% أو أقل، والعودة إلى ${esc(itemLabel(items, saved.solarKey))} عند ${saved.target}%${ns.state?.lastNote ? ` · آخر فحص: ${esc(ns.state.lastNote)}` : ''}</p>`;
+  }
+  const perms = saved.mode !== 'manual' && isNative ? `
+    ${ns.exact === false ? `<p class="note warn">${icons.warn}<span>إذن «التنبيهات والتذكيرات» غير مفعّل، فقد يتأخر التحويل دقائق عن موعده.</span></p><button class="btn ghost wide" id="ctlExact">تفعيل التوقيت الدقيق</button>` : ''}
+    ${ns.battery === false ? `<p class="note warn">${icons.warn}<span>قد يؤخّر توفير البطارية في هاتفك التحويل. اجعل «طاقتي» دون قيود.</span></p><button class="btn ghost wide" id="ctlBattery">إعدادات البطارية للتطبيقات</button>` : ''}` : '';
+  const editSchedule = e.mode === 'schedule' ? `
+    <h3 class="sec-h">قواعد الجدولة</h3>
+    <div class="slots">${e.slots.map((s, i) => `
+      <div class="slot card" data-slot="${i}">
+        <div class="slot-row"><label>الوضع<select data-s="key">${opt(s.key)}</select></label>
+          <button class="icon-btn slot-del" data-del="${i}" aria-label="حذف القاعدة">×</button></div>
+        <div class="slot-row"><label>من<input type="time" data-s="start" value="${hm(s.startMin)}"></label><label>إلى<input type="time" data-s="end" value="${hm(s.endMin)}"></label></div>
+        <div class="seg slot-kind"><button class="${s.date ? '' : 'on'}" data-kind="week">أيام الأسبوع</button><button class="${s.date ? 'on' : ''}" data-kind="date">تاريخ محدد</button></div>
+        ${s.date ? `<label class="slot-date">التاريخ<input type="date" data-s="date" value="${esc(s.date)}" min="${dateOf(sLocalDay(now))}"></label>`
+    : `<div class="days">${[6, 0, 1, 2, 3, 4, 5].map((d) => `<button class="${s.days.includes(d) ? 'on' : ''}" data-day="${d}" aria-label="${DAY_NAMES[d]}">${DAY_SHORT[d]}</button>`).join('')}</div>`}
+        <small class="hint">${esc(slotText(s, items))}</small>
+      </div>`).join('')}</div>
+    <button class="btn ghost wide" id="slotAdd">+ إضافة قاعدة</button>
+    <label class="num-row"><span>خارج القواعد يكون الجهاز على</span><select id="ctlDefault">${opt(e.defaultKey)}</select></label>
+    <p class="hint">الأوقات بتوقيت سوريا. القاعدة التي نهايتها قبل بدايتها تعبر منتصف الليل. إن فات موعد (هاتف مطفأ أو بلا إنترنت) يُنفَّذ عند أول فرصة ما دامت فترته لم تنتهِ.</p>` : '';
+  const editSmart = e.mode === 'smart' ? `
+    <h3 class="sec-h">قواعد الإدارة الذكية</h3>
+    <section class="card"><div class="form">
+      <label class="num-row"><span>وضع الشبكة</span><select id="ctlGrid">${opt(e.gridKey)}</select></label>
+      <label class="num-row"><span>وضع الألواح والبطارية</span><select id="ctlSolar">${opt(e.solarKey)}</select></label>
+      ${['low', 'target', 'gapMin'].map((k) => `<label class="num-row"><span>${{ low: 'التحويل للشبكة عند نسبة البطارية', target: 'العودة عند بلوغ النسبة', gapMin: 'أقل مدة بين تحويلين' }[k]}</span><span class="num-in"><input type="text" inputmode="numeric" data-sm="${k}" value="${e[k]}"><small>${k === 'gapMin' ? 'دقيقة' : '%'}</small></span></label>`).join('')}
+    </div>
+    <p class="hint">يتحول إلى الشبكة إذا بلغت البطارية الحد والألواح لا تغطي الحمل والشبكة موجودة، ويعود عند بلوغ النسبة المستهدفة أو إذا غطّت الألواح الحمل في قراءتين متتاليتين. لا يتخذ قراراً على قراءة أقدم من ${state.prefs.staleMin} دقيقة، ولا يرسل شيئاً أثناء انقطاع الشبكة. يُفحص كل 15 دقيقة تقريباً.</p>
+    ${state.rep.fc?.sums ? '' : ''}</section>` : '';
+  const logs = (ns.log || []).slice(0, 15);
+  return `
+  <h3 class="sec-h">نمط التحكم</h3>
+  <div class="seg ctl-mode">${CTL_MODES.map(([k, l]) => `<button class="${e.mode === k ? 'on' : ''}" data-mode="${k}">${l}</button>`).join('')}</div>
+  ${status}${perms}
+  ${editSchedule}${editSmart}
+  ${JSON.stringify(e) !== JSON.stringify(saved) ? `<button class="btn primary wide" id="ctlSave">${e.mode === 'manual' ? 'إيقاف التحكم التلقائي' : 'حفظ وتفعيل'}</button><button class="link pad" id="ctlCancel">تراجع عن التعديلات</button>` : ''}
+  ${!isNative && saved.mode !== 'manual' ? '<p class="note warn">' + icons.warn + '<span>التنفيذ التلقائي يعمل في تطبيق أندرويد فقط.</span></p>' : ''}
+  ${logs.length ? `<h3 class="sec-h">ما نفّذته الجدولة والإدارة الذكية</h3><ul class="ctl-log card">${logs.map((x) => `
+    <li class="${esc(x.status)}"><b>${esc(x.from || '؟')} ← ${esc(x.to)}</b><span>${{ confirmed: 'تأكّد من الجهاز', unconfirmed: 'لم يتأكد', rejected: 'مرفوض', error: 'لم يُرسل' }[x.status] || esc(x.status)}${x.error ? ' · ' + esc(x.error) : ''}</span><small>${esc(fmt.dateTime(x.at))} · ${x.by === 'schedule' ? 'الجدولة' : 'الإدارة الذكية'} · ${esc(x.reason || '')}</small></li>`).join('')}</ul>` : ''}`;
+}
+
+function bindCtl(c) {
+  const e = c.edit;
+  if (!e) return;
+  const items = c.field.item;
+  // إعادة الرسم بعد انتهاء حدث الحقل (change يصل أحياناً أثناء blur فيُستبدل الحقل وهو يُزال)
+  const redraw = () => setTimeout(() => { if (leaf() === 'power') render(); }, 0);
+  document.querySelectorAll('[data-mode]').forEach((b) => { b.onclick = () => { e.mode = b.dataset.mode; redraw(); }; });
+  document.querySelectorAll('[data-slot]').forEach((el) => {
+    const s = e.slots[Number(el.dataset.slot)];
+    el.querySelector('[data-s=key]').onchange = (ev) => { s.key = ev.target.value; redraw(); };
+    el.querySelector('[data-s=start]').onchange = (ev) => { const v = toMin(ev.target.value); if (v != null) s.startMin = v; redraw(); };
+    el.querySelector('[data-s=end]').onchange = (ev) => { const v = toMin(ev.target.value); if (v != null) s.endMin = v; redraw(); };
+    const dt = el.querySelector('[data-s=date]');
+    if (dt) dt.onchange = () => { if (dt.value) s.date = dt.value; redraw(); };
+    el.querySelectorAll('[data-kind]').forEach((b) => { b.onclick = () => { if (b.dataset.kind === 'date') { s.date = s.date || dateOf(sLocalDay(Date.now())); } else { delete s.date; if (!s.days?.length) s.days = [0, 1, 2, 3, 4, 5, 6]; } redraw(); }; });
+    el.querySelectorAll('[data-day]').forEach((b) => { b.onclick = () => { const d = Number(b.dataset.day); s.days = s.days.includes(d) ? s.days.filter((x) => x !== d) : [...s.days, d].sort(); redraw(); }; });
+  });
+  document.querySelectorAll('[data-del]').forEach((b) => { b.onclick = () => { e.slots.splice(Number(b.dataset.del), 1); redraw(); }; });
+  const add = $('#slotAdd');
+  if (add) add.onclick = () => { e.slots.push({ startMin: 17 * 60, endMin: 19 * 60, key: e.gridKey ?? items[0].key, days: [0, 1, 2, 3, 4, 5, 6] }); redraw(); };
+  const def = $('#ctlDefault');
+  if (def) def.onchange = () => { e.defaultKey = def.value; redraw(); };
+  const g = $('#ctlGrid'), so = $('#ctlSolar');
+  if (g) g.onchange = () => { e.gridKey = g.value; redraw(); };
+  if (so) so.onchange = () => { e.solarKey = so.value; redraw(); };
+  document.querySelectorAll('[data-sm]').forEach((inp) => { inp.onchange = () => { const v = parseInt(latinDigits(inp.value), 10); if (Number.isFinite(v)) e[inp.dataset.sm] = v; redraw(); }; });
+  const cancel = $('#ctlCancel');
+  if (cancel) cancel.onclick = () => { c.edit = null; redraw(); };
+  const ex = $('#ctlExact');
+  if (ex) ex.onclick = () => control.openExactAlarmSettings();
+  const bt = $('#ctlBattery');
+  if (bt) bt.onclick = () => control.openBatterySettings();
+  const save = $('#ctlSave');
+  if (save) save.onclick = async () => {
+    let summary;
+    if (e.mode === 'schedule') {
+      if (!e.slots.length) return toast('أضف قاعدة واحدة على الأقل', 'bad');
+      const bad = e.slots.findIndex((s) => s.startMin === s.endMin || (!s.date && !s.days.length));
+      if (bad >= 0) return toast(`القاعدة ${bad + 1}: ${e.slots[bad].startMin === e.slots[bad].endMin ? 'البداية والنهاية متساويتان' : 'اختر يوماً واحداً على الأقل'}`, 'bad');
+      const ov = overlap(e.slots);
+      if (ov) return toast(`القاعدتان ${ov.a + 1} و${ov.b + 1} تتداخلان (${DAY_NAMES[weekday(ov.day)]} ${clock12(ov.m)})`, 'bad');
+      summary = `<ul class="wn">${e.slots.map((s) => `<li>${esc(slotText(s, items))}</li>`).join('')}<li>خارج ذلك: ${esc(itemLabel(items, e.defaultKey))}</li></ul>بتوقيت سوريا. سيحوّل التطبيق الإنفرتر تلقائياً في هذه الأوقات ويتحقق من كل تحويل.`;
+    } else if (e.mode === 'smart') {
+      if (String(e.gridKey) === String(e.solarKey)) return toast('اختر وضعين مختلفين', 'bad');
+      const cut = state.prefs.cutoffSoc ?? 20;
+      if (e.low < cut + 5 || e.low > 90) return toast(`حد التحويل بين ${cut + 5}% و90%`, 'bad');
+      if (e.target < e.low + 10 || e.target > 100) return toast('النسبة المستهدفة يجب أن تزيد 10% على الأقل عن حد التحويل', 'bad');
+      if (e.gapMin < 15 || e.gapMin > 360) return toast('مدة الانتظار بين 15 و360 دقيقة', 'bad');
+      summary = `يتحول تلقائياً إلى <b>${esc(itemLabel(items, e.gridKey))}</b> عند ${e.low}% أو أقل (والشبكة موجودة والألواح لا تغطي الحمل)، ويعود إلى <b>${esc(itemLabel(items, e.solarKey))}</b> عند ${e.target}%، وبين تحويلين ${e.gapMin} دقيقة على الأقل.`;
+    } else summary = 'يتوقف التحويل التلقائي، وتبقى على الوضع الحالي حتى تغيّره بنفسك.';
+    if (!(await confirmDialog(e.mode === 'manual' ? 'إيقاف التحكم التلقائي' : 'تفعيل ' + CTL_MODES.find((m) => m[0] === e.mode)[1], summary + (e.mode === 'manual' ? '' : '<br>التحويل اليدوي يوقف الجدولة حتى موعدها التالي، والإدارة الذكية ساعتين.')))) return;
+    const cfg = JSON.parse(JSON.stringify(e));
+    store.set('ctlcfg.' + sn(), cfg);
+    try { c.native = await control.configure(nativeCtlConfig(cfg)); } catch (err) { toast(err.message, 'bad'); }
+    c.edit = null;
+    logEvent('set', 'info', 'نمط التحكم', CTL_MODES.find((m) => m[0] === cfg.mode)[1]);
+    toast(cfg.mode === 'manual' ? 'أُوقف التحكم التلقائي' : 'تم التفعيل', 'ok');
+    redraw();
+  };
+}
 
 // ================= تحليل آخر أسبوعين وتقدير الأسبوعين القادمين =================
 async function loadTwoWeeks() {

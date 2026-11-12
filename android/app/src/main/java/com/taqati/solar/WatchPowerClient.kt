@@ -141,6 +141,32 @@ class WatchPowerClient(
         }
     }
 
+    private fun devParams(dev: Device) = linkedMapOf("pn" to dev.pn, "devcode" to dev.devcode, "devaddr" to dev.devaddr, "sn" to dev.sn)
+
+    /** القيمة الحالية لإعداد من الجهاز؛ وإن رفض الجهاز قراءته منفرداً نبحث عنه في قائمة كل الإعدادات */
+    fun ctrlValue(dev: Device, id: String): String? {
+        val direct = try {
+            request("queryDeviceCtrlValue", devParams(dev) + linkedMapOf("id" to id, "i18n" to "en_US", "source" to profile.source))
+                .optJSONObject("dat")?.optString("val")
+        } catch (e: ApiException) {
+            if (e.code == null) throw e
+            null
+        }
+        if (!direct.isNullOrBlank() && !direct.trim().all { it == '-' }) return direct
+        val list = request("queryDeviceParsEs", devParams(dev) + linkedMapOf("i18n" to "en_US", "source" to profile.source))
+            .optJSONObject("dat")?.optJSONArray("parameter") ?: return null
+        for (i in 0 until list.length()) {
+            val o = list.optJSONObject(i) ?: continue
+            if (o.optString("par") == id) return o.optString("val").takeIf { it.isNotBlank() && !it.trim().all { c -> c == '-' } }
+        }
+        return null
+    }
+
+    /** يرسل قيمة إعداد للجهاز. نجاح الطلب لا يعني تطبيقه؛ المتصل يتحقق بقراءة القيمة بعده */
+    fun setCtrl(dev: Device, id: String, value: String) {
+        request("ctrlDevice", devParams(dev) + linkedMapOf("id" to id, "val" to value, "i18n" to "en_US", "source" to profile.source))
+    }
+
     companion object {
         const val COMPANY_KEY = "bnrl_frRFjEz8Mkn"
 

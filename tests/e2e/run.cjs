@@ -747,6 +747,54 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       check('سجل التحويلات يحفظ النتائج الثلاث', log.join(',') === 'rejected,unconfirmed,confirmed', log.join(','));
       const saved = await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('taqati.ctl.')).length);
       check('السجل محفوظ دائماً', saved === 1);
+      // الجدولة المرنة: قواعد بأيام وأوقات مختلفة، ومنع التداخل، وتسليم الإعدادات لأندرويد
+      dev.reject = false; dev.apply = true;
+      const sent0 = dev.sent.length;
+      await page.click('[data-mode="schedule"]'); await page.waitForTimeout(150);
+      check('الجدولة تبدأ بقاعدة 5:00 م إلى 10:00 م كل يوم قابلة للتعديل', (await page.$$('.slot')).length === 1 && (await page.inputValue('[data-slot="0"] [data-s=start]')) === '17:00' && (await page.inputValue('[data-slot="0"] [data-s=end]')) === '22:00');
+      // القاعدة الأولى: السبت فقط ساعتان من 3 م
+      await page.fill('[data-slot="0"] [data-s=start]', '15:00'); await page.$eval('[data-slot="0"] [data-s=start]', (e) => e.dispatchEvent(new Event('change')));
+      await page.fill('[data-slot="0"] [data-s=end]', '17:00'); await page.$eval('[data-slot="0"] [data-s=end]', (e) => e.dispatchEvent(new Event('change')));
+      for (const d of [0, 1, 2, 3, 4, 5]) { await page.click(`[data-slot="0"] [data-day="${d}"]`); await page.waitForTimeout(40); }
+      check('قاعدة السبت وحده من 3:00 م إلى 5:00 م', (await text(page, '[data-slot="0"] .hint')).includes('السبت: من 3:00 م إلى 5:00 م'), await text(page, '[data-slot="0"] .hint'));
+      // قاعدة ثانية: الأحد أربع ساعات من 7 م، وثالثة لمرة واحدة تعبر منتصف الليل
+      await page.click('#slotAdd'); await page.waitForTimeout(100);
+      await page.fill('[data-slot="1"] [data-s=start]', '19:00'); await page.$eval('[data-slot="1"] [data-s=start]', (e) => e.dispatchEvent(new Event('change')));
+      await page.fill('[data-slot="1"] [data-s=end]', '23:00'); await page.$eval('[data-slot="1"] [data-s=end]', (e) => e.dispatchEvent(new Event('change')));
+      for (const d of [1, 2, 3, 4, 5, 6]) { await page.click(`[data-slot="1"] [data-day="${d}"]`); await page.waitForTimeout(40); }
+      await page.click('#slotAdd'); await page.waitForTimeout(100);
+      await page.click('[data-slot="2"] [data-kind="date"]'); await page.waitForTimeout(100);
+      await page.fill('[data-slot="2"] [data-s=start]', '22:00'); await page.$eval('[data-slot="2"] [data-s=start]', (e) => e.dispatchEvent(new Event('change')));
+      await page.fill('[data-slot="2"] [data-s=end]', '02:00'); await page.$eval('[data-slot="2"] [data-s=end]', (e) => e.dispatchEvent(new Event('change')));
+      check('قاعدة لمرة واحدة تعبر منتصف الليل', (await text(page, '[data-slot="2"] .hint')).includes('(اليوم التالي)') && !!(await page.$('[data-slot="2"] input[type=date]')));
+      // نجعل القاعدة الثانية كل يوم (7 م إلى 11 م) فتتداخل مع قاعدة اليوم (10 م إلى 2 ص): يُرفض الحفظ
+      for (const d of [1, 2, 3, 4, 5, 6]) { await page.click(`[data-slot="1"] [data-day="${d}"]`); await page.waitForTimeout(40); }
+      await page.click('#ctlSave'); await page.waitForTimeout(200);
+      check('القواعد المتداخلة تُرفض قبل التأكيد', (await text(page, '.toast')).includes('تتداخلان') && !(await page.$('.modal')), await text(page, '.toast'));
+      for (const d of [1, 2, 3, 4, 5, 6]) { await page.click(`[data-slot="1"] [data-day="${d}"]`); await page.waitForTimeout(40); }
+      await page.click('[data-del="2"]'); await page.waitForTimeout(80);
+      await page.screenshot({ path: path.join(OUT, 'power-schedule.png'), fullPage: true });
+      await page.click('#ctlSave');
+      const sumTxt = await text(page, '.modal');
+      check('نافذة التأكيد تلخّص القواعد بتوقيت سوريا', sumTxt.includes('السبت: من 3:00 م إلى 5:00 م') && sumTxt.includes('الأحد: من 7:00 م إلى 11:00 م') && sumTxt.includes('بتوقيت سوريا'), sumTxt);
+      await page.click('.modal [data-v="1"]'); await page.waitForTimeout(300);
+      const handed = await page.evaluate(() => JSON.parse(localStorage.getItem('taqati.ctlNative')));
+      check('الإعدادات المسلَّمة لأندرويد: الإعداد والأوضاع والقواعد والجهاز وتوقيت سوريا', handed.mode === 'schedule' && handed.fieldId === 'bse_output_source_priority' && handed.slots.length === 2 && handed.slots[0].days.join() === '6' && handed.slots[1].startMin === 1140 && handed.utcOffsetMin === 180 && handed.items['2'] === 'SBU' && handed.device.sn && handed.defaultKey === '2', JSON.stringify(handed));
+      check('حالة الجدولة والتحويل التالي ظاهرة', (await text(page, '.ctl-now')).includes('الجدولة فعّالة') && (await text(page, '.ctl-now')).includes('التحويل التالي'), await text(page, '.ctl-now'));
+      check('تفعيل الجدولة لا يرسل أي أمر من الواجهة', dev.sent.length === sent0);
+      // الإدارة الذكية: حدود متسقة
+      await page.click('[data-mode="smart"]'); await page.waitForTimeout(150);
+      await page.fill('[data-sm="low"]', '40'); await page.$eval('[data-sm="low"]', (e) => e.dispatchEvent(new Event('change')));
+      await page.fill('[data-sm="target"]', '45'); await page.$eval('[data-sm="target"]', (e) => e.dispatchEvent(new Event('change')));
+      await page.click('#ctlSave'); await page.waitForTimeout(200);
+      { const last = await page.$$eval('.toast', (a) => a.map((e) => e.textContent).pop() || ''); check('الإدارة الذكية ترفض نسبة عودة قريبة من حد التحويل (منعاً للتذبذب)', last.includes('10%') && !(await page.$('.modal')), last); }
+      await page.fill('[data-sm="target"]', '٦٠'); await page.$eval('[data-sm="target"]', (e) => e.dispatchEvent(new Event('change')));
+      await page.click('#ctlSave'); await page.click('.modal [data-v="1"]'); await page.waitForTimeout(300);
+      const sm = await page.evaluate(() => JSON.parse(localStorage.getItem('taqati.ctlNative')));
+      check('الإدارة الذكية تُفعَّل بحدودها ووضعيها', sm.mode === 'smart' && sm.low === 40 && sm.target === 60 && sm.gridKey === '0' && sm.solarKey === '2', JSON.stringify(sm));
+      check('نمط واحد فعّال: تفعيل الذكية أوقف الجدولة', (await text(page, '.ctl-now')).includes('الإدارة الذكية فعّالة') && !(await text(page, '.ctl-now')).includes('الجدولة'));
+      await page.click('[data-mode="manual"]'); await page.click('#ctlSave'); await page.click('.modal [data-v="1"]'); await page.waitForTimeout(300);
+      check('العودة للتحكم اليدوي توقف التلقائي', (await page.evaluate(() => JSON.parse(localStorage.getItem('taqati.ctlNative')).mode)) === 'manual' && !(await page.$('.ctl-now')));
       check('بلا أخطاء JavaScript (التحكم)', page.errors.length === 0, page.errors.join(' | '));
       await page.context().close();
 
