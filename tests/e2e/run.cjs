@@ -694,6 +694,82 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.context().close();
     }
 
+    // 19) 3.11: أولوية مصدر الطاقة بتحقق من الجهاز (محاكاة)، التقدير، عدّاد الشبكة
+    {
+      const OUT_ITEMS = [{ key: '0', val: 'Utility first' }, { key: '1', val: 'Solar first' }, { key: '2', val: 'SBU' }];
+      const CHG_ITEMS = [{ key: '0', val: 'Solar first' }, { key: '3', val: 'Only solar charging permitted' }];
+      const dev = { out: '2', chg: '3', apply: true, reject: false, sent: [] };
+      const page = await newPage(browser, {
+        storage: { devCtlDelayMs: 250 },
+        api: (a, q) => {
+          if (a === 'queryDeviceLastData') return { err: 0, dat: points(Date.now() - 60000) };
+          if (a === 'queryDeviceCtrlField') return { err: 0, dat: { field: [{ id: 'bse_output_source_priority', name: 'Output Source Priority', item: OUT_ITEMS }, { id: 'bse_charger_source_priority', name: 'Charger Source Priority', item: CHG_ITEMS }] } };
+          if (a === 'queryDeviceCtrlValue') return { err: 0, dat: { val: q.get('id').includes('output') ? dev.out : dev.chg } };
+          if (a === 'queryDeviceParsEs') return { err: 0, dat: { parameter: [] } };
+          if (a === 'ctrlDevice') {
+            dev.sent.push([q.get('id'), q.get('val')]);
+            if (dev.reject) return { err: 1, desc: 'ERR_DEVICE_RESPONSE_TIMEOUT' };
+            if (dev.apply) dev.out = q.get('val');
+            return { err: 0, dat: {} };
+          }
+          return null;
+        },
+      });
+      await page.waitForSelector('.flow-card');
+      await page.evaluate(() => window.__nav('more', 'power'));
+      await page.waitForSelector('.ctl-cur .ctl-name', { timeout: 8000 }).catch(() => null);
+      check('يقرأ الوضع الحالي من الجهاز ويعرض ترتيب مصادره', (await text(page, '.ctl-cur .src-order')).replace(/\s/g, '') === 'الألواح←البطارية←الشبكة', await text(page, '.ctl-cur'));
+      check('يعرض الأوضاع التي يدعمها الجهاز فقط، والحالي بلا زر', (await page.$$('.ctl-opt')).length === 3 && (await page.$$('[data-ctl]')).length === 2);
+      check('أولوية الشحن تُعرض للقراءة فقط', (await text(page, '#view')).includes('أولوية مصدر الشحن الآن') && dev.sent.length === 0);
+      // إلغاء التأكيد: لا يُرسل شيء
+      await page.click('[data-ctl="0"]'); await page.click('.modal [data-v="0"]'); await page.waitForTimeout(200);
+      check('إلغاء التأكيد لا يرسل أي أمر', dev.sent.length === 0);
+      // تحويل ناجح: يُرسل مرة واحدة لإعداد الخرج فقط، ثم يتأكد من الجهاز
+      await page.click('[data-ctl="0"]');
+      check('نافذة التأكيد تذكر الوضعين وأن أولوية الشحن لن تتغيّر', (await text(page, '.modal')).includes('لن تتغيّر') && (await text(page, '.modal')).includes('الشبكة ثم الألواح ثم البطارية'), await text(page, '.modal'));
+      await page.click('.modal [data-v="1"]');
+      await page.waitForSelector('.ctl-state.wait', { timeout: 3000 }).catch(() => null);
+      check('أثناء التحقق يُعرض «المطلوب» لا «تم»', (await text(page, '.ctl-state')).includes('المطلوب'));
+      await page.waitForSelector('.ctl-state.confirmed', { timeout: 6000 }).catch(() => null);
+      check('بعد أن يعيد الجهاز الوضع الجديد يظهر «تأكّد»', !!(await page.$('.ctl-state.confirmed')) && (await page.$eval('.ctl-opt.on', (e) => e.textContent)).includes('الشبكة'));
+      check('أُرسل أمر واحد لإعداد أولوية الخرج وحده', dev.sent.length === 1 && dev.sent[0][0] === 'bse_output_source_priority' && dev.sent[0][1] === '0', JSON.stringify(dev.sent));
+      // الجهاز يقبل الأمر ولا يطبّقه: لا يظهر نجاح
+      dev.apply = false;
+      await page.click('[data-ctl="2"]'); await page.click('.modal [data-v="1"]');
+      await page.waitForSelector('.ctl-state.unconfirmed', { timeout: 8000 }).catch(() => null);
+      check('أمر لم يطبّقه الجهاز لا يُعرض كنجاح', !!(await page.$('.ctl-state.unconfirmed')) && !(await page.$('.ctl-state.confirmed')) && dev.sent.length === 2);
+      // رفض الأمر (انتهاء المهلة) برسالة عربية
+      dev.reject = true;
+      await page.click('[data-ctl="2"]'); await page.click('.modal [data-v="1"]');
+      await page.waitForSelector('.ctl-state.rejected', { timeout: 6000 }).catch(() => null);
+      check('رفض الأمر يظهر بسببه بالعربية', (await text(page, '.ctl-state')).includes('لم يرد في الوقت المحدد'), await text(page, '.ctl-state'));
+      const log = await page.$$eval('.ctl-log li', (a) => a.map((e) => e.className));
+      check('سجل التحويلات يحفظ النتائج الثلاث', log.join(',') === 'rejected,unconfirmed,confirmed', log.join(','));
+      const saved = await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('taqati.ctl.')).length);
+      check('السجل محفوظ دائماً', saved === 1);
+      check('بلا أخطاء JavaScript (التحكم)', page.errors.length === 0, page.errors.join(' | '));
+      await page.context().close();
+
+      // التقدير وعدّاد الشبكة (وضع تجريبي)
+      const d = await newPage(browser, { loggedIn: false, prefs: { batteryAh: 200 } });
+      await d.click('#demoBtn'); await d.waitForSelector('.flow-card');
+      await d.evaluate(() => window.__nav('reports', null)); await d.waitForTimeout(300);
+      check('التقارير فيها «تقدير الأسبوعين القادمين» و«كهرباء الشبكة»', !!(await d.$('[data-page=forecast]')) && !!(await d.$('[data-page=gridmeter]')));
+      await d.evaluate(() => window.__nav('reports', 'forecast'));
+      await d.waitForSelector('.fc-rows', { timeout: 30000 }).catch(() => null);
+      const ft = await text(d, '#view');
+      check('التقدير موسوم بأنه ليس توقعاً مؤكداً ولا يغيّر الإعدادات', ft.includes('تقدير وليس توقعاً مؤكداً') && ft.includes('لا يُطبَّق أي اقتراح تلقائياً'));
+      check('مقارنة الأسبوعين وتقدير 14 يوماً', (await d.$$('table.cmp tbody tr')).length === 5 && (await d.$$('.fc-r')).length === 14);
+      check('اقتراح الاحتياطي يظهر عند إدخال سعة البطارية', ft.includes('احتياطي البطارية المقترح'));
+      await d.evaluate(() => window.__nav('reports', 'gridmeter'));
+      await d.waitForSelector('.stats', { timeout: 60000 }).catch(() => null);
+      const gt = await text(d, '#view');
+      check('عدّاد الشبكة موسوم بأنه تقدير ويعرض بداية السجل', gt.includes('تقدير محسوب، لا عدّاد من الجهاز') && gt.includes('بداية السجل المتاح') && (await d.$$('.stats .stat')).length === 4);
+      check('بلا تمرير أفقي في الصفحات الجديدة', await noHScroll(d));
+      check('بلا أخطاء JavaScript (التقدير والعدّاد)', d.errors.length === 0, d.errors.join(' | '));
+      await d.context().close();
+    }
+
     // 11) التحقق من التحديثات
     {
       const page = await newPage(browser, { api: lastData(2), release: relOf('9.9.0', 'ميزة رائعة\nإصلاحات') });

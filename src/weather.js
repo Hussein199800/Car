@@ -127,3 +127,14 @@ export function sceneStory(m, w, { kwp = null, lowSoc = 30 } = {}) {
   if (line && m.gridOn) return { level: 'info', title: 'كهرباء الشبكة تغذّي البيت', text: `الحمل ${w$(m.outW)}.` };
   return { level: 'ok', title: sky ? `${SKY_AR[sky]} · الألواح تغذّي البيت` : 'الألواح تغذّي البيت', text: `إنتاج ${w$(pv)} والحمل ${w$(m.outW)}.` };
 }
+
+// الإشعاع الشمسي اليومي (MJ/م²) للأيام الماضية والقادمة: أساس تقدير إنتاج الألواح.
+// الخدمة تتوقع حتى 16 يوماً؛ ما بعدها يُقدَّر من المتوسط وحده.
+export async function fetchRadiation(lat, lon, fetchFn = fetch) {
+  const q = `latitude=${lat}&longitude=${lon}&daily=shortwave_radiation_sum,temperature_2m_min&timezone=auto&past_days=14&forecast_days=16`;
+  const d = await get(`${FORECAST}?${q}`, fetchFn);
+  const t = d.daily?.time || [], r = d.daily?.shortwave_radiation_sum || [], tm = d.daily?.temperature_2m_min || [];
+  const days = t.map((date, i) => ({ date, rad: Number.isFinite(r[i]) ? r[i] : null, tmin: Number.isFinite(tm[i]) ? tm[i] : null })).filter((x) => x.rad !== null);
+  if (!days.length) throw new Error('لا توجد بيانات إشعاع من خدمة الطقس');
+  return { days, at: Date.now() };
+}

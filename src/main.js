@@ -18,11 +18,13 @@ import { icons } from './icons.js';
 import { isNative, secure, migrateSession, monitor, deviceTools, APPS, updater } from './native.js';
 import { fetchLatest, isNewer } from './update.js';
 import { INFO, infoBtn } from './info.js';
-import { fetchWeather, searchPlace, sceneStory, SKY_AR } from './weather.js';
+import { fetchWeather, fetchRadiation, searchPlace, sceneStory, SKY_AR } from './weather.js';
 import { scene3d } from './scene3d.js';
 import { scenePhoto, photoFor, batLook, photoIsDark } from './scenePhoto.js';
 import { sceneClassic } from './sceneClassic.js';
-import { analyze } from './advisor.js';
+import { analyze, capacityKwh } from './advisor.js';
+import { findField, isOutputPriority, isChargerPriority, orderOf, matchItem, changeAndVerify, addLog } from './control.js';
+import { analyzeTwoWeeks, rememberForecast, accuracy, gridMeter } from './forecast.js';
 import { CATS, catOf, levelOf, toEvents, migrateLog, addEvents } from './log.js';
 import { trendDates, change } from './trend.js';
 import { settingInfo, optionAr, hintRange } from './settings-info.js';
@@ -32,7 +34,7 @@ import { TIP_SECTIONS, smartTips, tipOfDay } from './tips.js';
 Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, CategoryScale, Filler, Tooltip, Legend);
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '3.10.0';
+const VERSION = '3.11.0';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -43,6 +45,8 @@ const DEFAULT_PREFS = {
   currency: '',
   loc: null,
   cutoffSoc: 20,
+  // ساعات انقطاع الشبكة التي يُحسب لها احتياطي البطارية المقترح
+  reserveHours: 6,
   theme: 'auto',
   // شكل المشهد في الرئيسية: صور واقعية، أو رسم ثلاثي الأبعاد، أو الكلاسيكي
   sceneStyle: 'photo',
@@ -431,10 +435,9 @@ function openTour() {
 
 // ما الجديد في هذا الإصدار: يظهر مرة واحدة بعد التحديث
 const WHATS_NEW = [
-  'لكل اتجاه طاقة لون: أصفر من الألواح، بنفسجي من الشبكة، أخضر شحن البطارية، برتقالي سحب منها، أزرق إلى البيت، ودليل للألوان تحت المشهد.',
-  'سطر حالة واضح: متصل · الوضع · تشحن أو تُفرّغ · تكتمل أو تكفي حتى ساعة محددة.',
-  'صيغة الوقت 12 ساعة (ص/م) أو 24 ساعة، وأربعة خطوط عربية، وحجم «أصغر» للخط.',
-  'المشهد ثلاثي الأبعاد أنظف: شرائح بطارية مضيئة بدل النص المائل، وزوايا موحّدة في كل التطبيق.',
+  'أولوية مصدر الطاقة من «المزيد»: تبديل بين الألواح والبطارية والشبكة، ولا يُعدّ التحويل ناجحاً حتى يؤكده الجهاز نفسه، مع سجل لكل تحويل.',
+  'تقدير الأسبوعين القادمين في التقارير: مقارنة آخر أسبوعين، والعجز المتوقع، واقتراح احتياطي البطارية وساعات الشبكة (للعرض فقط).',
+  'كهرباء الشبكة: ما سحبته من الشبكة يومياً وأسبوعياً وشهرياً، مفصولاً بين تغذية البيت وشحن البطارية (تقدير).',
 ];
 function openWhatsNew() {
   store.set('seenVersion', VERSION);
@@ -553,7 +556,7 @@ function banner() {
 const PAGE_TITLES = {
   load: 'الحمل', battery: 'البطارية', solar: 'الألواح الشمسية', grid: 'كهرباء الشبكة',
   day: 'التقرير اليومي', week: 'التقرير الأسبوعي', month: 'التقرير الشهري', year: 'التقرير السنوي', srvlog: 'سجل الإنفرتر في الخادم', 
-  rules: 'شروط التنبيه', advisor: 'ملاحظات على منظومتك', device: 'الإنفرتر', update: 'التحديثات', edit: 'إعدادات الإنفرتر', setup: 'ربط الجهاز والحساب',
+  rules: 'شروط التنبيه', advisor: 'ملاحظات على منظومتك', device: 'الإنفرتر', update: 'التحديثات', edit: 'إعدادات الإنفرتر', power: 'أولوية مصدر الطاقة', forecast: 'تقدير الأسبوعين القادمين', gridmeter: 'كهرباء الشبكة', setup: 'ربط الجهاز والحساب',
   tips: 'النصائح', ...Object.fromEntries(TIP_SECTIONS.map((t) => [t.id, t.title])),
   settings: 'الإعدادات', calc: 'حاسبة الأحمال', about: 'حول التطبيق',
 };
@@ -1308,7 +1311,7 @@ function independenceCard() {
 }
 
 function viewReports() {
-  const pages = { day: pageDay, week: () => pageRange('week'), month: () => pageRange('month'), year: pageYear, advisor: pageAdvisor };
+  const pages = { day: pageDay, week: () => pageRange('week'), month: () => pageRange('month'), year: pageYear, advisor: pageAdvisor, forecast: pageForecast, gridmeter: pageGridMeter };
   if (state.page && pages[state.page]) return pages[state.page]();
   const urgent = urgentCount();
   return `
@@ -1316,6 +1319,8 @@ function viewReports() {
   <section class="intro"><h2>التقارير${infoBtn('report')}</h2></section>
   ${listCards([
     { page: 'advisor', title: 'ملاحظات على منظومتك', sub: 'ما يحتاج انتباهك الآن، واستخدام البطارية وتوصيات آخر 7 أيام', icon: icons.bulb, color: urgent ? 'c-pink' : 'c-green', badge: urgent ? `${urgent} مهم` : '' },
+    { page: 'forecast', title: 'تقدير الأسبوعين القادمين', sub: 'مقارنة آخر أسبوعين، والعجز المتوقع، واقتراح احتياطي البطارية', icon: icons.chart, color: 'c-sky' },
+    { page: 'gridmeter', title: 'كهرباء الشبكة', sub: 'ما سحبته من الشبكة يومياً وأسبوعياً وشهرياً (تقدير)', icon: icons.grid, color: 'c-violet' },
     { page: 'day', title: 'التقرير اليومي', sub: 'رسوم القدرة والبطارية والكهرباء ليوم محدد', icon: icons.calendar, color: 'c-amber' },
     { page: 'week', title: 'التقرير الأسبوعي', sub: 'الإنتاج والاستهلاك لكل يوم، والتغيّر عن الأسبوع السابق', icon: icons.week, color: 'c-sky' },
     { page: 'month', title: 'التقرير الشهري', sub: 'مجموع الشهر وأفضل يوم، والتغيّر عن الشهر السابق', icon: icons.month, color: 'c-green' },
@@ -2114,6 +2119,275 @@ async function sendSetting(li, f, val, shown) {
   }
 }
 
+// ================= أولوية مصدر الطاقة: تحكم يدوي مع تحقق من الجهاز =================
+// لا يُرسل شيء إلا بضغطة وتأكيد من المستخدم، ولا يُعرض «تم» إلا إذا أعاد الجهاز الوضع المطلوب.
+const orderHtml = (label) => {
+  const o = orderOf(label);
+  return o ? `<span class="src-order">${o.order.map((x) => `<i>${x}</i>`).join('<b>←</b>')}</span>` : '<span class="src-order na">ترتيب المصادر لهذا الخيار غير معروف للتطبيق؛ راجع دليل جهازك</span>';
+};
+
+// قراءة حديثة من الجهاز للتحقق: لا نستخدم قيماً محفوظة سابقاً
+async function readFresh(f) {
+  try {
+    const v = (await api.ctrlValue(device(), f.id)).val;
+    if (!unknownVal(v)) return v;
+  } catch (e) {
+    if (e.code === undefined) throw e;
+  }
+  const list = await api.parameters(device());
+  const p = list.find((x) => String(x.par) === String(f.id) || String(x.name || '').trim().toLowerCase() === String(f.name).trim().toLowerCase());
+  if (!p || unknownVal(p.val)) throw new Error('الجهاز لم يُعد قيمة هذا الإعداد');
+  return p.val;
+}
+
+async function loadPower(force = false) {
+  const c = state.ctl || (state.ctl = {});
+  if (c.loading || (!force && c.field)) return;
+  c.loading = true; c.error = null;
+  if (leaf() === 'power') render();
+  try {
+    if (!state.fields) state.fields = await api.ctrlFields(device());
+    c.field = findField(state.fields, isOutputPriority);
+    c.chgField = findField(state.fields, isChargerPriority);
+    if (!c.field) throw new Error('هذا الجهاز لا يتيح تغيير أولوية مصدر الخرج عن بُعد.');
+    c.cur = matchItem(c.field.item, await readFresh(c.field));
+    c.curAt = Date.now();
+    c.chgCur = null;
+    if (c.chgField) { try { c.chgCur = matchItem(c.chgField.item, await readFresh(c.chgField)); } catch { /* للعرض فقط */ } }
+  } catch (e) { c.error = e.message; }
+  c.loading = false;
+  if (leaf() === 'power') render();
+}
+
+function pagePower() {
+  if (state.demo) return '<div class="empty">التحكم بأولوية مصدر الطاقة متاح بعد تسجيل الدخول بحسابك الحقيقي.</div>';
+  if (state.model?.stale) return `${banner()}<div class="empty bad">الإنفرتر غير متصل حالياً، فلا يمكن قراءة وضعه أو تغييره.</div>`;
+  const c = state.ctl || {};
+  const log = store.get('ctl.' + sn(), []);
+  const logHtml = log.length ? `<h3 class="sec-h">سجل التحويلات</h3><ul class="ctl-log card">${log.slice(0, 20).map((e) => `
+    <li class="${e.status}"><b>${esc(e.from || '؟')} ← ${esc(e.to)}</b><span>${{ confirmed: 'تأكّد من الجهاز', unconfirmed: 'لم يتأكد', rejected: 'مرفوض', error: 'لم يُرسل' }[e.status] || e.status}${e.error ? ' · ' + esc(e.error) : ''}</span><small>${esc(fmt.dateTime(e.at))} · يدوي</small></li>`).join('')}</ul>` : '';
+  if (c.error) return `<div class="empty bad">${esc(c.error)}</div><button class="btn ghost wide" id="ctlRetry">إعادة المحاولة</button>${logHtml}`;
+  if (!c.field || c.loading) return '<div class="empty"><div class="spinner"></div>جارٍ قراءة الوضع الحالي من الإنفرتر…</div>';
+  const b = c.busy, r = c.result;
+  const status = b
+    ? `<div class="ctl-state wait"><div class="spinner sm"></div><div><b>المطلوب: ${esc(optionAr(b.val))}</b><small>أُرسل الأمر، وجارٍ التحقق بقراءة الوضع من الجهاز…</small></div></div>`
+    : r ? `<div class="ctl-state ${r.status}">${r.status === 'confirmed' ? icons.check : icons.warn}<div><b>${{
+      confirmed: `تأكّد التحويل إلى ${esc(optionAr(r.target.val))}`,
+      unconfirmed: `أُرسل الأمر ولم يتأكد التحويل إلى ${esc(optionAr(r.target.val))}`,
+      rejected: 'رُفض الأمر ولم يتغيّر الوضع',
+      same: 'هذا هو الوضع الحالي أصلاً',
+      error: 'لم يُرسل الأمر',
+    }[r.status]}</b><small>${r.status === 'confirmed' ? 'الجهاز نفسه يعيد الآن الوضع المطلوب.' : r.status === 'unconfirmed' ? `الجهاز ما زال يعيد «${esc(r.after ? optionAr(r.after.val) : 'قيمة غير مقروءة')}». قد يتأخر التطبيق بضع دقائق؛ اضغط «إعادة القراءة» للتأكد.` : esc(r.error || '')}</small></div></div>` : '';
+  return `
+  <div class="banner warn">${icons.warn}<span><b>تغيير مباشر على الإنفرتر</b>لا يُرسل شيء إلا بعد تأكيدك، ولا يُعدّ التحويل ناجحاً حتى يعيد الجهاز الوضع الجديد.</span></div>
+  <section class="card ctl-cur"><div class="card-h"><h2>الوضع المؤكد من الجهاز</h2><button class="link" id="ctlRead">إعادة القراءة</button></div>
+    ${c.cur ? `<b class="ctl-name">${esc(optionAr(c.cur.val))}</b>${orderHtml(c.cur.val)}` : '<p class="note warn">' + icons.warn + '<span>الجهاز أعاد قيمة لا تطابق أي خيار معروف، فلن يُرسل أي تغيير حتى تُقرأ بوضوح.</span></p>'}
+    <small class="hint">قُرئ من الجهاز ${esc(fmt.time(c.curAt))}</small>
+    ${status}
+  </section>
+  <h3 class="sec-h">الأوضاع التي يدعمها جهازك</h3>
+  <div class="ctl-opts">${c.field.item.map((it) => {
+    const cur = c.cur && String(c.cur.key) === String(it.key);
+    return `<div class="card ctl-opt ${cur ? 'on' : ''}"><div><b>${esc(optionAr(it.val))}</b>${orderHtml(it.val)}</div>
+      ${cur ? '<span class="tag ok">الحالي</span>' : `<button class="btn primary" data-ctl="${esc(it.key)}" ${b || !c.cur ? 'disabled' : ''}>حوّل إليه</button>`}</div>`;
+  }).join('')}</div>
+  <p class="hint">الترتيب المعروض هو المتعارف عليه لهذه العائلة من الأجهزة. تأكد منه على جهازك مرة واحدة: حوّل، ثم راقب في الرئيسية من أين يتغذى البيت.</p>
+  <section class="card"><div class="card-h"><h2>شحن البطارية من الشبكة</h2></div>
+    ${c.chgCur ? kv([['أولوية مصدر الشحن الآن', val(optionAr(c.chgCur.val))]]) : '<p class="hint">تعذّرت قراءة أولوية مصدر الشحن.</p>'}
+    <p class="hint">إعداد مستقل لا يغيّره التطبيق هنا. عند جعل الشبكة أولاً قد تُشحن البطارية منها إن كان هذا الإعداد يسمح بذلك.</p>
+    <button class="link" data-goto="more:edit">تغييره من «إعدادات الإنفرتر»</button></section>
+  ${logHtml}`;
+}
+
+AFTER.power = () => {
+  bindGoto();
+  const c = state.ctl || (state.ctl = {});
+  if (!state.demo && !state.model?.stale && !c.field && !c.error && !c.loading) loadPower();
+  const retry = $('#ctlRetry') || $('#ctlRead');
+  if (retry) retry.onclick = () => { c.result = null; loadPower(true); };
+  document.querySelectorAll('[data-ctl]').forEach((btn) => {
+    btn.onclick = async () => {
+      if (c.busy) return;
+      const it = c.field.item.find((x) => String(x.key) === btn.dataset.ctl);
+      const o = orderOf(it.val);
+      const chg = c.chgCur ? `<br>أولوية الشحن الحالية: <b>${esc(optionAr(c.chgCur.val))}</b> ولن تتغيّر.` : '';
+      if (!(await confirmDialog('تأكيد التحويل', `سيتحوّل الإنفرتر من <b>${esc(optionAr(c.cur.val))}</b> إلى <b>${esc(optionAr(it.val))}</b>${o ? ` (${o.order.join(' ثم ')})` : ''}.${chg}<br>هل أنت متأكد؟`))) return;
+      c.busy = it; c.result = null;
+      render();
+      const field = c.field;
+      const res = await changeAndVerify({ read: () => readFresh(field), send: (key) => api.setCtrl(device(), field.id, key), items: field.item, key: it.key, delayMs: isNative ? 4000 : store.get('devCtlDelayMs', 4000) });
+      c.busy = null; c.result = res;
+      if (res.after) { c.cur = res.after; c.curAt = Date.now(); }
+      if (res.status !== 'same') {
+        const entry = { at: Date.now(), from: res.before ? optionAr(res.before.val) : null, to: optionAr(it.val), status: res.status, error: res.error || null, by: 'manual' };
+        store.set('ctl.' + sn(), addLog(store.get('ctl.' + sn(), []), entry));
+        logEvent('set', res.status === 'confirmed' ? 'info' : 'warn', 'أولوية مصدر الخرج', `${entry.from || '؟'} ← ${entry.to}: ${{ confirmed: 'تأكّد من الجهاز', unconfirmed: 'لم يتأكد', rejected: 'مرفوض', error: 'لم يُرسل' }[res.status]}`);
+      }
+      if (leaf() === 'power') render();
+    };
+  });
+};
+
+// ================= تحليل آخر أسبوعين وتقدير الأسبوعين القادمين =================
+async function loadTwoWeeks() {
+  const token = Symbol('fc');
+  state.rep.fc = { loading: true, token, pct: 0 };
+  render();
+  const dates = Array.from({ length: 15 }, (_, i) => today(i - 14));
+  serverHistFails = 0;
+  const sums = await loadSummaries(dates, (done, total) => {
+    if (state.rep.fc?.token !== token) return;
+    state.rep.fc.pct = (done / total) * 100;
+    const p = $('#fcProg');
+    if (p) p.style.width = state.rep.fc.pct + '%';
+  });
+  if (state.rep.fc?.token !== token) return;
+  // الإشعاع الشمسي المتوقع: اختياري، وبدونه يبقى التقدير من متوسط الأسبوع الأخير
+  let rad = null, radError = null;
+  const loc = state.demo ? null : weatherLoc();
+  if (loc) {
+    const key = `${(+loc.lat).toFixed(2)},${(+loc.lon).toFixed(2)}`;
+    const cached = store.get('rad', null);
+    if (cached && cached.key === key && Date.now() - cached.r.at < 6 * 36e5) rad = cached.r;
+    else {
+      try { rad = await fetchRadiation(loc.lat, loc.lon); store.set('rad', { key, r: rad }); } catch (e) { radError = e.message; rad = cached?.key === key ? cached.r : null; }
+    }
+  }
+  if (state.rep.fc?.token !== token) return;
+  state.rep.fc = { sums, rad, radError, hasLoc: !!loc, at: Date.now() };
+  if (state.tab === 'reports' && leaf() === 'forecast') render();
+}
+
+const kwhU = (v) => (v == null ? '—' : `<bdi>${fmt.kwh(v)}</bdi> <small>ك.و.س</small>`);
+const deltaTag = (d, goodUp) => (d == null ? '' : `<span class="dl ${Math.abs(d) < 3 ? '' : (d > 0) === goodUp ? 'up' : 'down'}"><bdi>${d > 0 ? '+' : ''}${Math.round(d)}%</bdi></span>`);
+
+function pageForecast() {
+  const f = state.rep.fc;
+  const note = '<div class="banner info">' + icons.info + '<span><b>تقدير وليس توقعاً مؤكداً</b>مبني على قراءاتك الفعلية في آخر أسبوعين وتوقع الطقس إن توفر، ويُعاد حسابه كل يوم. لا يغيّر التطبيق أي إعداد بناءً عليه.</span></div>';
+  if (!f || f.loading) return `${note}<div class="card"><p class="center">جارٍ تحليل آخر أسبوعين…</p><div class="bar"><i id="fcProg" style="width:${f?.pct || 0}%"></i></div><p class="hint center">الأيام المكتملة تُحفظ، فيصبح التحليل أسرع في المرات القادمة.</p></div>`;
+  const m = state.model;
+  const volts = m?.ratedV || nominalV(m);
+  const cap = capacityKwh(state.prefs.batteryAh, volts);
+  const radPast = f.rad ? Object.fromEntries(f.rad.days.filter((d) => d.date < today()).map((d) => [d.date, d.rad])) : null;
+  const radFuture = f.rad ? f.rad.days.filter((d) => d.date >= today()) : null;
+  const r = analyzeTwoWeeks(f.sums, today(), { radPast, radFuture, capKwh: cap, cutoffSoc: state.prefs.cutoffSoc ?? 20, reserveHours: state.prefs.reserveHours ?? 6 });
+  // نحفظ تقدير اليوم لنقارنه غداً بما حدث فعلاً
+  if (r.ok && !state.demo) store.set('fc.' + sn(), rememberForecast(store.get('fc.' + sn(), {}), r, today()));
+  const acc = state.demo ? null : accuracy(store.get('fc.' + sn(), {}), f.sums, today());
+  const row = (label, k, goodUp) => `<tr><th>${label}</th><td>${kwhU(r.prev[k])}</td><td>${kwhU(r.last[k])}</td><td>${r.comparable ? deltaTag(r.delta[k], goodUp) : ''}</td></tr>`;
+  const cmp = `<section class="card"><div class="card-h"><h2>الأسبوع الأخير مقابل الذي قبله</h2></div>
+    <table class="cmp"><thead><tr><th>المتوسط اليومي</th><th>قبل أسبوعين</th><th>الأسبوع الأخير</th><th>التغيّر</th></tr></thead><tbody>
+      ${row('إنتاج الألواح', 'pvKwh', true)}${row('استهلاك البيت', 'loadKwh', false)}${row('شحن من الألواح', 'solarChgKwh', true)}${row('شحن من الشبكة', 'gridChgKwh', false)}${row('استيراد الشبكة (تقدير)', 'gridKwh', false)}
+    </tbody></table>
+    <p class="hint">من ${countAr(r.prev.n, DAY)} مكتملة ثم ${countAr(r.last.n, DAY)} مكتملة.${r.missing ? ` ${countAr(r.missing, DAY)} ناقصة البيانات لم تُحسب.` : ''}${r.comparable ? '' : ' لا تكفي الأيام المكتملة لمقارنة موثوقة (يلزم 4 في كل أسبوع).'}</p></section>`;
+  if (!r.ok) return `${note}${cmp}<div class="empty">يلزم 3 أيام مكتملة على الأقل في الأسبوع الأخير لبناء تقدير. افتح التطبيق بعد يومين أو ثلاثة.</div>`;
+  const how = r.method === 'weather'
+    ? `الإنتاج: إنتاجك الفعلي لكل وحدة إشعاع شمسي في الأسبوعين × الإشعاع المتوقع من خدمة الطقس. الأيام بعد مدى التوقع من المتوسط وحده.`
+    : `الإنتاج: متوسط الأسبوع الأخير (${f.hasLoc ? esc(f.radError || 'توقع الطقس غير متوفر الآن') : 'حدّد موقع منظومتك في الإعدادات ليدخل توقع الطقس في التقدير'}).`;
+  const wk = (w, title) => `<div class="fc-week"><h3>${title}</h3>
+    ${kv([['إنتاج الألواح يومياً', kwhU(w.pv)], ['استهلاك البيت يومياً', kwhU(w.load)], ['العجز اليومي المتوقع', w.deficit > 0.05 ? `${kwhU(w.deficit)} <small>(حتى ${fmt.kwh(w.deficitHi)})</small>` : '<span class="tag ok">لا عجز متوقع</span>'], ['أيام بتوقع طقس', `${w.weatherDays} من 7`]])}</div>`;
+  const s = r.suggest;
+  const sug = s ? `<section class="card"><div class="card-h"><h2>اقتراحات (للعرض فقط)</h2></div>
+    ${kv([
+      ['ساعات تغذية البيت من الشبكة يومياً', s.gridHours < 0.25 ? 'لا حاجة تقريباً' : `<bdi>${s.gridHours.toFixed(1)}</bdi> <small>ساعة (حتى ${s.gridHoursHi.toFixed(1)})</small>`],
+      ['احتياطي البطارية المقترح', `<bdi>${s.reserveSoc}%</bdi> <small>يكفي ${countAr(s.reserveHours, ['ساعة', 'ساعتين', 'ساعات', 'ساعة'])} انقطاع بمعدل الليل</small>`],
+      ['ما تعطيه البطارية فوق الاحتياطي', kwhU(s.usableKwh)],
+      ['استهلاك الليل', `${kwhU(r.night.kwh)} <small>بمعدل ${fmt.w(r.night.kw * 1000)}</small>`],
+    ])}
+    <p class="hint">${s.gridHours >= 0.25 ? `نافذة من الساعة 5:00 م إلى 10:00 م تعطي 5 ساعات؛ ${s.gridHours <= 5 ? 'تكفي لتغطية العجز المتوقع' : s.gridHoursHi <= 5 ? 'تكفي' : `والعجز المتوقع يحتاج نحو ${s.gridHours.toFixed(1)}`}. ` : ''}لا يُطبَّق أي اقتراح تلقائياً. غيّر الوضع بنفسك من «أولوية مصدر الطاقة».</p>
+    <div class="form">${numField('reserveHours', 'ساعات الانقطاع التي تريد الاحتياط لها', 'ساعة', 1, 24)}</div>
+    <button class="btn ghost wide" data-goto="more:power">أولوية مصدر الطاقة</button></section>`
+    : `<section class="card"><p class="hint">${cap ? 'لا تكفي بيانات الليل لاقتراح احتياطي.' : 'أدخل سعة البطارية (مثلاً 200 أمبير ساعة) في الإعدادات ليُحسب الاحتياطي وساعات الشبكة المقترحة.'}</p>${cap ? '' : '<button class="link" data-goto="more:settings">فتح الإعدادات</button>'}</section>`;
+  const maxV = Math.max(...r.days.map((d) => Math.max(d.pv, d.load)), 1);
+  const bars = `<section class="card"><div class="card-h"><h2>يوماً بيوم</h2></div><div class="fc-rows">${r.days.map((d) => `
+    <div class="fc-r ${d.fromWeather ? '' : 'avg'}"><span class="fc-dt">${esc(fmt.day(d.date, { weekday: 'short' }))} <bdi>${esc(fmt.day(d.date, { day: 'numeric', month: 'numeric' }))}</bdi></span>
+      <span class="fc-b"><i class="fpv" style="width:${(d.pv / maxV) * 100}%"></i><i class="fld" style="width:${(d.load / maxV) * 100}%"></i></span>
+      <span class="fc-v">${d.deficit > 0.05 ? `<b>−<bdi>${fmt.kwh(d.deficit)}</bdi></b>` : '<small>لا عجز</small>'}</span></div>`).join('')}</div>
+    <p class="hint"><span class="lg fpv"></span> إنتاج متوقع <span class="lg fld"></span> استهلاك متوقع · الرقم: العجز بالكيلوواط ساعة · الصفوف الباهتة من المتوسط لا من توقع الطقس.</p></section>`;
+  const accHtml = acc ? `<section class="card"><div class="card-h"><h2>دقة تقدير أمس</h2></div>${kv([['الإنتاج: المقدّر ← الفعلي', `${kwhU(acc.pvF)} ← ${kwhU(acc.pvA)}`], ['الاستهلاك: المقدّر ← الفعلي', `${kwhU(acc.loadF)} ← ${kwhU(acc.loadA)}`]])}</section>` : '';
+  return `${note}${cmp}
+    <section class="card"><div class="card-h"><h2>الأسبوعان القادمان</h2></div><div class="fc-weeks">${wk(r.weeks[0], 'هذا الأسبوع')}${wk(r.weeks[1], 'الأسبوع التالي')}</div>
+      <p class="hint">${how} الاستهلاك: متوسط الأسبوع الأخير${Math.abs(r.loadTrend - 1) >= 0.02 ? ` مع اتجاه ${r.loadTrend > 1 ? 'الزيادة' : 'النقص'} بين الأسبوعين (${Math.round((r.loadTrend - 1) * 100)}%)، بنصفه في الأسبوع الأول وكاملاً في الثاني` : ''}.</p></section>
+    ${bars}${sug}${accHtml}`;
+}
+AFTER.forecast = () => {
+  bindGoto();
+  const f = state.rep.fc;
+  if (!f || (!f.loading && Date.now() - f.at > 30 * 60000)) loadTwoWeeks();
+  bindPrefs($('#view'));
+  const inp = $('[data-pref=reserveHours]');
+  if (inp) inp.addEventListener('change', () => setTimeout(() => { if (leaf() === 'forecast') render(); }, 50));
+};
+
+// ================= عدّاد كهرباء الشبكة (تقدير) =================
+// الجهاز لا يرسل قدرة السحب من الشبكة ولا عدّاداً لها، فنحسبها من وضع الشبكة: حمل البيت + الشحن الزائد عن الألواح.
+function allCachedSums() {
+  const s = sn();
+  return store.keys(`sum.${s}.`).map((k) => store.get(k, null)).filter((x) => x && x.v === 2);
+}
+
+async function loadGridMeter(days = 30) {
+  const token = Symbol('gm');
+  const prev = state.rep.gm;
+  state.rep.gm = { loading: true, token, pct: 0, back: days };
+  render();
+  const dates = Array.from({ length: days + 1 }, (_, i) => today(i - days));
+  serverHistFails = 0;
+  const sums = await loadSummaries(dates, (done, total) => {
+    if (state.rep.gm?.token !== token) return;
+    state.rep.gm.pct = (done / total) * 100;
+    const p = $('#gmProg');
+    if (p) p.style.width = state.rep.gm.pct + '%';
+  });
+  if (state.rep.gm?.token !== token) return;
+  // السجل الدائم = كل الأيام المحفوظة سابقاً + ما حُمّل الآن (اليوم الجاري لا يُحفظ)
+  const by = new Map(allCachedSums().map((x) => [x.date, x]));
+  sums.forEach((x) => { if (x && x.count > 1) by.set(x.date, x); });
+  // هل توقف الخادم عن إعادة بيانات في أقدم أسبوع مطلوب؟ عندها لا فائدة من طلب أقدم
+  const oldest = sums.slice(0, 7);
+  state.rep.gm = { sums: [...by.values()], back: days, end: oldest.every((x) => !x || x.count <= 1), from: prev?.from || null, at: Date.now() };
+  if (state.tab === 'reports' && leaf() === 'gridmeter') render();
+}
+
+function pageGridMeter() {
+  const g = state.rep.gm;
+  const note = '<div class="banner info">' + icons.info + '<span><b>تقدير محسوب، لا عدّاد من الجهاز</b>إنفرترك لا يرسل قدرة السحب من الشبكة. نحسبها حين يكون في وضع الشبكة: حمل البيت + ما شحن البطارية زيادةً عن الألواح، دون فواقد الإنفرتر.</span></div>';
+  if (!g || g.loading) return `${note}<div class="card"><p class="center">جارٍ جمع سجل الأيام…</p><div class="bar"><i id="gmProg" style="width:${g?.pct || 0}%"></i></div></div>`;
+  const r = gridMeter(g.sums, today(), g.from);
+  if (!r.start) return `${note}<div class="empty">لا توجد أيام يُعرف فيها وضع التشغيل بما يكفي لحساب استيراد الشبكة.</div>`;
+  const all = gridMeter(g.sums, today());
+  const cell = (t, title) => stat(title, fmt.kwh(t.load + t.chg), 'ك.و.س', 'c-violet', t.days ? `${countAr(t.days, DAY)}${t.partial ? ` · ${t.partial} ناقصة` : ''}` : 'لا بيانات');
+  return `${note}
+  <div class="stats">${cell(r.today, 'اليوم')}${cell(r.week, 'آخر 7 أيام')}${cell(r.month, 'آخر 30 يوماً')}${cell(r.all, g.from ? 'منذ التاريخ المختار' : 'منذ بدء السجل')}</div>
+  <section class="card"><div class="card-h"><h2>التفصيل منذ ${esc(fmt.day(r.start, { day: 'numeric', month: 'long', year: 'numeric' }))}</h2></div>
+    ${kv([
+      ['تغذية البيت من الشبكة', kwhU(r.all.load)],
+      ['شحن البطارية من الشبكة', kwhU(r.all.chg)],
+      ['المجموع', kwhU(r.all.load + r.all.chg)],
+      ['ساعات القراءات المحسوبة', `<bdi>${Math.round(r.all.coveredH)}</bdi> <small>من ${r.all.days * 24} ساعة</small>`],
+      r.all.partial ? ['أيام ناقصة التغطية', `<bdi>${r.all.partial}</bdi> <small>مجموعها أقل من الحقيقي</small>`] : null,
+    ])}
+    <p class="hint">بداية السجل المتاح: <b>${esc(fmt.day(all.start, { day: 'numeric', month: 'long', year: 'numeric' }))}</b>. فترات انقطاع القراءات لا تُحسب صفراً ولا تُقدَّر، بل تُستثنى.</p>
+    <label class="num-row"><span>اعرض واجمع ابتداءً من</span><input type="date" id="gmFrom" min="${all.start}" max="${today()}" value="${g.from || all.start}"></label>
+    ${g.from ? '<button class="link" id="gmAll">العودة لكل السجل</button>' : ''}
+    ${g.end ? '<p class="hint">الخادم لا يحتفظ ببيانات أقدم من ذلك.</p>' : `<button class="btn ghost wide" id="gmMore">تحميل 30 يوماً أقدم</button>`}
+  </section>
+  <section class="card"><div class="card-h"><h2>يوماً بيوم</h2></div>
+    <table class="cmp gm"><thead><tr><th>اليوم</th><th>البيت</th><th>الشحن</th><th>المجموع</th></tr></thead><tbody>
+    ${r.perDay.slice().reverse().slice(0, 62).map((d) => `<tr class="${d.coveredH < 18 && d.date < today() ? 'part' : ''}"><th>${esc(fmt.day(d.date, { weekday: 'short', day: 'numeric', month: 'numeric' }))}</th><td><bdi>${fmt.kwh(d.load)}</bdi></td><td><bdi>${fmt.kwh(d.chg)}</bdi></td><td><b><bdi>${fmt.kwh(d.load + d.chg)}</bdi></b></td></tr>`).join('')}
+    </tbody></table><p class="hint">بالكيلوواط ساعة. الصفوف الباهتة أيام ناقصة التغطية.</p></section>`;
+}
+AFTER.gridmeter = () => {
+  const g = state.rep.gm;
+  if (!g || (!g.loading && Date.now() - g.at > 30 * 60000)) loadGridMeter(g?.back || 30);
+  const f = $('#gmFrom');
+  if (f) f.onchange = () => { if (f.value) { state.rep.gm.from = f.value; render(); } };
+  const a = $('#gmAll');
+  if (a) a.onclick = () => { state.rep.gm.from = null; render(); };
+  const more = $('#gmMore');
+  if (more) more.onclick = () => loadGridMeter((state.rep.gm.back || 30) + 30);
+};
+
 // ================= تبويب النصائح =================
 const LEVEL = { bad: ['bad', icons.warn], warn: ['warn', icons.warn], info: ['info', icons.info], ok: ['ok', icons.check] };
 
@@ -2219,7 +2493,7 @@ function renderGuideStandalone(which) {
 // ================= تبويب المزيد =================
 function viewMore() {
   if (state.page?.startsWith('tips')) return viewTips();
-  const pages = { setup: () => setupGuide(true), edit: pageEdit, calc: () => viewCalc(calcHelpers()), settings: pageSettings, about: pageAbout, update: pageUpdate };
+  const pages = { setup: () => setupGuide(true), edit: pageEdit, power: pagePower, calc: () => viewCalc(calcHelpers()), settings: pageSettings, about: pageAbout, update: pageUpdate };
   if (state.page && pages[state.page]) return pages[state.page]();
   const themeName = { auto: 'تلقائي', dark: 'ليلي', light: 'نهاري' }[state.prefs.theme];
   return `
@@ -2229,6 +2503,7 @@ function viewMore() {
     <button class="dev-more" data-page="about" aria-label="حول التطبيق">${icons.info}</button>
   </section>
   ${listCards([
+    { page: 'power', title: 'أولوية مصدر الطاقة', sub: 'التبديل بين الألواح والبطارية والشبكة، مع التحقق من الجهاز', icon: icons.bolt || icons.grid, color: 'c-green' },
     { page: 'edit', title: 'إعدادات الإنفرتر', sub: 'تغيير الأولويات وتيارات الشحن عن بُعد', icon: icons.wrench, color: 'c-pink' },
     { page: 'calc', title: 'حاسبة الأحمال', sub: 'تحويل الأمبير والواط، وهل يتحمّل الإنفرتر أجهزة بيتك', icon: icons.calc, color: 'c-green' },
     { page: 'tips', title: 'النصائح', sub: 'استخدام الإنفرتر وبطاريات الليثيوم والتوفير والسلامة', icon: icons.bulb, color: 'c-amber' },

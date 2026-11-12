@@ -1001,3 +1001,52 @@ html.tablet:not(.wide) #view { max-width: 620px; margin-inline: auto; }
 button.tchip { font: inherit; font-size: calc(12.5px * var(--fs, 1)); font-weight: 700; color: var(--pri); cursor: pointer; min-height: 36px; }
 .tchips { gap: 8px; }
 .tchip { padding: 6px 12px; }
+
+/* ================= 3.11: أولوية مصدر الطاقة، التقدير، عدّاد الشبكة ================= */
+.banner.info { background: color-mix(in srgb, var(--pri) 10%, var(--card)); border-color: color-mix(in srgb, var(--pri) 35%, transparent); }
+.banner.info svg { color: var(--pri); }
+.src-order { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; font-size: calc(13px * var(--fs, 1)); color: var(--mute); }
+.src-order i { font-style: normal; font-weight: 700; color: var(--txt); padding: 3px 10px; border-radius: 999px; background: var(--soft); border: 1px solid var(--line); }
+.src-order b { color: var(--mute); font-weight: 400; }
+.src-order.na { font-size: calc(12.5px * var(--fs, 1)); }
+.ctl-cur .ctl-name { display: block; font-size: calc(22px * var(--fs, 1)); font-weight: 800; }
+.ctl-cur .hint { display: block; margin-top: 8px; }
+.ctl-state { display: flex; gap: 10px; align-items: flex-start; margin-top: 12px; padding: 10px 12px; border-radius: var(--r-md); border: 1px solid var(--line); background: var(--soft); }
+.ctl-state > svg { width: 22px; height: 22px; flex: none; margin-top: 2px; }
+.ctl-state b { display: block; font-weight: 800; }
+.ctl-state small { color: var(--mute); font-size: calc(12.5px * var(--fs, 1)); line-height: 1.7; }
+.ctl-state.confirmed { border-color: var(--ok); } .ctl-state.confirmed > svg, .ctl-state.confirmed b { color: var(--ok); }
+.ctl-state.unconfirmed, .ctl-state.same { border-color: var(--warn); } .ctl-state.unconfirmed > svg { color: var(--warn); }
+.ctl-state.rejected, .ctl-state.error { border-color: var(--bad); } .ctl-state.rejected > svg, .ctl-state.error > svg, .ctl-state.rejected b, .ctl-state.error b { color: var(--bad); }
+.ctl-opts { display: grid; gap: 10px; }
+.ctl-opt { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ctl-opt.on { border-color: var(--ok); }
+.ctl-opt b { font-weight: 800; }
+.ctl-opt .btn { flex: none; }
+.ctl-log { list-style: none; margin: 0; padding: 4px 14px; }
+.ctl-log li { display: grid; gap: 2px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.ctl-log li:last-child { border: 0; }
+.ctl-log span { font-size: calc(13px * var(--fs, 1)); font-weight: 700; }
+.ctl-log .confirmed span { color: var(--ok); } .ctl-log .unconfirmed span { color: var(--warn); } .ctl-log .rejected span, .ctl-log .error span { color: var(--bad); }
+.ctl-log small { color: var(--mute); font-size: calc(12px * var(--fs, 1)); }
+table.cmp { width: 100%; border-collapse: collapse; font-size: calc(13.5px * var(--fs, 1)); }
+table.cmp th, table.cmp td { padding: 9px 4px; text-align: start; border-bottom: 1px solid var(--line); }
+table.cmp thead th { color: var(--mute); font-weight: 600; font-size: calc(12px * var(--fs, 1)); }
+table.cmp tbody th { font-weight: 700; }
+table.cmp tbody tr:last-child th, table.cmp tbody tr:last-child td { border: 0; }
+table.cmp small { color: var(--mute); }
+table.cmp tr.part { opacity: .55; }
+.dl { display: inline-block; padding: 2px 8px; border-radius: 999px; font-weight: 800; font-size: calc(12px * var(--fs, 1)); background: var(--soft); color: var(--mute); }
+.dl.up { background: #10b98122; color: var(--ok); } .dl.down { background: #ef444422; color: var(--bad); }
+.fc-weeks { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.fc-week h3 { margin: 0 0 4px; font-size: calc(15px * var(--fs, 1)); font-weight: 800; }
+.fc-rows { display: grid; gap: 7px; }
+.fc-r { display: grid; grid-template-columns: 92px minmax(0, 1fr) 64px; gap: 8px; align-items: center; font-size: calc(12.5px * var(--fs, 1)); }
+.fc-r.avg { opacity: .55; }
+.fc-dt { color: var(--mute); white-space: nowrap; }
+.fc-b { display: grid; gap: 3px; }
+.fc-b i { display: block; height: 7px; border-radius: 4px; min-width: 3px; }
+.fpv { background: var(--k-sun); } .fld { background: var(--k-load); }
+.fc-v { text-align: end; } .fc-v b { color: var(--bad); font-weight: 800; } .fc-v small { color: var(--ok); font-weight: 700; }
+.lg { display: inline-block; width: 12px; height: 8px; border-radius: 2px; margin-inline: 8px 2px; }
+#gmFrom { font: inherit; padding: 8px 10px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--input); color: var(--txt); }

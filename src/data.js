@@ -64,7 +64,7 @@ const isLine = (m) => /line|utility|bypass/i.test(m || '');
 export function summarize(date, samples, source) {
   const s = samples.filter((x) => x.ts);
   let loadWh = 0, pvWh = 0, gridH = 0, batH = 0, coveredH = 0;
-  let chgWh = 0, disWh = 0, solarChgWh = 0, gridChgWh = 0, gridLoadWh = 0, nightLoadWh = 0, modeH = 0;
+  let chgWh = 0, disWh = 0, solarChgWh = 0, gridChgWh = 0, gridLoadWh = 0, nightLoadWh = 0, modeH = 0, nightH = 0;
   for (let i = 1; i < s.length; i++) {
     const dt = (s[i].ts - s[i - 1].ts) / 36e5;
     if (dt <= 0 || dt > MAX_GAP_H) continue;
@@ -90,7 +90,7 @@ export function summarize(date, samples, source) {
       modeH += dt;
       if (isLine(x.mode) && x.outW != null) gridLoadWh += x.outW * dt;
     }
-    if ((x.pvW ?? 0) < 20 && x.outW != null) nightLoadWh += x.outW * dt;
+    if ((x.pvW ?? 0) < 20 && x.outW != null) { nightLoadWh += x.outW * dt; nightH += dt; }
   }
   // عدّاد «إنتاج اليوم» في الجهاز قد يحمل قيمة الأمس لدقائق بعد منتصف الليل قبل أن يُصفَّر،
   // فنأخذ القيم بعد آخر تصفير فقط
@@ -141,6 +141,8 @@ export function summarize(date, samples, source) {
     gridChgKwh: kwh(gridChgWh),
     gridLoadKwh: modeKnown ? kwh(gridLoadWh) : null,
     nightLoadKwh: kwh(nightLoadWh),
+    // ساعات بلا إنتاج (ليل أو غيم كثيف): لحساب معدل استهلاك الليل
+    nightH,
     independence,
     tempMax: temps.length ? Math.max(...temps) : null,
   };
