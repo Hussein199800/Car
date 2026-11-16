@@ -1,6 +1,7 @@
 // حاسبة الأحمال: تحويل أمبير الكهرباء إلى واط وإلى أمبير البطارية، وقائمة أجهزة البيت
 // مع الحمل الكلي وتيار الإقلاع والمدة على البطارية واقتراح الألواح والبطاريات.
 import { store } from './data.js';
+import { viewSimulation } from './simulate.js';
 import { latinDigits } from './model.js';
 
 // الأرقام قد تُكتب بالعربية (٢٠٠) أو بفاصلة عشرية «٫»
@@ -88,7 +89,7 @@ export function viewCalc(h) {
   const seg = `<div class="seg">${tab('conv', 'محوّل الأمبير')}${tab('list', 'أجهزة بيتي')}${tab('save', 'التوفير')}</div>`;
   const intro = `<section class="hero c-amber calc-hero"><span class="g-deco">${icons.calc}</span><div class="h-ic">${icons.calc}</div>
     <b class="hero-t">حاسبة الأحمال</b><span>اعرف كم واط يسحب جهازك، وكم أمبير يأخذ من بطاريتك، وهل يتحمّله الإنفرتر</span></section>`;
-  return intro + seg + (c.tab === 'save' ? viewSavings(h) : c.tab === 'list' ? viewList(h, c, sysV) : viewConverter(h, c, sysV));
+  return intro + viewSimulation(h) + seg + (c.tab === 'save' ? viewSavings(h) : c.tab === 'list' ? viewList(h, c, sysV) : viewConverter(h, c, sysV));
 }
 
 const chips = (name, opts, cur) => `<div class="chips-sel">${opts.map(([v, label]) => `<button data-set="${name}" data-v="${v}" class="${String(cur) === String(v) ? 'on' : ''}">${label}</button>`).join('')}</div>`;

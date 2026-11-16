@@ -6,6 +6,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WidgetTest {
+    @Test fun failedFetchRevalidatesCachedWidget() {
+        val s = WidgetState(60, -1000, 1200, 200, false, 1_000_000L)
+        assertEquals(false, s.revalidated(1_000_000L + 14*60_000L, 15).stale)
+        assertEquals(true, s.revalidated(1_000_000L + 15*60_000L, 15).stale)
+        assertEquals(true, s.copy(at = 0).revalidated(1_000_000L,15).stale)
+    }
+
     @Test
     fun wattsUseArabicUnitsAndLatinDigits() {
         assertEquals("408 واط", WidgetText.watts(408))

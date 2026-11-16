@@ -34,10 +34,10 @@ const capLog = (list) => list.sort((a, b) => b.at - a.at).slice(0, LOG_CAP);
  * التنبيه الذي له حدث توأم (نفس الفئة وفي اللحظة نفسها) يحل محله، لأن نص الإشعار أوضح للمستخدم.
  */
 export function toEvents(alerts = [], faults = []) {
-  const events = faults.filter(Boolean).map((f) => ({ cat: catOf(f), level: levelOf(f), title: f.title, body: f.body, at: f.at, read: f.read !== false }));
+  const events = faults.filter(Boolean).map((f) => ({ ...(f.sn ? { sn: f.sn } : {}), cat: catOf(f), level: levelOf(f), title: f.title, body: f.body, at: f.at, read: f.read !== false }));
   for (const a of alerts.filter(Boolean)) {
     const cat = catOf(a);
-    const ev = { cat, level: levelOf(a), title: a.title, body: a.body, at: a.at, read: a.read === true };
+    const ev = { ...(a.sn ? { sn: a.sn } : {}), cat, level: levelOf(a), title: a.title, body: a.body, at: a.at, read: a.read === true };
     const i = events.findIndex((f) => !f.twin && f.cat === cat && Math.abs(f.at - a.at) <= TWIN_MS);
     if (i >= 0) events[i] = { ...ev, twin: true };
     else events.push(ev);

@@ -118,7 +118,7 @@ export function overlap(slots) {
   const days = new Set(Array.from({ length: 15 }, (_, i) => ref + i));
   (slots || []).forEach((s) => { if (s.date) { const d = Math.floor(Date.parse(s.date + 'T00:00:00Z') / DAYMS); days.add(d); days.add(d + 1); } });
   for (const day of days) {
-    for (let m = 0; m < 1440; m += 5) {
+    for (let m = 0; m < 1440; m++) {
       const hit = (slots || []).map((s, i) => (covers(s, day, m) ? i : -1)).filter((i) => i >= 0);
       if (hit.length > 1) return { a: hit[0], b: hit[1], day, m };
     }

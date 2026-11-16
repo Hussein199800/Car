@@ -1070,3 +1070,21 @@ table.cmp tr.part { opacity: .55; }
 .sugg { border-color: color-mix(in srgb, var(--pri) 35%, var(--line)); }
 .sugg .wn li { font-size: calc(13.5px * var(--fs, 1)); color: var(--mute); }
 .sugg .wn b { color: var(--txt); }
+
+/* ================= 3.13: محاكاة جهاز، وإعادة مشاهدة اليوم ================= */
+#simulation h2 { margin-bottom: 12px; }
+.sim-check { display: flex; align-items: center; gap: 10px; padding-block: 10px; font-size: calc(14px * var(--fs, 1)); }
+.sim-check input { flex-shrink: 0; width: 20px; height: 20px; }
+#simResult { margin-block: 10px; }
+.sim-row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; padding-block: 9px; border-bottom: 1px solid var(--line); font-size: calc(14px * var(--fs, 1)); }
+.sim-row > span { color: var(--mute); }
+.sim-row > b { text-align: end; font-weight: 800; }
+.sim-row small { color: var(--mute); font-weight: 600; }
+#replay h2 { margin: 0 0 6px; }
+#replay label { display: grid; gap: 6px; margin-top: 10px; font-weight: 700; }
+#replayTime { font-weight: 800; color: var(--pri); }
+#replaySlider { accent-color: var(--pri); }
+#replayPlay { margin: 10px 0; }
+#replayScene .replay-scene { margin-top: 8px; }
+#replayEvents h3 { font-size: calc(14px * var(--fs, 1)); margin: 12px 0 4px; }
+#replayEvents .link { display: block; text-align: start; }

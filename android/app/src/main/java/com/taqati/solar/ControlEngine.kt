@@ -37,10 +37,12 @@ data class CtlConfig(
     val tzOffsetMs: Long = 0,
     val notify: Boolean = true,
     val device: Device? = null,
+    val dryRun: Boolean = true,
 ) {
     companion object {
         fun fromJson(o: JSONObject): CtlConfig = CtlConfig(
             mode = o.optString("mode", "manual"),
+            dryRun = o.optBoolean("dryRun", true),
             fieldId = o.optString("fieldId"),
             gridKey = o.optString("gridKey"), gridLabel = o.optString("gridLabel"),
             solarKey = o.optString("solarKey"), solarLabel = o.optString("solarLabel"),
@@ -83,16 +85,18 @@ data class CtlState(
     val coverRuns: Int = 0,           // تشغيلات متتالية تغطي فيها الألواح الحمل
     val lastCheckAt: Long = 0,
     val lastNote: String = "",
+    val simKey: String = "",          // وضع التجربة: آخر قرار سُجّل
+    val simAt: Long = 0,
 ) {
     fun toJson(): JSONObject = JSONObject().put("handledBoundary", handledBoundary).put("attempts", attempts)
         .put("lastSwitchAt", lastSwitchAt).put("pauseUntil", pauseUntil).put("coverRuns", coverRuns)
-        .put("lastCheckAt", lastCheckAt).put("lastNote", lastNote)
+        .put("lastCheckAt", lastCheckAt).put("lastNote", lastNote).put("simKey", simKey).put("simAt", simAt)
 
     companion object {
         fun fromJson(s: String?): CtlState = try {
             val o = JSONObject(s ?: "{}")
             CtlState(o.optLong("handledBoundary"), o.optInt("attempts"), o.optLong("lastSwitchAt"), o.optLong("pauseUntil"),
-                o.optInt("coverRuns"), o.optLong("lastCheckAt"), o.optString("lastNote"))
+                o.optInt("coverRuns"), o.optLong("lastCheckAt"), o.optString("lastNote"), o.optString("simKey"), o.optLong("simAt"))
         } catch (e: Exception) {
             CtlState()
         }
@@ -104,6 +108,10 @@ data class Decision(val key: String?, val reason: String, val boundary: Long = 0
 
 object ControlEngine {
     const val MAX_ATTEMPTS = 3
+    /** قراءة متقدمة على ساعة الهاتف أكثر من هذا ليست حيّة (فرق ساعة الخادم يُصحَّح تلقائياً بتقريب ربع ساعة) */
+    const val FUTURE_TOLERANCE_MS = 20 * 60_000L
+    /** في وضع التجربة لا يُكرَّر تسجيل القرار نفسه قبل هذه المدة */
+    const val SIM_REPEAT_MS = 2 * 3_600_000L
     const val MANUAL_PAUSE_MS = 2 * 3_600_000L
     private const val DAY = 86_400_000L
 
@@ -207,7 +215,7 @@ object ControlEngine {
         var cover = st.coverRuns
         fun none(r: String) = Decision(null, r) to cover
         if (snap == null || ageMs == null) return none("لا توجد قراءة من الجهاز")
-        if (ageMs > c.staleMin * 60_000L) return none("آخر قراءة عمرها ${ageMs / 60_000} دقيقة؛ لا قرار على قراءة قديمة")
+        if (ageMs < -FUTURE_TOLERANCE_MS || ageMs >= c.staleMin * 60_000L) return none("آخر قراءة عمرها ${ageMs / 60_000} دقيقة؛ لا قرار على قراءة قديمة")
         val soc = snap.soc ?: return none("نسبة البطارية غير مقروءة")
         val pv = snap.pvW ?: return none("قدرة الألواح غير مقروءة")
         val load = snap.outW ?: return none("حمل البيت غير مقروء")
@@ -266,6 +274,15 @@ object ControlRunner {
                 d
             }
             else -> Decision(null, "التحكم يدوي")
+        }
+        // Enforced here before every possible send, including schedule configurations.
+        // وضع التجربة (افتراضي للإدارة الذكية): يسجّل ما كان سيفعله دون أي إرسال أو تحقق.
+        // سبب عدم القرار يُحفظ للعرض فقط، والقرار نفسه يُسجَّل مرة ولا يتكرر قبل ساعتين
+        if (c.dryRun && c.mode == "smart") {
+            if (decision.key == null) return RunResult(decision, "none", cur, null, state = st.copy(lastNote = "تجربة: " + decision.reason, simKey = ""))
+            val repeat = decision.key == st.simKey && now - st.simAt < ControlEngine.SIM_REPEAT_MS
+            return RunResult(decision, if (repeat) "none" else "simulated", cur, decision.key,
+                state = st.copy(lastNote = "تجربة دون إرسال: " + decision.reason, simKey = decision.key, simAt = if (repeat) st.simAt else now))
         }
         // الجدولة: الموعد المطابق أصلاً يُعدّ معالجاً
         if (c.mode == "schedule" && decision.key == null && cur != null && cur == ControlEngine.desiredKey(now, c) && st.handledBoundary != decision.boundary) {

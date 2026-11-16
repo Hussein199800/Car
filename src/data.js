@@ -3,6 +3,7 @@ import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { gridPresent } from './model.js';
+import { MAX_GAP_MS } from './timeline.js';
 
 const P = 'taqati.';
 export const store = {
@@ -56,7 +57,7 @@ function pruneRecords(sn, keepDays) {
 }
 
 // ---------- ملخص يوم ----------
-const MAX_GAP_H = 0.34; // فجوة أكبر من 20 دقيقة تعني انقطاع البيانات فلا نحسبها
+const MAX_GAP_H = MAX_GAP_MS / 36e5; // فجوة أكبر من 20 دقيقة تعني انقطاع البيانات فلا نحسبها
 
 // «Line Mode»: البيت يتغذى من كهرباء الشبكة مباشرة عبر الإنفرتر
 const isLine = (m) => /line|utility|bypass/i.test(m || '');

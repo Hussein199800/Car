@@ -113,7 +113,7 @@ export function normalize(points, staleMin = 15, offsetMs = 0) {
   if (x.ts) x.ts += offsetMs;
   const age = x.ts ? Date.now() - x.ts : null;
   // الخادم يعيد آخر قراءة محفوظة حتى لو كان الإنفرتر مطفأً، لذا نحكم بالاتصال من عمر القراءة
-  const stale = age !== null && age > staleMin * 60000;
+  const stale = validity(x.ts, staleMin).stale;
   return {
     ...x,
     temps: x.temps.map((t) => ({ ...t, ar: trTitle(t.key) })),
@@ -206,3 +206,15 @@ export const fmt = {
   // للملفات المصدّرة: صيغة ثابتة يفهمها Excel بلا رموز اتجاه مخفية
   iso: (t) => { const d = new Date(t); return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`; },
 };
+
+// صلاحية القراءة: بلا وقت، أو أقدم من المدة المحددة، أو متقدمة على ساعة الهاتف أكثر مما يفسّره
+// فرق ساعة الخادم (نسمح بـ20 دقيقة لأن تصحيح الفرق التلقائي يقرّب لربع ساعة) = ليست حيّة
+export const FUTURE_TOLERANCE_MS = 20 * 60000;
+export function validity(ts, staleMin = 15, now = Date.now()) {
+  const age = Number.isFinite(ts) ? now - ts : null;
+  return { age, stale: age === null || age < -FUTURE_TOLERANCE_MS || age >= staleMin * 60000 };
+}
+// تُعاد مع كل تحديث، حتى إذا فشل الاتصال: القراءة القديمة لا تبقى «حيّة»
+export function revalidate(model, staleMin = 15, now = Date.now()) {
+  return model ? { ...model, ...validity(model.ts, staleMin, now) } : model;
+}
