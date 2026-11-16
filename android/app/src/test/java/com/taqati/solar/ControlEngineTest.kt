@@ -19,7 +19,7 @@ class ControlEngineTest {
 
     private fun cfg(mode: String = "schedule", slots: List<Slot> = listOf(Slot(17 * 60, 22 * 60, "0"))) = CtlConfig(
         mode = mode, fieldId = "out", gridKey = "0", gridLabel = "Utility first", solarKey = "2", solarLabel = "SBU",
-        slots = slots, defaultKey = "2", items = items, device = dev,
+        slots = slots, defaultKey = "2", items = items, device = dev, dryRun = false,
     )
 
     // 2026-11-14 سبت، 2026-11-15 أحد

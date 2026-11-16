@@ -797,8 +797,9 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.fill('[data-sm="target"]', '٦٠'); await page.$eval('[data-sm="target"]', (e) => e.dispatchEvent(new Event('change')));
       await page.click('#ctlSave'); await page.click('.modal [data-v="1"]'); await page.waitForTimeout(300);
       const sm = await page.evaluate(() => JSON.parse(localStorage.getItem('taqati.ctlNative')));
+      check('الإدارة الذكية تبدأ بوضع التجربة (لا أوامر، والحظر داخل Kotlin)', sm.dryRun === true);
       check('الإدارة الذكية تُفعَّل بحدودها ووضعيها', sm.mode === 'smart' && sm.low === 40 && sm.target === 60 && sm.gridKey === '0' && sm.solarKey === '2', JSON.stringify(sm));
-      check('نمط واحد فعّال: تفعيل الذكية أوقف الجدولة', (await text(page, '.ctl-now')).includes('الإدارة الذكية فعّالة') && !(await text(page, '.ctl-now')).includes('الجدولة'));
+      check('نمط واحد فعّال: تفعيل الذكية أوقف الجدولة', (await text(page, '.ctl-now')).includes('الإدارة الذكية: تجربة دون أوامر') && !(await text(page, '.ctl-now')).includes('الجدولة'));
       await page.click('[data-mode="manual"]'); await page.click('#ctlSave'); await page.click('.modal [data-v="1"]'); await page.waitForTimeout(300);
       check('العودة للتحكم اليدوي توقف التلقائي', (await page.evaluate(() => JSON.parse(localStorage.getItem('taqati.ctlNative')).mode)) === 'manual' && !(await page.$('.ctl-now')));
       check('بلا أخطاء JavaScript (التحكم)', page.errors.length === 0, page.errors.join(' | '));
@@ -822,6 +823,61 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       check('بلا تمرير أفقي في الصفحات الجديدة', await noHScroll(d));
       check('بلا أخطاء JavaScript (التقدير والعدّاد)', d.errors.length === 0, d.errors.join(' | '));
       await d.context().close();
+    }
+
+    // 20) 3.13: صلاحية القراءة بعد فشل الاتصال، محاكاة جهاز على الحمل الحالي، إعادة مشاهدة اليوم (من مختبر watch-power)
+    {
+      let failed = false, liveLoad = 1730;
+      const page = await newPage(browser, { prefs: {batteryAh:200}, storage: {devPollSec:5}, api: (a) => a === 'queryDeviceLastData' ? (failed ? 'abort' : {err:0,dat:points(Date.now()-2*60000,{'AC Output Active Power':String(liveLoad)})}) : null });
+      await page.waitForSelector('.flow-card');
+      await page.evaluate(() => window.__nav('more','calc'));
+      await page.waitForSelector('#simResult');
+      await page.fill('#simWatts','٩٠٠'); await page.fill('#simMinutes','١٢٠');
+      check('المحاكاة تحسب القدرة والمدة بأرقام عربية', (await text(page,'#simResult')).includes('1800') === false && (await text(page,'#simResult')).includes('1.80') && (await text(page,'#simResult')).includes('2630 واط'));
+      await page.check('#simAlreadyOn');
+      check('الجهاز المشمول في الحمل لا يُحتسب مرتين', (await text(page,'#simResult')).includes('1730 واط') && (await text(page,'[data-sim-value=addedW]')) === '0');
+      liveLoad=1800; await page.waitForFunction(() => document.querySelector('[data-sim-value=totalW]')?.textContent === '1800', {timeout:10000});
+      check('المحاكاة تعيد الحساب عند وصول حمل أحدث', (await text(page,'[data-sim-value=totalW]')) === '1800');
+      await page.fill('#simMinutes','-1');
+      check('المحاكاة ترفض المدة السالبة', (await text(page,'#simResult')).includes('أدخل قدرة موجبة'));
+      await page.fill('#simMinutes','120');
+      await page.evaluate(() => { window.__state.model.ts = Date.now()-16*60000; window.__state.model.stale=false; window.__nav('home',null); });
+      failed = true; await page.click('#refreshBtn'); await page.waitForTimeout(500);
+      check('فشل الاتصال لا يبقي قراءة قديمة حيّة', await page.evaluate(() => window.__state.model.stale && !!window.__state.netError));
+      check('انقطاع إنترنت الهاتف لا يُنبّه بأن الإنفرتر غير متصل', await page.evaluate(() => !window.__state.log.some((e) => e.title === 'الإنفرتر غير متصل')));
+      check('توقف حركة الطاقة والتقدير عند قدم القراءة', (await page.$$('animateMotion')).length===0 && !(await text(page,'#view')).includes('تكفي لمدة'));
+      await page.evaluate(() => window.__nav('home','load'));
+      check('لا هامش تشغيل محسوب من حمل قديم', !(await text(page,'#view')).includes('المتبقي المتاح للتشغيل'));
+      await page.evaluate(() => window.__nav('more','calc'));
+      check('المحاكاة تمنع تقدير الحمل القديم', (await text(page,'#simResult')).includes('لا توجد قراءة حمل حديثة'));
+      await page.context().close();
+    }
+    {
+      const page = await newPage(browser,{ api:lastData(2) }); await page.waitForSelector('.flow-card');
+      const fixture = await page.evaluate(() => {
+        const d = new Date(); d.setHours(10,0,0,0); const t=d.getTime();
+        const samples=[0,5,65].map((v,i)=>({ts:t+v*60000,outW:1000+i*500,pvW:2000-i*500,soc:60-i*5,batW:-500,batV:50,gridV:0,mode:'Battery Mode'}));
+        const st=window.__state; st.rep.dayDate=d.toISOString().slice(0,10);
+        st.rep.day={samples,source:'local',sum:{socMin:null,socMax:null,coveredH:0}};
+        st.log=[{at:t+30*60000,sn:st.devices[0].sn,title:'تنبيه داخل الفجوة',cat:'bat'}];
+        window.__nav('reports','day'); return {t};
+      });
+      await page.waitForSelector('#replaySlider');
+      const seek = async at => page.$eval('#replaySlider',(el,at)=>{el.value=at;el.dispatchEvent(new Event('input'));},at);
+      await seek(fixture.t);
+      check('إعادة المشاهدة تعرض قراءة البداية المسجلة ومخطط الطاقة', (await text(page,'#replayScene')).includes('1.0 ك.واط') && !!(await page.$('#replayScene svg')));
+      check('إعادة المشاهدة بالمشهد المختار (الصور افتراضياً)', !!(await page.$('#replayScene .st-photo')));
+      await seek(fixture.t+65*60000);
+      check('شريط الوقت يغير قيم المخطط وفق السجل', (await text(page,'#replayScene')).includes('2.0 ك.واط'));
+      await seek(fixture.t+30*60000);
+      check('داخل الفجوة لا قراءات ولا حركة مختلقة', !!(await page.$('[data-replay-gap]')) && (await page.$$('#replayScene animateMotion')).length===0);
+      await page.click('[data-replay-event="0"]');
+      check('التنبيه مرتبط بلحظته حتى داخل فجوة', Number(await page.inputValue('#replaySlider'))===fixture.t+30*60000 && !!(await page.$('[data-replay-gap]')));
+      const config=await page.evaluate(()=>{const c=window.__charts.find(c=>c.canvas.id==='cPower'); return {type:c.options.scales.x.type,gaps:c.data.datasets[0].spanGaps,points:c.data.datasets[0].data};});
+      check('الرسم يستخدم وقتاً عددياً حقيقياً وفاصل null للفجوة',config.type==='linear' && config.gaps===false && config.points.some(p=>p.y===null) && config.points[1].x-config.points[0].x===5*60000);
+      await page.screenshot({path:path.join(OUT,'replay-gap.png')});
+      check('إعادة المشاهدة دون أخطاء JavaScript أو تمرير أفقي',page.errors.length===0 && await noHScroll(page),page.errors.join(' | '));
+      await page.context().close();
     }
 
     // 11) التحقق من التحديثات

@@ -46,9 +46,12 @@ class MonitorWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params
             client.lastData(dev)
         } catch (e: Exception) {
             // نسجّل تعذّر الاتصال مرة واحدة بعد 3 محاولات فاشلة متتالية، ولا نكرّر المحاولة فوراً حتى لا نستنزف البطارية
+            WidgetState.fromJson(prefs.getString("widget", null))?.let {
+                TaqatiWidget.push(ctx, it.revalidated(System.currentTimeMillis(), cfg.staleMin))
+            }
             val fails = prefs.getInt(MonitorStore.FAILS, 0) + 1
             prefs.edit().putInt(MonitorStore.FAILS, fails).apply()
-            if (fails == 3) MonitorStore.queue(ctx, emptyList(), listOf(Event("تعذّر الاتصال بالخادم", e.message ?: "", "comm")))
+            if (fails == 3) MonitorStore.queue(ctx, emptyList(), listOf(Event("تعذّر الاتصال بالخادم", e.message ?: "", "comm")), dev.sn)
             return Result.success()
         } finally {
             if (client.sessionChanged) SecureStore.put(ctx, "session", client.session.toJson())
@@ -61,10 +64,10 @@ class MonitorWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params
         val now = System.currentTimeMillis()
         val out = AlertEvaluator.evaluate(snap, cfg, flags, now)
         // أداة الشاشة الرئيسية تبقى محدّثة والتطبيق مغلق
-        val ts = snap.tsRaw?.plus(cfg.tzOffsetMs) ?: now
-        TaqatiWidget.push(ctx, WidgetState(snap.soc?.toInt(), snap.batW?.toInt(), snap.outW?.toInt(), snap.pvW?.toInt(), now - ts > cfg.staleMin * 60_000L, ts))
+        val ts = snap.tsRaw?.plus(cfg.tzOffsetMs) ?: 0L
+        TaqatiWidget.push(ctx, WidgetState(snap.soc?.toInt(), snap.batW?.toInt(), snap.outW?.toInt(), snap.pvW?.toInt(), ts <= 0 || now - ts < -ControlEngine.FUTURE_TOLERANCE_MS || now - ts >= cfg.staleMin * 60_000L, ts))
         prefs.edit().putString(MonitorStore.FLAGS, out.flags.toString()).apply()
-        MonitorStore.queue(ctx, out.alerts, out.faults)
+        MonitorStore.queue(ctx, out.alerts, out.faults, dev.sn)
         if (cfg.notify) out.alerts.forEach { notify(ctx, it.title, it.body) }
         return Result.success()
     }
@@ -126,13 +129,13 @@ object MonitorStore {
     fun prefs(ctx: Context) = ctx.getSharedPreferences("taqati_monitor", Context.MODE_PRIVATE)
 
     @Synchronized
-    fun queue(ctx: Context, alerts: List<Event>, faults: List<Event>) {
+    fun queue(ctx: Context, alerts: List<Event>, faults: List<Event>, sn: String? = null) {
         if (alerts.isEmpty() && faults.isEmpty()) return
         val p = prefs(ctx)
         val now = System.currentTimeMillis()
         val ev = JSONObject(p.getString(EVENTS, "{}") ?: "{}")
-        ev.put("alerts", AlertEvaluator.appendCapped(ev.optJSONArray("alerts") ?: JSONArray(), alerts.map { it.toJson(now) }, 100))
-        ev.put("faults", AlertEvaluator.appendCapped(ev.optJSONArray("faults") ?: JSONArray(), faults.map { it.toJson(now) }, 100))
+        ev.put("alerts", AlertEvaluator.appendCapped(ev.optJSONArray("alerts") ?: JSONArray(), alerts.map { it.toJson(now).apply { if (sn != null) put("sn", sn) } }, 100))
+        ev.put("faults", AlertEvaluator.appendCapped(ev.optJSONArray("faults") ?: JSONArray(), faults.map { it.toJson(now).apply { if (sn != null) put("sn", sn) } }, 100))
         p.edit().putString(EVENTS, ev.toString()).apply()
     }
 }

@@ -21,6 +21,9 @@ data class WidgetState(
     val stale: Boolean,
     val at: Long,
 ) {
+    fun revalidated(now: Long, staleMin: Int): WidgetState = copy(
+        stale = stale || at <= 0 || now - at < -ControlEngine.FUTURE_TOLERANCE_MS || now - at >= staleMin * 60_000L)
+
     fun toJson(): String = JSONObject()
         .put("soc", soc ?: JSONObject.NULL).put("batW", batW ?: JSONObject.NULL)
         .put("loadW", loadW ?: JSONObject.NULL).put("pvW", pvW ?: JSONObject.NULL)
@@ -78,7 +81,9 @@ class TaqatiWidget : AppWidgetProvider() {
         }
 
         private fun render(ctx: Context, mgr: AppWidgetManager, ids: IntArray) {
-            val s = WidgetState.fromJson(MonitorStore.prefs(ctx).getString(KEY, null))
+            val prefs = MonitorStore.prefs(ctx)
+            val staleMin = try { JSONObject(prefs.getString(MonitorStore.CONFIG, "{}") ?: "{}").optInt("staleMin", 15) } catch (e: Exception) { 15 }
+            val s = WidgetState.fromJson(prefs.getString(KEY, null))?.revalidated(System.currentTimeMillis(), staleMin)
             val v = RemoteViews(ctx.packageName, R.layout.widget_taqati)
             if (s == null) {
                 v.setTextViewText(R.id.w_soc, "طاقتي")

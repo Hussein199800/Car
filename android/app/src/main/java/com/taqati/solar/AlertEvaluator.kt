@@ -119,7 +119,7 @@ object AlertEvaluator {
         val alerts = mutableListOf<Event>()
         val faults = mutableListOf<Event>()
         val ts = s.tsRaw?.plus(cfg.tzOffsetMs)
-        val stale = ts != null && now - ts > cfg.staleMin * 60_000L
+        val stale = ts == null || now - ts < -ControlEngine.FUTURE_TOLERANCE_MS || now - ts >= cfg.staleMin * 60_000L
         fun was(key: String) = flags.opt(key).let { it == true || it == "silent" }
 
         // في الخلفية لا يوجد «أول قراءة» غامضة: الواجهة سلّمت الحالة الأخيرة قبل الإغلاق

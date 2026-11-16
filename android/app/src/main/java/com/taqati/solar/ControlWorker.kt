@@ -56,11 +56,12 @@ class ControlWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params
             p.edit().putString(ControlStore.STATE, res.state.toJson().toString()).apply()
             if (res.status != "none") {
                 val entry = JSONObject().put("at", System.currentTimeMillis()).put("by", cfg.mode)
-                    .put("from", ControlEngine.labelOf(res.from, cfg)).put("to", ControlEngine.labelOf(res.to, cfg))
+                    .put("from", ControlEngine.labelOf(res.from, cfg)).put("to", if (res.to == null && res.status == "simulated") "لا تغيير مقترح" else ControlEngine.labelOf(res.to, cfg))
                     .put("status", res.status).put("reason", res.decision.reason).put("error", res.error ?: JSONObject.NULL)
                 ControlStore.log(ctx, entry)
-                if (cfg.notify) {
+                if (cfg.notify && res.status != "simulated") {
                     val title = when (res.status) {
+                        "simulated" -> "تجربة دون إرسال: ${res.decision.reason}"
                         "confirmed" -> "تحوّل الإنفرتر إلى ${entry.optString("to")}"
                         "unconfirmed" -> "أُرسل التحويل ولم يتأكد"
                         else -> "تعذّر تحويل الإنفرتر"

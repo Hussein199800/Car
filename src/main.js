@@ -1,4 +1,6 @@
 import './styles.css';
+import { timePoints, replayAt } from './timeline.js';
+import { viewSimulation, bindSimulation } from './simulate.js';
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { StatusBar, Style } from '@capacitor/status-bar';
@@ -8,7 +10,7 @@ import {
   LinearScale, CategoryScale, Filler, Tooltip, Legend,
 } from 'chart.js';
 import { WatchPowerApi, ApiError, errorAr } from './api.js';
-import { normalize, rowsToSamples, fmt, latinDigits, LOC, countAr, DAY, parseTs, setClock12 } from './model.js';
+import { normalize, rowsToSamples, fmt, latinDigits, LOC, countAr, DAY, parseTs, setClock12, revalidate, gridPresent } from './model.js';
 import { trTitle, trValue, trUnit, isEmptyVal, warnAr } from './i18n.js';
 import {
   store, today, addDays, dayKey, recordSample, localDay, summarize, cachedSummary, cacheSummary, toCsv, shareFile,
@@ -32,9 +34,17 @@ import { viewCalc, bindCalc, defaultsCalc } from './calc.js';
 import { TIP_SECTIONS, smartTips, tipOfDay } from './tips.js';
 
 Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, CategoryScale, Filler, Tooltip, Legend);
+// خط أحمر متقطع على رسم القدرة عند لحظة إعادة المشاهدة
+Chart.register({ id: 'replayCursor', afterDraw(chart) {
+  if (chart.canvas.id !== 'cPower' || !state.replay) return;
+  const x = chart.scales.x.getPixelForValue(state.replay.at);
+  if (x < chart.chartArea.left || x > chart.chartArea.right) return;
+  const c = chart.ctx; c.save(); c.strokeStyle = '#ef4444'; c.setLineDash([4, 4]); c.beginPath();
+  c.moveTo(x, chart.chartArea.top); c.lineTo(x, chart.chartArea.bottom); c.stroke(); c.restore();
+} });
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '3.12.0';
+const VERSION = '3.13.0';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -99,6 +109,7 @@ const state = {
 
 let api = new WatchPowerApi(state.session || {});
 let pollTimer = null;
+let validityTimer = null;
 const charts = [];
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -435,10 +446,11 @@ function openTour() {
 
 // ما الجديد في هذا الإصدار: يظهر مرة واحدة بعد التحديث
 const WHATS_NEW = [
-  'جدولة مرنة لأولوية مصدر الطاقة: قواعد بقدر ما تريد، لكل منها أيامها وساعاتها ووضعها، أو لمرة واحدة بتاريخ، بتوقيت سوريا، وتعمل والتطبيق مغلق.',
-  'إدارة ذكية اختيارية: تحويل للشبكة عند حد للبطارية تختاره، وعودة عند نسبة مستهدفة، بلا تذبذب ولا قرار على قراءة قديمة.',
-  'كل تحويل تلقائي يُتحقق منه بقراءة الجهاز، ويُسجَّل ويصلك به إشعار. والتحويل اليدوي يوقف التلقائي مؤقتاً.',
-  'تقدير الأسبوعين القادمين، وعدّاد كهرباء الشبكة، والتحويل اليدوي المتحقق منه.',
+  'إصلاح: إذا انقطع الإنترنت عن هاتفك لم تعد آخر قراءة تُعرض كأنها حيّة؛ تتوقف الحركة والتقديرات ويظهر «غير متصل»، وكذلك في أداة الشاشة الرئيسية.',
+  'الرسوم بوقت حقيقي: المسافات بين القراءات كما حدثت، وانقطاع البيانات يظهر فراغاً بدل خط يصل فوقه.',
+  'إعادة مشاهدة اليوم في التقرير اليومي: حرّك الشريط لترى المنظومة في أي لحظة، واضغط تنبيهاً لتنتقل إلى وقته.',
+  'محاكاة جهاز في حاسبة الأحمال: هل يتحمّل الإنفرتر تشغيله الآن؟ وكم ينقص من البطارية؟',
+  'الإدارة الذكية تبدأ بوضع تجربة يسجّل ما كانت ستفعله دون إرسال أي أمر، حتى تطمئن ثم تفعّلها.',
 ];
 function openWhatsNew() {
   store.set('seenVersion', VERSION);
@@ -544,6 +556,7 @@ function switchDevice(snv) {
 function banner() {
   const m = state.model;
   if (state.demo) return `<div class="banner demo">${icons.info}<span>وضع تجريبي — هذه البيانات للعرض فقط وليست من جهازك.</span></div>`;
+  if (m?.stale && !m.ts) return `<div class="banner off">لا يوجد وقت صالح للقراءة؛ الحركة والتقديرات الحية متوقفة.</div>`;
   if (m?.stale) {
     return `<div class="banner off">${icons.offline}<span><b>الإنفرتر غير متصل بالخادم</b>آخر قراءة وصلت ${esc(fmt.dateTime(m.ts))} (${esc(fmt.ago(m.age))}). القيم المعروضة قديمة وقد يكون الإنفرتر مطفأً أو مفصولاً.</span></div>`;
   }
@@ -563,6 +576,8 @@ const PAGE_TITLES = {
 };
 
 function render() {
+  state.model = revalidate(state.model, state.prefs.staleMin);
+  if (replayTimer) { clearInterval(replayTimer); replayTimer = null; }
   charts.splice(0).forEach((c) => c.destroy());
   renderHeader();
   const v = $('#view');
@@ -588,6 +603,7 @@ const calcHelpers = () => ({
 });
 AFTER.calc = () => {
   bindCalc(calcHelpers());
+  bindSimulation(calcHelpers());
   // التوفير الشهري يحتاج متوسط آخر 7 أيام: نحمّله في الخلفية مرة واحدة
   if (state.calc.tab === 'save' && state.prefs.price && !state.rep.adv) loadAdvisor();
 };
@@ -631,8 +647,8 @@ function loadCache() {
 
 // أداة الشاشة الرئيسية: تُحدَّث مع كل قراءة جديدة (والفحص في الخلفية يحدّثها والتطبيق مغلق)
 function pushWidget(m) {
-  if (state.demo || !m || m.ts === state.widgetTs) return;
-  state.widgetTs = m.ts;
+  if (state.demo || !m || `${m.ts}:${m.stale}` === state.widgetTs) return;
+  state.widgetTs = `${m.ts}:${m.stale}`;
   monitor.widget({ soc: m.soc, batW: m.batW, loadW: m.outW, pvW: m.pvW, stale: !!m.stale, at: m.ts || Date.now() }).catch(() => {});
 }
 
@@ -674,6 +690,10 @@ async function refresh(manual = false) {
     if (sn() !== d.sn) { state.switched = true; return; }
     state.fails++;
     state.netError = err.message;
+    // القراءة تفقد صلاحيتها مع الوقت حتى لو فشل الاتصال، لكن لا ننبّه «الإنفرتر غير متصل»:
+    // الذي انقطع قد يكون إنترنت الهاتف لا الإنفرتر. التنبيه يأتي من أول اتصال ناجح بلا قراءة جديدة
+    state.model = revalidate(state.model, state.prefs.staleMin);
+    if (state.model) pushWidget(state.model);
     if (state.fails === 3) logEvent('conn', 'warn', 'تعذّر الاتصال بالخادم', err.message);
     if (manual) toast(err.message, 'bad');
   } finally {
@@ -683,10 +703,11 @@ async function refresh(manual = false) {
       if (device() && (state.session || state.demo)) refresh(manual);
       return;
     }
-    if (state.model) state.model = { ...state.model, age: state.model.ts ? Date.now() - state.model.ts : null };
+    if (state.model) state.model = revalidate(state.model, state.prefs.staleMin);
     // نعيد الرسم فقط للصفحات التي تعرض القراءة الحية حتى لا تُفقد حالة الصفحات الأخرى
     if (state.tab === 'home' || (state.tab === 'reports' && state.page === 'advisor')) render();
     else renderHeader();
+    if (state.tab === 'more' && leaf() === 'calc') bindSimulation(calcHelpers());
   }
 }
 
@@ -696,8 +717,17 @@ const pollMs = () => (isNative ? 60 : Math.max(5, store.get('devPollSec', 60))) 
 function startPolling() {
   stopPolling();
   pollTimer = setInterval(() => refresh(), pollMs());
+  validityTimer = setInterval(() => {
+    const was = state.model?.stale;
+    state.model = revalidate(state.model, state.prefs.staleMin);
+    if (!state.model || was === state.model.stale) return;
+    pushWidget(state.model);
+    // نعيد رسم صفحات القراءة الحية فقط، حتى لا تُغلق لوحة المفاتيح في صفحة يكتب فيها المستخدم
+    if (state.tab === 'home' || (state.tab === 'reports' && state.page === 'advisor')) render();
+    else renderHeader();
+  }, 1000);
 }
-function stopPolling() { if (pollTimer) clearInterval(pollTimer); pollTimer = null; }
+function stopPolling() { if (validityTimer) clearInterval(validityTimer); validityTimer = null; if (pollTimer) clearInterval(pollTimer); pollTimer = null; }
 
 // ================= المراقبة في الخلفية (تطبيق الهاتف فقط) =================
 // التطبيق المفتوح يراقب بنفسه كل بضع ثوانٍ. عند إغلاقه نسلّم حالة التنبيهات للفحص الأصلي (Kotlin)
@@ -746,7 +776,7 @@ async function notify(title, body) {
 // كل حدث يُسجَّل مرة واحدة. alert: يرسل إشعاراً ويبقى «غير مقروء» حتى يُفتح تبويب التنبيهات،
 // وإن أوقف المستخدم تنبيه هذا النوع يُسجَّل الحدث مقروءاً بلا إشعار
 function logEvent(cat, level, title, body, alert = false) {
-  state.log = addEvents(state.log, [{ cat, level, title, body, at: Date.now(), read: !alert }]);
+  state.log = addEvents(state.log, [{ cat, level, title, body, sn: sn(), at: Date.now(), read: !alert }]);
   store.set('log', state.log);
   if (alert) notify(title, body);
 }
@@ -1153,7 +1183,7 @@ function drawToday(id, field, color, label, opts) {
     el.parentElement.innerHTML = '<p class="hint center">سيظهر الرسم بعد تجميع عدة قراءات اليوم (يُسجّل التطبيق كل قراءة جديدة تصله).</p>';
     return;
   }
-  lineChart(id, s.map((x) => fmt.time(x.ts)), [{ label, data: s.map((x) => x[field]), color }], opts);
+  lineChart(id, s.map((x) => x.ts), [{ label, data: s.map((x) => x[field]), color }], opts);
 }
 
 function pageLoad(m) {
@@ -1166,7 +1196,7 @@ function pageLoad(m) {
     ${cardH('نسبة الحمل من قدرة الإنفرتر', '', `<b>${m.loadPct ?? '—'}%</b>`)}
     <div class="bar"><i class="${pct >= state.prefs.overloadPct ? 'hot' : pct >= 50 ? 'warm' : ''}" style="width:${pct}%"></i></div>
     <div class="bar-legend"><span>0</span><span>${rated ? `القدرة القصوى ${rated} واط` : ''}</span></div>
-    ${rated && m.outW !== null ? `<p class="hint">المتبقي المتاح للتشغيل: <b>${fmt.w(Math.max(0, rated - m.outW))}</b>${infoBtn('loadLeft')}</p>` : ''}
+    ${!m.stale && rated && m.outW !== null ? `<p class="hint">المتبقي المتاح للتشغيل: <b>${fmt.w(Math.max(0, rated - m.outW))}</b>${infoBtn('loadLeft')}</p>` : ''}
   </section>
   <div class="stats">
     ${stat('القدرة الفعلية', numAr(m.outW), 'واط', 'c-sky')}
@@ -1206,7 +1236,7 @@ function pageSolar(m) {
   const pv2 = m.pv2V !== null || m.pv2W !== null;
   const kwp = pvKwp();
   return `
-  ${hero(icons.panel, 'c-amber', 'إنتاج الألواح الآن', fmt.w(m.pvW), m.pvW > 5 && !m.stale ? (kwp ? `${Math.round((m.pvW / (kwp * 1000)) * 100)}% من قدرة ألواحك` : 'الألواح تنتج الآن') : 'لا يوجد إنتاج حالياً', kwp && m.pvW > 5 && !m.stale ? 'pvShare' : 'solarNow')}
+  ${hero(icons.panel, 'c-amber', 'إنتاج الألواح الآن', fmt.w(m.pvW), m.pvW > 5 && !m.stale ? (kwp ? `${Math.round((m.pvW / (kwp * 1000)) * 100)}% من قدرة ألواحك` : 'الألواح تنتج الآن') : m.stale ? 'آخر قيمة مسجّلة — لا تقدير حي' : 'لا يوجد إنتاج حالياً', kwp && m.pvW > 5 && !m.stale ? 'pvShare' : 'solarNow')}
   <div class="stats">
     ${stat('إنتاج اليوم', m.todayWh !== null ? fmt.kwh(m.todayWh / 1000) : '—', 'كيلوواط ساعة', 'c-amber', '', 'todayWh')}
     ${stat('الإنتاج الكلي', m.totalWh !== null ? fmt.kwh(m.totalWh / 1000) : '—', state.plant?.install ? `كيلوواط ساعة · منذ ${String(state.plant.install).slice(0, 4)}` : 'كيلوواط ساعة', 'c-green', '', 'totalWh')}
@@ -1250,7 +1280,7 @@ function lineChart(id, labels, series, opts = {}) {
     data: {
       labels,
       datasets: series.map((d) => ({
-        label: d.label, data: d.data, borderColor: d.color, borderWidth: 2, pointRadius: 0, tension: 0.35, fill: true, spanGaps: true,
+        label: d.label, data: timePoints(labels, d.data), borderColor: d.color, borderWidth: 2, pointRadius: 1.5, tension: 0, fill: true, spanGaps: false,
         backgroundColor: (ctx) => {
           const { chartArea, ctx: c } = ctx.chart;
           if (!chartArea) return 'transparent';
@@ -1261,7 +1291,7 @@ function lineChart(id, labels, series, opts = {}) {
         },
       })),
     },
-    options: chartOpts(series.length > 1, opts),
+    options: chartOpts(series.length > 1, { ...opts, time: true }),
   }));
 }
 
@@ -1281,10 +1311,10 @@ function chartOpts(legend, opts) {
     interaction: { mode: 'index', intersect: false },
     plugins: {
       legend: { display: legend, labels: { boxWidth: 10, usePointStyle: true } },
-      tooltip: { rtl: true, backgroundColor: '#0f1a33ee', titleColor: '#fff', bodyColor: '#e2e8f0', padding: 10 },
+      tooltip: { callbacks: opts.time ? { title: items => fmt.time(items[0]?.parsed.x) } : {}, rtl: true, backgroundColor: '#0f1a33ee', titleColor: '#fff', bodyColor: '#e2e8f0', padding: 10 },
     },
     scales: {
-      x: { ticks: { maxTicksLimit: 7, maxRotation: 0 }, grid: { display: false } },
+      x: { ...(opts.time ? { type: 'linear' } : {}), ticks: { ...(opts.time ? { callback: v => fmt.time(v) } : {}), maxTicksLimit: 7, maxRotation: 0 }, grid: { display: false } },
       y: { grid: { color: css('--line') }, ...opts.y },
     },
   };
@@ -1449,6 +1479,55 @@ async function loadDay() {
   if (state.page === 'day') render();
 }
 
+// Replay uses recorded steps; gaps stay empty and event times remain exact.
+let replayTimer = null;
+function replayMarkup(samples) {
+  const date = state.rep.dayDate;
+  if (state.replay?.date !== date) state.replay = { date, at: samples[0].ts };
+  const start = new Date(date + 'T00:00:00').getTime();
+  const end = new Date(new Date(start).setDate(new Date(start).getDate() + 1)).getTime() - 1;
+  return `<section class="card" id="replay"><h2>إعادة مشاهدة اليوم</h2>
+    <p class="hint">قراءات مسجّلة، دون استيفاء بين القيم. الفجوات الأكبر من 20 دقيقة فارغة. أوقات التنبيهات هي أوقات رصدها في السجل.</p>
+    <label>وقت المشاهدة <output id="replayTime"></output><input aria-label="وقت إعادة المشاهدة" id="replaySlider" type="range" min="${start}" max="${end}" step="1" value="${state.replay.at}" style="width:100%;direction:ltr"></label>
+    <button class="btn ghost" id="replayPlay">تشغيل / إيقاف</button><div id="replayScene"></div><div id="replayEvents"></div></section>`;
+}
+function bindReplay(samples) {
+  const slider = $('#replaySlider'); if (!slider) return;
+  const start = Number(slider.min), end = Number(slider.max);
+  const events = state.log.filter(e => e.sn === sn() && e.at >= start && e.at <= end).sort((a,b) => a.at-b.at);
+  $('#replayEvents').innerHTML = events.length ? '<h3>التنبيهات المسجلة — اضغط للانتقال إلى لحظتها</h3>' + events.map((e,i) => `<button class="link pad" data-replay-event="${i}">${esc(fmt.time(e.at))} · ${esc(e.title)}</button>`).join('') : '<p class="hint">لا توجد تنبيهات محلية مرتبطة بهذا الجهاز في اليوم المختار.</p>';
+  const update = () => {
+    const at = Number(slider.value); state.replay.at = at;
+    const sample = replayAt(samples, at);
+    $('#replayTime').textContent = fmt.time(at);
+    const host = $('#replayScene');
+    if (!sample) host.innerHTML = '<p class="empty" data-replay-gap>فجوة بيانات — لا توجد قراءة قابلة للعرض في هذه اللحظة.</p>';
+    else {
+      const m = { ...sample, gridOn: gridPresent(sample.gridV, sample.gridRatedV), stale: false };
+      const isLine = /line|bypass/i.test(m.mode || '');
+      const parts = sceneParts(m, true, isLine);
+      // بالشكل الذي اختاره المستخدم؛ السماء من ساعة القراءة وإنتاجها (لا طقس محفوظ لتلك اللحظة)
+      const h = new Date(sample.ts).getHours();
+      const sky = (m.pvW ?? 0) > 50 ? 'clear' : h < 6 || h >= 18 ? 'night' : 'cloudy';
+      const body = sceneBody(m, true, isLine, sky, parts, null);
+      host.innerHTML = `<p class="hint">القراءة المعروضة سُجلت ${esc(fmt.dateTime(sample.ts))} · عرض بخطوات مسجّلة</p><div class="flow-card scene replay-scene ${body.cls} sky-${sky} ${parts.flows.bat.on ? (parts.flows.bat.reverse ? 'bat-dis' : 'bat-chg') : ''}">${body.html}</div>${flowLegend(parts.flows)}`;
+    }
+    document.querySelectorAll('[data-replay-event]').forEach(b => b.setAttribute('aria-current', String(events[Number(b.dataset.replayEvent)].at === at)));
+    charts.forEach(c => { if (c.canvas.id === 'cPower') c.draw(); });
+  };
+  slider.oninput = update;
+  document.querySelectorAll('[data-replay-event]').forEach(b => b.onclick = () => { slider.value = events[Number(b.dataset.replayEvent)].at; update(); });
+  $('#replayPlay').onclick = () => {
+    if (replayTimer) { clearInterval(replayTimer); replayTimer = null; return; }
+    replayTimer = setInterval(() => {
+      if (!document.contains(slider)) { clearInterval(replayTimer); replayTimer = null; return; }
+      slider.value = Math.min(end, Number(slider.value) + 60000); update();
+      if (Number(slider.value) >= end) { clearInterval(replayTimer); replayTimer = null; }
+    }, 250);
+  };
+  update();
+}
+
 function pageDay() {
   const r = state.rep.day;
   const nav = `<section class="day-nav card">
@@ -1460,7 +1539,7 @@ function pageDay() {
   if (r.error) return nav + `<div class="empty bad">${esc(r.error)}</div>`;
   if (!r.samples.length) return nav + '<div class="empty">لا توجد بيانات مسجّلة لهذا اليوم.</div>';
   const s = r.sum;
-  return nav + `
+  return nav + replayMarkup(r.samples) + `
   <div class="stats">
     ${stat('إنتاج الألواح', fmt.kwh(s.pvKwh), 'كيلوواط ساعة', 'c-amber', '', 'todayWh')}
     ${stat('استهلاك المنزل', fmt.kwh(s.loadKwh), 'كيلوواط ساعة', 'c-sky')}
@@ -1494,7 +1573,8 @@ AFTER.day = () => {
   const r = state.rep.day;
   if (!r) { loadDay(); return; }
   if (!r.samples?.length) return;
-  const t = r.samples.map((x) => fmt.time(x.ts));
+  bindReplay(r.samples);
+  const t = r.samples.map((x) => x.ts);
   lineChart('cPower', t, [
     { label: 'الألواح (واط)', data: r.samples.map((x) => x.pvW), color: '#f59e0b' },
     { label: 'الحمل (واط)', data: r.samples.map((x) => x.outW), color: '#0ea5e9' },
@@ -2166,7 +2246,7 @@ function pagePower() {
   const c = state.ctl || {};
   const log = store.get('ctl.' + sn(), []);
   const logHtml = log.length ? `<h3 class="sec-h">سجل التحويلات</h3><ul class="ctl-log card">${log.slice(0, 20).map((e) => `
-    <li class="${e.status}"><b>${esc(e.from || '؟')} ← ${esc(e.to)}</b><span>${{ confirmed: 'تأكّد من الجهاز', unconfirmed: 'لم يتأكد', rejected: 'مرفوض', error: 'لم يُرسل' }[e.status] || e.status}${e.error ? ' · ' + esc(e.error) : ''}</span><small>${esc(fmt.dateTime(e.at))} · يدوي</small></li>`).join('')}</ul>` : '';
+    <li class="${e.status}"><b>${esc(e.from || '؟')} ← ${esc(e.to)}</b><span>${{ simulated: 'تجربة — لم يُرسل أمر', confirmed: 'تأكّد من الجهاز', unconfirmed: 'لم يتأكد', rejected: 'مرفوض', error: 'لم يُرسل' }[e.status] || e.status}${e.error ? ' · ' + esc(e.error) : ''}</span><small>${esc(fmt.dateTime(e.at))} · يدوي</small></li>`).join('')}</ul>` : '';
   if (c.error) return `<div class="empty bad">${esc(c.error)}</div><button class="btn ghost wide" id="ctlRetry">إعادة المحاولة</button>${logHtml}`;
   if (!c.field || c.loading) return '<div class="empty"><div class="spinner"></div>جارٍ قراءة الوضع الحالي من الإنفرتر…</div>';
   const b = c.busy, r = c.result;
@@ -2230,7 +2310,7 @@ AFTER.power = () => {
       if (res.status !== 'same') {
         const entry = { at: Date.now(), from: res.before ? optionAr(res.before.val) : null, to: optionAr(it.val), status: res.status, error: res.error || null, by: 'manual' };
         store.set('ctl.' + sn(), addLog(store.get('ctl.' + sn(), []), entry));
-        logEvent('set', res.status === 'confirmed' ? 'info' : 'warn', 'أولوية مصدر الخرج', `${entry.from || '؟'} ← ${entry.to}: ${{ confirmed: 'تأكّد من الجهاز', unconfirmed: 'لم يتأكد', rejected: 'مرفوض', error: 'لم يُرسل' }[res.status]}`);
+        logEvent('set', res.status === 'confirmed' ? 'info' : 'warn', 'أولوية مصدر الخرج', `${entry.from || '؟'} ← ${entry.to}: ${{ simulated: 'تجربة — لم يُرسل أمر', confirmed: 'تأكّد من الجهاز', unconfirmed: 'لم يتأكد', rejected: 'مرفوض', error: 'لم يُرسل' }[res.status]}`);
       }
       if (leaf() === 'power') render();
     };
@@ -2245,7 +2325,7 @@ const keyOfCode = (items, code) => items.find((it) => orderOf(it.val)?.code === 
 function ctlDefaults(items) {
   const grid = keyOfCode(items, 'USB') ?? items[0]?.key;
   const solar = keyOfCode(items, 'SBU') ?? items.find((it) => it.key !== grid)?.key;
-  return { mode: 'manual', gridKey: grid, solarKey: solar, defaultKey: solar, low: 45, target: 65, gapMin: 30,
+  return { mode: 'manual', dryRun: true, gridKey: grid, solarKey: solar, defaultKey: solar, low: 45, target: 65, gapMin: 30,
     slots: [{ startMin: 17 * 60, endMin: 22 * 60, key: grid, days: [0, 1, 2, 3, 4, 5, 6] }] };
 }
 const ctlCfg = () => store.get('ctlcfg.' + sn(), null);
@@ -2261,7 +2341,7 @@ function nativeCtlConfig(cfg) {
   const c = state.ctl, d = device();
   const items = c.field.item;
   return {
-    ...cfg, fieldId: c.field.id, utcOffsetMin: SYRIA_OFFSET_MIN,
+    ...cfg, dryRun: cfg.dryRun !== false, fieldId: c.field.id, utcOffsetMin: SYRIA_OFFSET_MIN,
     items: Object.fromEntries(items.map((it) => [String(it.key), String(it.val)])),
     gridLabel: String(items.find((it) => String(it.key) === String(cfg.gridKey))?.val ?? ''),
     solarLabel: String(items.find((it) => String(it.key) === String(cfg.solarKey))?.val ?? ''),
@@ -2306,7 +2386,7 @@ function ctlSection(c) {
     const act = activeSlot(now, saved.slots);
     status = `<p class="ctl-now"><b>الجدولة فعّالة</b> · المطلوب الآن: ${esc(itemLabel(items, act?.key ?? saved.defaultKey))}${n ? ` · التحويل التالي ${esc(fmt.day(dateOf(sLocalDay(n.at)), { weekday: 'long' }))} ${esc(fmt.time(n.at))} ← ${esc(itemLabel(items, n.key))}` : ''} · بتوقيت سوريا</p>`;
   } else if (saved.mode === 'smart') {
-    status = `<p class="ctl-now"><b>الإدارة الذكية فعّالة</b> · إلى ${esc(itemLabel(items, saved.gridKey))} عند ${saved.low}% أو أقل، والعودة إلى ${esc(itemLabel(items, saved.solarKey))} عند ${saved.target}%${ns.state?.lastNote ? ` · آخر فحص: ${esc(ns.state.lastNote)}` : ''}</p>`;
+    status = `<p class="ctl-now"><b>${saved.dryRun !== false ? 'الإدارة الذكية: تجربة دون أوامر' : 'الإدارة الذكية فعّالة'}</b> · إلى ${esc(itemLabel(items, saved.gridKey))} عند ${saved.low}% أو أقل، والعودة إلى ${esc(itemLabel(items, saved.solarKey))} عند ${saved.target}%${ns.state?.lastNote ? ` · آخر فحص: ${esc(ns.state.lastNote)}` : ''}</p>`;
   }
   const perms = saved.mode !== 'manual' && isNative ? `
     ${ns.exact === false ? `<p class="note warn">${icons.warn}<span>إذن «التنبيهات والتذكيرات» غير مفعّل، فقد يتأخر التحويل دقائق عن موعده.</span></p><button class="btn ghost wide" id="ctlExact">تفعيل التوقيت الدقيق</button>` : ''}
@@ -2359,11 +2439,12 @@ function ctlSection(c) {
   <h3 class="sec-h">نمط التحكم</h3>
   <div class="seg ctl-mode">${CTL_MODES.map(([k, l]) => `<button class="${e.mode === k ? 'on' : ''}" data-mode="${k}">${l}</button>`).join('')}</div>
   ${status}${perms}
+  ${e.mode === 'smart' ? `<section class="card"><label><input id="ctlDryRun" type="checkbox" ${e.dryRun !== false ? 'checked' : ''}> وضع تجربة: تسجيل القرارات وأسبابها دون إرسال أوامر</label><p class="hint">لا تُرسل أوامر في هذا الوضع حتى عند إغلاق التطبيق. يُسجّل كل فحص وسببه. إلغاء التجربة والحفظ يسمح بالتنفيذ الحقيقي.</p></section>` : ''}
   ${editSchedule}${editSmart}
-  ${JSON.stringify({ ...e, tuned: undefined }) !== JSON.stringify(saved) ? `<button class="btn primary wide" id="ctlSave">${e.mode === 'manual' ? 'إيقاف التحكم التلقائي' : 'حفظ وتفعيل'}</button><button class="link pad" id="ctlCancel">تراجع عن التعديلات</button>` : ''}
+  ${JSON.stringify({ ...e, tuned: undefined }) !== JSON.stringify(saved) ? `<button class="btn primary wide" id="ctlSave">${e.mode === 'manual' ? 'إيقاف التحكم التلقائي' : e.mode === 'smart' && e.dryRun !== false ? 'حفظ التجربة' : 'حفظ وتفعيل'}</button><button class="link pad" id="ctlCancel">تراجع عن التعديلات</button>` : ''}
   ${!isNative && saved.mode !== 'manual' ? '<p class="note warn">' + icons.warn + '<span>التنفيذ التلقائي يعمل في تطبيق أندرويد فقط.</span></p>' : ''}
-  ${logs.length ? `<h3 class="sec-h">ما نفّذته الجدولة والإدارة الذكية</h3><ul class="ctl-log card">${logs.map((x) => `
-    <li class="${esc(x.status)}"><b>${esc(x.from || '؟')} ← ${esc(x.to)}</b><span>${{ confirmed: 'تأكّد من الجهاز', unconfirmed: 'لم يتأكد', rejected: 'مرفوض', error: 'لم يُرسل' }[x.status] || esc(x.status)}${x.error ? ' · ' + esc(x.error) : ''}</span><small>${esc(fmt.dateTime(x.at))} · ${x.by === 'schedule' ? 'الجدولة' : 'الإدارة الذكية'} · ${esc(x.reason || '')}</small></li>`).join('')}</ul>` : ''}`;
+  ${logs.length ? `<h3 class="sec-h">سجل قرارات الجدولة والإدارة الذكية</h3><ul class="ctl-log card">${logs.map((x) => `
+    <li class="${esc(x.status)}"><b>${esc(x.from || '؟')} ← ${esc(x.to)}</b><span>${{ simulated: 'تجربة — لم يُرسل أمر', confirmed: 'تأكّد من الجهاز', unconfirmed: 'لم يتأكد', rejected: 'مرفوض', error: 'لم يُرسل' }[x.status] || esc(x.status)}${x.error ? ' · ' + esc(x.error) : ''}</span><small>${esc(fmt.dateTime(x.at))} · ${x.by === 'schedule' ? 'الجدولة' : 'الإدارة الذكية'} · ${esc(x.reason || '')}</small></li>`).join('')}</ul>` : ''}`;
 }
 
 function bindCtl(c) {
@@ -2382,6 +2463,8 @@ function bindCtl(c) {
       redraw();
     };
   });
+  const dr = $('#ctlDryRun');
+  if (dr) dr.onchange = () => { e.dryRun = dr.checked; redraw(); };
   const sg = $('#ctlSuggest');
   if (sg) sg.onclick = () => { const g = smartSuggestion(); if (g.ok) Object.assign(e, { low: g.low, target: g.target, gapMin: g.gapMin }); redraw(); };
   document.querySelectorAll('[data-slot]').forEach((el) => {
@@ -2425,7 +2508,7 @@ function bindCtl(c) {
       if (e.low < cut + 5 || e.low > 90) return toast(`حد التحويل بين ${cut + 5}% و90%`, 'bad');
       if (e.target < e.low + 10 || e.target > 100) return toast('النسبة المستهدفة يجب أن تزيد 10% على الأقل عن حد التحويل', 'bad');
       if (e.gapMin < 15 || e.gapMin > 360) return toast('مدة الانتظار بين 15 و360 دقيقة', 'bad');
-      summary = `يتحول تلقائياً إلى <b>${esc(itemLabel(items, e.gridKey))}</b> عند ${e.low}% أو أقل (والشبكة موجودة والألواح لا تغطي الحمل)، ويعود إلى <b>${esc(itemLabel(items, e.solarKey))}</b> عند ${e.target}%، وبين تحويلين ${e.gapMin} دقيقة على الأقل.`;
+      summary = `${e.dryRun !== false ? 'تجربة دون أوامر: القرار المقترح' : 'يتحول تلقائياً'} إلى <b>${esc(itemLabel(items, e.gridKey))}</b> عند ${e.low}% أو أقل (والشبكة موجودة والألواح لا تغطي الحمل)، ويعود إلى <b>${esc(itemLabel(items, e.solarKey))}</b> عند ${e.target}%، وبين تحويلين ${e.gapMin} دقيقة على الأقل.`;
     } else summary = 'يتوقف التحويل التلقائي، وتبقى على الوضع الحالي حتى تغيّره بنفسك.';
     if (!(await confirmDialog(e.mode === 'manual' ? 'إيقاف التحكم التلقائي' : 'تفعيل ' + CTL_MODES.find((m) => m[0] === e.mode)[1], summary + (e.mode === 'manual' ? '' : '<br>التحويل اليدوي يوقف الجدولة حتى موعدها التالي، والإدارة الذكية ساعتين.')))) return;
     const cfg = JSON.parse(JSON.stringify(e));
@@ -3058,6 +3141,6 @@ async function boot() {
 }
 
 // أدوات للاختبارات في المتصفح فقط
-if (!isNative) { window.__nav = navigate; window.__state = state; window.__render = render; }
+if (!isNative) { window.__nav = navigate; window.__state = state; window.__render = render; window.__charts = charts; }
 
 boot();
