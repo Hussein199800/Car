@@ -44,7 +44,7 @@ Chart.register({ id: 'replayCursor', afterDraw(chart) {
 } });
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '3.13.0';
+const VERSION = '3.13.1';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -446,11 +446,9 @@ function openTour() {
 
 // ما الجديد في هذا الإصدار: يظهر مرة واحدة بعد التحديث
 const WHATS_NEW = [
-  'إصلاح: إذا انقطع الإنترنت عن هاتفك لم تعد آخر قراءة تُعرض كأنها حيّة؛ تتوقف الحركة والتقديرات ويظهر «غير متصل»، وكذلك في أداة الشاشة الرئيسية.',
-  'الرسوم بوقت حقيقي: المسافات بين القراءات كما حدثت، وانقطاع البيانات يظهر فراغاً بدل خط يصل فوقه.',
-  'إعادة مشاهدة اليوم في التقرير اليومي: حرّك الشريط لترى المنظومة في أي لحظة، واضغط تنبيهاً لتنتقل إلى وقته.',
-  'محاكاة جهاز في حاسبة الأحمال: هل يتحمّل الإنفرتر تشغيله الآن؟ وكم ينقص من البطارية؟',
-  'الإدارة الذكية تبدأ بوضع تجربة يسجّل ما كانت ستفعله دون إرسال أي أمر، حتى تطمئن ثم تفعّلها.',
+  'الإدارة الذكية: «قراءتان متتاليتان» صارت تعني قراءتين مختلفتين فعلاً، فلا يُرسل أمر بناءً على القراءة نفسها عند الخروج من وضع التجربة.',
+  'سجل الفحوص: كل فحص للإدارة الذكية بوقته وسببه وقراءته، حتى عندما لا يُتخذ قرار.',
+  'محاكاة الجهاز تتوقف عن عرض التقديرات لحظة تقادم القراءة، دون انتظار تحديث جديد.',
 ];
 function openWhatsNew() {
   store.set('seenVersion', VERSION);
@@ -724,7 +722,10 @@ function startPolling() {
     pushWidget(state.model);
     // نعيد رسم صفحات القراءة الحية فقط، حتى لا تُغلق لوحة المفاتيح في صفحة يكتب فيها المستخدم
     if (state.tab === 'home' || (state.tab === 'reports' && state.page === 'advisor')) render();
-    else renderHeader();
+    else {
+      renderHeader();
+      if (state.tab === 'more' && leaf() === 'calc') bindSimulation(calcHelpers());
+    }
   }, 1000);
 }
 function stopPolling() { if (validityTimer) clearInterval(validityTimer); validityTimer = null; if (pollTimer) clearInterval(pollTimer); pollTimer = null; }
@@ -2435,14 +2436,22 @@ function ctlSection(c) {
         ${same ? '<span class="tag ok">مطبّق في الخانات أعلاه</span>' : '<button class="btn ghost wide" id="ctlSuggest">اعتمد هذا الترتيب</button>'}</section>`;
     })()}` : '';
   const logs = (ns.log || []).slice(0, 15);
+  // سجل فحوص الإدارة الذكية: كل فحص بسببه وقراءته، حتى بلا قرار
+  const checks = saved.mode === 'smart' ? (ns.checks || []) : [];
+  const n0 = (v, u) => (v == null ? '—' : `<bdi>${Math.round(v)}${u}</bdi>`);
+  const checksHtml = checks.length ? `<details class="card fold ctl-checks"><summary><h2>سجل الفحوص (${checks.length})</h2>${icons.chevL}</summary>
+    <ul class="ctl-log">${checks.slice(0, 60).map((x) => `<li class="${esc(x.status)}"><b>${esc(x.reason || '')}</b>
+      <span>${x.status === 'simulated' ? 'تجربة — كان سيحوّل إلى ' + esc(x.to || '') : x.status === 'none' ? (x.trial ? 'تجربة — لا قرار' : 'لا قرار') : { confirmed: 'تأكّد من الجهاز', unconfirmed: 'لم يتأكد', rejected: 'مرفوض' }[x.status] || esc(x.status)}${x.count > 1 ? ` · تكرر ${x.count} مرات حتى ${esc(fmt.time(x.lastAt))}` : ''}</span>
+      <small>${esc(fmt.dateTime(x.at))} · البطارية ${n0(x.soc, '%')} · الألواح ${n0(x.pvW, ' واط')} · الحمل ${n0(x.loadW, ' واط')}</small></li>`).join('')}</ul></details>` : '';
   return `
   <h3 class="sec-h">نمط التحكم</h3>
   <div class="seg ctl-mode">${CTL_MODES.map(([k, l]) => `<button class="${e.mode === k ? 'on' : ''}" data-mode="${k}">${l}</button>`).join('')}</div>
   ${status}${perms}
-  ${e.mode === 'smart' ? `<section class="card"><label><input id="ctlDryRun" type="checkbox" ${e.dryRun !== false ? 'checked' : ''}> وضع تجربة: تسجيل القرارات وأسبابها دون إرسال أوامر</label><p class="hint">لا تُرسل أوامر في هذا الوضع حتى عند إغلاق التطبيق. يُسجّل كل فحص وسببه. إلغاء التجربة والحفظ يسمح بالتنفيذ الحقيقي.</p></section>` : ''}
+  ${e.mode === 'smart' ? `<section class="card"><label><input id="ctlDryRun" type="checkbox" ${e.dryRun !== false ? 'checked' : ''}> وضع تجربة: تسجيل القرارات وأسبابها دون إرسال أوامر</label><p class="hint">لا تُرسل أوامر في هذا الوضع حتى عند إغلاق التطبيق. يُحفظ كل فحص بوقته وسببه وقراءته (آخر 200 فحص، والفحوص المتطابقة المتتالية تُجمع في سطر مع عددها) في «سجل الفحوص» أدناه. إلغاء التجربة والحفظ يسمح بالتنفيذ الحقيقي، ويبدأ عدّ القراءات المتتالية من جديد.</p></section>` : ''}
   ${editSchedule}${editSmart}
   ${JSON.stringify({ ...e, tuned: undefined }) !== JSON.stringify(saved) ? `<button class="btn primary wide" id="ctlSave">${e.mode === 'manual' ? 'إيقاف التحكم التلقائي' : e.mode === 'smart' && e.dryRun !== false ? 'حفظ التجربة' : 'حفظ وتفعيل'}</button><button class="link pad" id="ctlCancel">تراجع عن التعديلات</button>` : ''}
   ${!isNative && saved.mode !== 'manual' ? '<p class="note warn">' + icons.warn + '<span>التنفيذ التلقائي يعمل في تطبيق أندرويد فقط.</span></p>' : ''}
+  ${checksHtml}
   ${logs.length ? `<h3 class="sec-h">سجل قرارات الجدولة والإدارة الذكية</h3><ul class="ctl-log card">${logs.map((x) => `
     <li class="${esc(x.status)}"><b>${esc(x.from || '؟')} ← ${esc(x.to)}</b><span>${{ simulated: 'تجربة — لم يُرسل أمر', confirmed: 'تأكّد من الجهاز', unconfirmed: 'لم يتأكد', rejected: 'مرفوض', error: 'لم يُرسل' }[x.status] || esc(x.status)}${x.error ? ' · ' + esc(x.error) : ''}</span><small>${esc(fmt.dateTime(x.at))} · ${x.by === 'schedule' ? 'الجدولة' : 'الإدارة الذكية'} · ${esc(x.reason || '')}</small></li>`).join('')}</ul>` : ''}`;
 }

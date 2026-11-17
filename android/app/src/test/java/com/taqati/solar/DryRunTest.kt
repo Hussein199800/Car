@@ -58,3 +58,51 @@ class DryRunTest {
         assertEquals("simulated", ControlRunner.run(now, config, CtlState(), api(age = -5 * 60_000L)).status)
     }
 }
+
+/** حالة المراجعة: الخروج من التجربة مع القراءة نفسها لا يستوفي شرط «قراءتين متتاليتين». */
+class TrialToLiveTest {
+    private val now = 2_000_000_000_000L
+
+    @Test
+    fun sameReadingAfterLeavingTrialDoesNotSend() {
+        val trial = CtlConfig("smart", "out", "grid", "Grid", "solar", "Solar", low = 45, target = 65)
+        val live = trial.copy(dryRun = false)
+        var sends = 0
+        val reading = Snapshot(now - 1000, 55.0, 230.0, 230.0, null, 1000.0, null, "Line Mode", null, pvW = 2000.0)
+        val api = object : CtlApi {
+            override fun readMode() = "grid"
+            override fun send(key: String) { sends++ }
+            override fun snapshot() = reading to 1000L
+        }
+        val t = ControlRunner.run(now, trial, CtlState(), api, sleep = {})
+        assertEquals(1, t.state.coverRuns)
+        // نفس الحالة المحفوظة ونفس القراءة بعد ثانية في التنفيذ الحقيقي
+        val r = ControlRunner.run(now + 1000, live, t.state, api, sleep = {})
+        assertEquals("none", r.status)
+        assertEquals(1, r.state.coverRuns)
+        assertEquals(0, sends)
+        // قراءة جديدة فعلاً بعد خمس دقائق: الآن قراءتان متتاليتان
+        val next = Snapshot(now + 300_000, 55.0, 230.0, 230.0, null, 1000.0, null, "Line Mode", null, pvW = 2000.0)
+        val api2 = object : CtlApi {
+            override fun readMode() = if (sends == 0) "grid" else "solar"
+            override fun send(key: String) { sends++ }
+            override fun snapshot() = next to 1000L
+        }
+        assertEquals("confirmed", ControlRunner.run(now + 301_000, live, r.state, api2, sleep = {}).status)
+        assertEquals(1, sends)
+    }
+
+    @Test
+    fun checkLogKeepsEveryReasonChangeAndCountsRepeats() {
+        fun e(reason: String, at: Long) = JSONObject().put("reason", reason).put("status", "none").put("at", at)
+        var log = org.json.JSONArray()
+        log = ControlEngine.appendCheck(log, e("لا حاجة لتحويل: البطارية 55%", 1))
+        log = ControlEngine.appendCheck(log, e("لا حاجة لتحويل: البطارية 55%", 2))
+        log = ControlEngine.appendCheck(log, e("الشبكة مقطوعة؛ يتصرف الإنفرتر بحمايته", 3))
+        log = ControlEngine.appendCheck(log, e("لا حاجة لتحويل: البطارية 54%", 4))
+        assertEquals(3, log.length())
+        assertEquals(2, log.getJSONObject(2).optInt("count"))
+        assertEquals(2L, log.getJSONObject(2).optLong("lastAt"))
+        assertEquals("لا حاجة لتحويل: البطارية 54%", log.getJSONObject(0).optString("reason"))
+    }
+}

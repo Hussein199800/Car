@@ -80,9 +80,12 @@ class ControlPlugin : Plugin() {
         val p = ControlStore.prefs(context)
         val old = p.getString(ControlStore.CONFIG, null)?.let { JSONObject(it) }
         val e = p.edit().putString(ControlStore.CONFIG, config.toString())
-        // تغيير النمط أو القواعد يبدأ من جديد: يُقيَّم الموعد الحالي فوراً
-        if (old == null || old.optString("mode") != config.optString("mode") || old.optString("slots") != config.optString("slots")) {
-            e.putString(ControlStore.STATE, CtlState().toJson().toString())
+        // تغيير النمط أو القواعد أو وضع التجربة يبدأ التقييم من جديد (موعد الجدولة، والقراءات المتتالية،
+        // وقرار التجربة)، لكن يبقى وقت آخر تحويل حقيقي والإيقاف اليدوي حتى لا تُتجاوز مدة الانتظار
+        if (old == null || old.optString("mode") != config.optString("mode") || old.optString("slots") != config.optString("slots") ||
+            old.optBoolean("dryRun", true) != config.optBoolean("dryRun", true)) {
+            val prev = CtlState.fromJson(p.getString(ControlStore.STATE, null))
+            e.putString(ControlStore.STATE, CtlState(lastSwitchAt = prev.lastSwitchAt, pauseUntil = prev.pauseUntil).toJson().toString())
         }
         e.apply()
         MonitorWorker.ensureChannel(context)
@@ -134,6 +137,7 @@ class ControlPlugin : Plugin() {
         val p = ControlStore.prefs(context)
         return JSObject()
             .put("log", org.json.JSONArray(p.getString(ControlStore.LOG, "[]") ?: "[]"))
+            .put("checks", org.json.JSONArray(p.getString(ControlStore.CHECKS, "[]") ?: "[]"))
             .put("state", JSONObject(p.getString(ControlStore.STATE, "{}") ?: "{}"))
             .put("nextAt", p.getLong("next_at", 0))
             .put("exact", ControlScheduler.canExact(context))

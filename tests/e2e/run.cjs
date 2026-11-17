@@ -799,6 +799,10 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       const sm = await page.evaluate(() => JSON.parse(localStorage.getItem('taqati.ctlNative')));
       check('الإدارة الذكية تبدأ بوضع التجربة (لا أوامر، والحظر داخل Kotlin)', sm.dryRun === true);
       check('الإدارة الذكية تُفعَّل بحدودها ووضعيها', sm.mode === 'smart' && sm.low === 40 && sm.target === 60 && sm.gridKey === '0' && sm.solarKey === '2', JSON.stringify(sm));
+      await page.evaluate(() => { window.__state.ctl.native = { ...(window.__state.ctl.native || {}), checks: [
+        { at: Date.now(), status: 'none', trial: true, reason: 'الشبكة مقطوعة؛ يتصرف الإنفرتر بحمايته', soc: 52, pvW: 0, loadW: 640 },
+        { at: Date.now() - 9e5, lastAt: Date.now() - 3e5, count: 3, status: 'simulated', trial: true, to: 'Utility first', reason: 'البطارية 44% وصلت الحد 45%', soc: 44, pvW: 0, loadW: 700 }] }; window.__render(); });
+      { const ck = await text(page, '.ctl-checks'); check('سجل الفحوص يعرض كل سبب وقراءته وعدد التكرار', ck.includes('الشبكة مقطوعة') && ck.includes('تجربة — كان سيحوّل') && ck.includes('تكرر 3 مرات') && ck.includes('52%') && ck.includes('640 واط'), ck.slice(0, 120)); }
       check('نمط واحد فعّال: تفعيل الذكية أوقف الجدولة', (await text(page, '.ctl-now')).includes('الإدارة الذكية: تجربة دون أوامر') && !(await text(page, '.ctl-now')).includes('الجدولة'));
       await page.click('[data-mode="manual"]'); await page.click('#ctlSave'); await page.click('.modal [data-v="1"]'); await page.waitForTimeout(300);
       check('العودة للتحكم اليدوي توقف التلقائي', (await page.evaluate(() => JSON.parse(localStorage.getItem('taqati.ctlNative')).mode)) === 'manual' && !(await page.$('.ctl-now')));
@@ -841,6 +845,12 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.fill('#simMinutes','-1');
       check('المحاكاة ترفض المدة السالبة', (await text(page,'#simResult')).includes('أدخل قدرة موجبة'));
       await page.fill('#simMinutes','120');
+      await page.evaluate(() => { window.__state.model.ts = Date.now() - 15 * 60000 + 1500; window.__state.model.stale = false; window.__nav('more', 'calc'); });
+      await page.waitForSelector('#simResult');
+      const beforeExpiry = !!(await page.$('#simResult [data-sim-value=headroom]'));
+      await page.waitForTimeout(2600);
+      const afterExpiry = await text(page, '#simResult');
+      check('انتهاء صلاحية القراءة يسحب تقديرات المحاكاة فوراً', beforeExpiry && afterExpiry.includes('لا توجد قراءة حمل حديثة') && !(await page.$('#simResult [data-sim-value=headroom]')) && !(await page.$('#simResult [data-sim-value=totalW]')) && (await page.inputValue('#simWatts')) === '900', afterExpiry.slice(0, 80));
       await page.evaluate(() => { window.__state.model.ts = Date.now()-16*60000; window.__state.model.stale=false; window.__nav('home',null); });
       failed = true; await page.click('#refreshBtn'); await page.waitForTimeout(500);
       check('فشل الاتصال لا يبقي قراءة قديمة حيّة', await page.evaluate(() => window.__state.model.stale && !!window.__state.netError));

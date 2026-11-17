@@ -54,6 +54,15 @@ class ControlWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params
                 if (client.sessionChanged) SecureStore.put(ctx, "session", client.session.toJson())
             }
             p.edit().putString(ControlStore.STATE, res.state.toJson().toString()).apply()
+            if (cfg.mode == "smart") {
+                val r = res.reading
+                fun num(v: Double?) = v?.let { Math.round(it).toDouble() } ?: JSONObject.NULL
+                ControlStore.check(ctx, JSONObject().put("at", System.currentTimeMillis()).put("status", res.status)
+                    .put("trial", cfg.dryRun).put("reason", res.decision.reason)
+                    .put("to", res.to?.let { ControlEngine.labelOf(it, cfg) } ?: JSONObject.NULL)
+                    .put("soc", num(r?.soc)).put("pvW", num(r?.pvW)).put("loadW", num(r?.outW))
+                    .put("readingAt", r?.tsRaw?.plus(cfg.tzOffsetMs) ?: JSONObject.NULL))
+            }
             if (res.status != "none") {
                 val entry = JSONObject().put("at", System.currentTimeMillis()).put("by", cfg.mode)
                     .put("from", ControlEngine.labelOf(res.from, cfg)).put("to", if (res.to == null && res.status == "simulated") "لا تغيير مقترح" else ControlEngine.labelOf(res.to, cfg))
@@ -85,6 +94,7 @@ object ControlStore {
     const val CONFIG = "ctl_config"
     const val STATE = "ctl_state"
     const val LOG = "ctl_log"
+    const val CHECKS = "ctl_checks"
 
     fun prefs(ctx: Context) = ctx.getSharedPreferences("taqati_control", Context.MODE_PRIVATE)
 
@@ -98,6 +108,13 @@ object ControlStore {
             s.equals(c.solarKey, true) || s.equals(c.solarLabel, true) -> c.solarKey
             else -> s
         }
+    }
+
+    @Synchronized
+    fun check(ctx: Context, entry: JSONObject) {
+        val p = prefs(ctx)
+        val arr = JSONArray(p.getString(CHECKS, "[]") ?: "[]")
+        p.edit().putString(CHECKS, ControlEngine.appendCheck(arr, entry).toString()).apply()
     }
 
     @Synchronized
