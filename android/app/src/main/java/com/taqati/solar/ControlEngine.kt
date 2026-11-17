@@ -82,7 +82,8 @@ data class CtlState(
     val attempts: Int = 0,            // محاولات فاشلة لهذا الموعد
     val lastSwitchAt: Long = 0,       // آخر تحويل أرسله المحرّك
     val pauseUntil: Long = 0,         // تدخّل يدوي يوقف الإدارة الذكية مؤقتاً
-    val coverRuns: Int = 0,           // تشغيلات متتالية تغطي فيها الألواح الحمل
+    val coverRuns: Int = 0,           // قراءات متتالية (مختلفة الوقت) تغطي فيها الألواح الحمل
+    val coverTs: Long = 0,            // وقت آخر قراءة حُسبت فيه التغطية: القراءة نفسها لا تُعدّ مرتين
     val lastCheckAt: Long = 0,
     val lastNote: String = "",
     val simKey: String = "",          // وضع التجربة: آخر قرار سُجّل
@@ -90,13 +91,14 @@ data class CtlState(
 ) {
     fun toJson(): JSONObject = JSONObject().put("handledBoundary", handledBoundary).put("attempts", attempts)
         .put("lastSwitchAt", lastSwitchAt).put("pauseUntil", pauseUntil).put("coverRuns", coverRuns)
-        .put("lastCheckAt", lastCheckAt).put("lastNote", lastNote).put("simKey", simKey).put("simAt", simAt)
+        .put("lastCheckAt", lastCheckAt).put("lastNote", lastNote).put("simKey", simKey).put("simAt", simAt).put("coverTs", coverTs)
 
     companion object {
         fun fromJson(s: String?): CtlState = try {
             val o = JSONObject(s ?: "{}")
-            CtlState(o.optLong("handledBoundary"), o.optInt("attempts"), o.optLong("lastSwitchAt"), o.optLong("pauseUntil"),
-                o.optInt("coverRuns"), o.optLong("lastCheckAt"), o.optString("lastNote"), o.optString("simKey"), o.optLong("simAt"))
+            CtlState(handledBoundary = o.optLong("handledBoundary"), attempts = o.optInt("attempts"), lastSwitchAt = o.optLong("lastSwitchAt"),
+                pauseUntil = o.optLong("pauseUntil"), coverRuns = o.optInt("coverRuns"), coverTs = o.optLong("coverTs"),
+                lastCheckAt = o.optLong("lastCheckAt"), lastNote = o.optString("lastNote"), simKey = o.optString("simKey"), simAt = o.optLong("simAt"))
         } catch (e: Exception) {
             CtlState()
         }
@@ -220,7 +222,9 @@ object ControlEngine {
         val pv = snap.pvW ?: return none("قدرة الألواح غير مقروءة")
         val load = snap.outW ?: return none("حمل البيت غير مقروء")
         val gridOn = snap.gridV != null && snap.gridV >= 0.4 * (snap.gridRatedV ?: 230.0)
-        cover = if (pv >= load + c.pvMarginW) cover + 1 else 0
+        // نعدّ القراءة مرة واحدة: إعادة الفحص على القراءة نفسها (أو بلا وقت معروف) لا تزيد العدّاد
+        val ts = snap.tsRaw
+        if (ts != null && ts != st.coverTs) cover = if (pv >= load + c.pvMarginW) cover + 1 else 0
         if (now < st.pauseUntil) return none("موقوفة بعد تدخّل يدوي حتى ${hhmm(st.pauseUntil, c)}")
         if (!gridOn) return none("الشبكة مقطوعة؛ يتصرف الإنفرتر بحمايته")
         if (cur == null) return none("تعذّرت قراءة الوضع الحالي")
@@ -243,6 +247,19 @@ object ControlEngine {
         return "${if (h % 12 == 0) 12 else h % 12}:${"%02d".format(m % 60)} ${if (h < 12) "ص" else "م"}"
     }
 
+    /**
+     * سجل الفحوص: كل فحص للإدارة الذكية بسببه وقراءته. الفحص الذي يكرر سبب سابقه حرفياً
+     * يزيد عدّاد التكرار ووقت آخر حدوث بدل سطر جديد، فلا يضيع أي تغيّر في السبب.
+     */
+    fun appendCheck(log: JSONArray, entry: JSONObject, max: Int = 200): JSONArray {
+        val first = log.optJSONObject(0)
+        if (first != null && first.optString("reason") == entry.optString("reason") && first.optString("status") == entry.optString("status")) {
+            first.put("count", first.optInt("count", 1) + 1).put("lastAt", entry.optLong("at"))
+            return log
+        }
+        return appendLog(log, entry, max)
+    }
+
     fun appendLog(log: JSONArray, entry: JSONObject, max: Int = 100): JSONArray {
         val out = JSONArray().put(entry)
         for (i in 0 until minOf(log.length(), max - 1)) out.put(log.get(i))
@@ -258,19 +275,21 @@ interface CtlApi {
     fun snapshot(): Pair<Snapshot, Long>?
 }
 
-data class RunResult(val decision: Decision, val status: String, val from: String?, val to: String?, val error: String? = null, val state: CtlState)
+data class RunResult(val decision: Decision, val status: String, val from: String?, val to: String?, val error: String? = null, val state: CtlState, val reading: Snapshot? = null)
 
 object ControlRunner {
     /** يقرر وينفّذ ويتحقق. status: none | confirmed | unconfirmed | rejected | error */
     fun run(now: Long, c: CtlConfig, st0: CtlState, api: CtlApi, sleep: (Long) -> Unit = { Thread.sleep(it) }, clock: () -> Long = { now }): RunResult {
         var st = st0.copy(lastCheckAt = now)
+        var reading: Snapshot? = null
         val cur = try { api.readMode() } catch (e: Exception) { null }
         val decision: Decision = when (c.mode) {
             "schedule" -> ControlEngine.decideSchedule(now, cur, st, c)
             "smart" -> {
                 val snap = try { api.snapshot() } catch (e: Exception) { null }
                 val (d, cover) = ControlEngine.decideSmart(now, cur, snap?.first, snap?.second, st, c)
-                st = st.copy(coverRuns = cover)
+                st = st.copy(coverRuns = cover, coverTs = snap?.first?.tsRaw ?: st.coverTs)
+                reading = snap?.first
                 d
             }
             else -> Decision(null, "التحكم يدوي")
@@ -279,22 +298,22 @@ object ControlRunner {
         // وضع التجربة (افتراضي للإدارة الذكية): يسجّل ما كان سيفعله دون أي إرسال أو تحقق.
         // سبب عدم القرار يُحفظ للعرض فقط، والقرار نفسه يُسجَّل مرة ولا يتكرر قبل ساعتين
         if (c.dryRun && c.mode == "smart") {
-            if (decision.key == null) return RunResult(decision, "none", cur, null, state = st.copy(lastNote = "تجربة: " + decision.reason, simKey = ""))
+            if (decision.key == null) return RunResult(decision, "none", cur, null, state = st.copy(lastNote = "تجربة: " + decision.reason, simKey = ""), reading = reading)
             val repeat = decision.key == st.simKey && now - st.simAt < ControlEngine.SIM_REPEAT_MS
             return RunResult(decision, if (repeat) "none" else "simulated", cur, decision.key,
-                state = st.copy(lastNote = "تجربة دون إرسال: " + decision.reason, simKey = decision.key, simAt = if (repeat) st.simAt else now))
+                state = st.copy(lastNote = "تجربة دون إرسال: " + decision.reason, simKey = decision.key, simAt = if (repeat) st.simAt else now), reading = reading)
         }
         // الجدولة: الموعد المطابق أصلاً يُعدّ معالجاً
         if (c.mode == "schedule" && decision.key == null && cur != null && cur == ControlEngine.desiredKey(now, c) && st.handledBoundary != decision.boundary) {
             st = st.copy(handledBoundary = decision.boundary, attempts = 0)
         }
-        if (decision.key == null) return RunResult(decision, "none", cur, null, state = st.copy(lastNote = decision.reason))
+        if (decision.key == null) return RunResult(decision, "none", cur, null, state = st.copy(lastNote = decision.reason), reading = reading)
 
         val target = decision.key
         try {
             api.send(target)
         } catch (e: Exception) {
-            return finish(c, st, decision, "rejected", cur, target, e.message ?: "رفض الجهاز الأمر", clock())
+            return finish(c, st, decision, "rejected", cur, target, e.message ?: "رفض الجهاز الأمر", clock()).copy(reading = reading)
         }
         var after: String? = null
         var err: String? = null
@@ -305,9 +324,9 @@ object ControlRunner {
             } catch (e: Exception) {
                 err = e.message
             }
-            if (after == target) return finish(c, st, decision, "confirmed", cur, target, null, clock())
+            if (after == target) return finish(c, st, decision, "confirmed", cur, target, null, clock()).copy(reading = reading)
         }
-        return finish(c, st, decision, "unconfirmed", cur, target, err ?: "الجهاز ما زال يعيد ${ControlEngine.labelOf(after, c)}", clock())
+        return finish(c, st, decision, "unconfirmed", cur, target, err ?: "الجهاز ما زال يعيد ${ControlEngine.labelOf(after, c)}", clock()).copy(reading = reading)
     }
 
     private fun finish(c: CtlConfig, st: CtlState, d: Decision, status: String, from: String?, to: String, error: String?, at: Long): RunResult {

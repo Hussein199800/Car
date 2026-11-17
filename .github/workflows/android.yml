@@ -28,9 +28,15 @@ jobs:
       - name: JavaScript unit tests
         run: npm test
       - run: npm run build && npx cap sync android
-      - name: Kotlin unit tests
+      # اختبارات الواجهة بمتصفح حقيقي وخادم WatchPower وهمي (لا اتصال بأي حساب أو جهاز)
+      - name: UI tests (Playwright)
+        run: |
+          npm i --no-save playwright@1
+          npx playwright install --with-deps chromium
+          node tests/e2e/run.cjs
+      - name: Kotlin unit tests and Android Lint
         working-directory: android
-        run: chmod +x gradlew && ./gradlew testReleaseUnitTest --no-daemon
+        run: chmod +x gradlew && ./gradlew testReleaseUnitTest lintRelease --no-daemon
 
       # نسخة موقّعة للنشر: تعمل فقط إذا أُضيف مفتاح التوقيع في أسرار المستودع
       - name: Prepare signing key

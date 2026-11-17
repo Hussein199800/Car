@@ -74,8 +74,8 @@ class ControlEngineTest {
         assertNull(ControlEngine.decideSchedule(syria("2026-11-14", 18, 0), "Weird", CtlState(), c).key)
     }
 
-    private fun snap(soc: Double, pv: Double, load: Double, gridV: Double = 230.0) =
-        Snapshot(0, soc, gridV, 230.0, null, load, null, "Battery Mode", null, pvW = pv)
+    private fun snap(soc: Double, pv: Double, load: Double, gridV: Double = 230.0, ts: Long = 1_000L) =
+        Snapshot(ts, soc, gridV, 230.0, null, load, null, "Battery Mode", null, pvW = pv)
 
     @Test
     fun smartUsesHysteresisGapAndFreshReadings() {
@@ -98,10 +98,14 @@ class ControlEngineTest {
         assertNull(ControlEngine.decideSmart(now, "1", snap(30.0, 0.0, 600.0), fresh, CtlState(), c).first.key)
         assertNull(ControlEngine.decideSmart(now, "2", null, null, CtlState(), c).first.key)
         // الألواح تغطي الحمل: يلزم قراءتان متتاليتان
-        val (d1, cover1) = ControlEngine.decideSmart(now, "0", snap(50.0, 900.0, 500.0), fresh, CtlState(), c)
+        val (d1, cover1) = ControlEngine.decideSmart(now, "0", snap(50.0, 900.0, 500.0, ts = 1_000L), fresh, CtlState(), c)
         assertNull(d1.key)
         assertEquals(1, cover1)
-        assertEquals("2", ControlEngine.decideSmart(now, "0", snap(50.0, 900.0, 500.0), fresh, CtlState(coverRuns = cover1), c).first.key)
+        // القراءة نفسها مرة ثانية لا تُعدّ قراءة ثانية
+        val (same, coverSame) = ControlEngine.decideSmart(now, "0", snap(50.0, 900.0, 500.0, ts = 1_000L), fresh, CtlState(coverRuns = cover1, coverTs = 1_000L), c)
+        assertNull(same.key)
+        assertEquals(1, coverSame)
+        assertEquals("2", ControlEngine.decideSmart(now, "0", snap(50.0, 900.0, 500.0, ts = 301_000L), fresh, CtlState(coverRuns = cover1, coverTs = 1_000L), c).first.key)
     }
 
     private class FakeApi(var mode: String?, val applies: Boolean = true, val reject: Boolean = false, val readFails: Boolean = false) : CtlApi {
