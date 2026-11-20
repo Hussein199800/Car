@@ -273,6 +273,8 @@ interface CtlApi {
     fun send(key: String)
     /** آخر قراءة حية وعمرها بالمللي ثانية */
     fun snapshot(): Pair<Snapshot, Long>?
+    /** يُسأل قبل الإرسال مباشرة: هل ما زال الإعداد نفسه والجلسة نفسها؟ (تغيّر الإعداد أو خرج المستخدم أثناء الفحص ← لا أمر) */
+    fun stillAllowed(): Boolean = true
 }
 
 data class RunResult(val decision: Decision, val status: String, val from: String?, val to: String?, val error: String? = null, val state: CtlState, val reading: Snapshot? = null)
@@ -310,6 +312,7 @@ object ControlRunner {
         if (decision.key == null) return RunResult(decision, "none", cur, null, state = st.copy(lastNote = decision.reason), reading = reading)
 
         val target = decision.key
+        if (!api.stillAllowed()) return RunResult(Decision(null, "تغيّر إعداد التحكم أثناء الفحص، فلم يُرسل شيء"), "none", cur, null, state = st0, reading = reading)
         try {
             api.send(target)
         } catch (e: Exception) {

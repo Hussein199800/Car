@@ -203,9 +203,9 @@ test('ملخص الأيام الماضية يُخزَّن نهائياً فقط 
   const mem = new Map();
   globalThis.localStorage = { getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, String(v)), removeItem: (k) => mem.delete(k), get length() { return mem.size; }, key: (i) => [...mem.keys()][i] };
   const date = today(-2);
-  cacheSummary('X', { v: 2, date, count: 10, source: 'local' });
+  cacheSummary('X', { v: 3, date, count: 10, source: 'local' });
   assert.equal(cachedSummary('X', date), null, 'القراءات المحلية قد تكون جزئية');
-  cacheSummary('X', { v: 2, date, count: 10, source: 'server' });
+  cacheSummary('X', { v: 3, date, count: 10, source: 'server' });
   assert.equal(cachedSummary('X', date).source, 'server');
   cacheSummary('X', { date: today(-3), count: 10, source: 'server' });
   assert.equal(cachedSummary('X', today(-3)), null, 'ملخص بصيغة قديمة يُعاد حسابه بالحقول الجديدة');
@@ -214,6 +214,9 @@ test('ملخص الأيام الماضية يُخزَّن نهائياً فقط 
 
 test('تصدير CSV يقتبس الفواصل والأسطر', () => {
   assert.equal(toCsv(['a', 'b'], [['x,y', 'l1\r\nl2']]).replace(/^﻿/, ''), 'a,b\r\n"x,y","l1\r\nl2"');
+  // 3.14: علامات الصيغ تُعطَّل، والأرقام السالبة تبقى أرقاماً
+  const row = toCsv(['a'], [['=HYPERLINK("x")', ' +1+2', '\t@SUM(A1)', '-cmd', -929, '-12.5', 'Battery Mode']]).replace(/^﻿/, '').split('\r\n')[1];
+  assert.equal(row, `"'=HYPERLINK(""x"")",' +1+2,'\t@SUM(A1),'-cmd,-929,-12.5,Battery Mode`);
 });
 
 test('بطارية الاحتياط تُحسب على متوسط السحب الفعلي', () => {
@@ -296,10 +299,28 @@ test('تقسيم الشحن بين الألواح والكهرباء والاس�
   const b = summarize('2026-10-21', sampleDay('2026-10-21', { pv: 300, load: 500, chg: 1000, mode: 'Line Mode' }), 'server');
   assert.ok(Math.abs(b.solarChgKwh - 7.2) < 0.01 && Math.abs(b.gridChgKwh - 16.8) < 0.01);
   assert.equal(b.independence, 0);
-  // بدون وضع التشغيل لا نحسب الاستقلالية
+  // 3.14: بدون وضع التشغيل يُستنتج من الشبكة والبطارية والألواح (لا يُستبعد اليوم)، مع نسبة الاستنتاج
   const c = summarize('2026-10-22', sampleDay('2026-10-22', { mode: null }), 'server');
-  assert.equal(c.independence, null);
-  assert.equal(c.gridLoadKwh, null);
+  assert.ok(Math.abs(c.gridLoadKwh - 12) < 0.01, String(c.gridLoadKwh));
+  assert.equal(c.inferredPct, 100);
+  assert.equal(c.gridBasis, 'estimated');
+  // البطارية تُفرّغ والشبكة موجودة ← ليس وضع الشبكة
+  const d = summarize('2026-10-22', sampleDay('2026-10-22', { mode: null, chg: -400 }), 'server');
+  assert.equal(d.gridKwh, 0);
+});
+
+test('3.14: سحب الشبكة = حمل وضع الشبكة + شحن البطارية منها، بلا عدّ مرتين', () => {
+  const t0 = new Date('2026-11-10T17:00:00').getTime();
+  // ساعتان: الحمل 500 واط من الشبكة، والبطارية تشحن 350 منها 100 من الألواح ← 250 من الشبكة
+  const line = Array.from({ length: 25 }, (_, i) => ({ ts: t0 + i * 5 * 60000, outW: 500, pvW: 100, batW: 350, gridV: 230, gridRatedV: 230, mode: 'Line Mode', soc: 50 }));
+  const r = summarize('2026-11-10', line, 'server');
+  assert.ok(Math.abs(r.gridLoadKwh - 1.0) < 1e-6 && Math.abs(r.gridChgKwh - 0.5) < 1e-6 && Math.abs(r.gridKwh - 1.5) < 1e-6, JSON.stringify([r.gridLoadKwh, r.gridChgKwh, r.gridKwh]));
+  assert.ok(Math.abs(r.solarChgKwh - 0.2) < 1e-6);
+  // يوم مضى بساعتين فقط من القراءات: جزئي، لا صفر مختلق ولا «كامل»
+  assert.equal(r.gridBasis, 'partial');
+  // وضع غير معروف معظم الوقت (انقطاع شبكة غير مقروء) ← لا رقم
+  const unk = line.map((x) => ({ ...x, mode: null, gridV: null, batW: null }));
+  assert.equal(summarize('2026-11-10', unk, 'server').gridKwh, null);
 });
 
 test('أدنى وأعلى نسبة للبطارية مع الوقت، ووقت الامتلاء', () => {
@@ -400,6 +421,17 @@ test('أحداث الخلفية من Kotlin تُوحَّد عند الاستلا
   const many = Array.from({ length: LOG_CAP + 50 }, (_, i) => ({ cat: 'conn', level: 'info', title: 'x', body: '', at: i, read: true }));
   assert.equal(addEvents(many, fresh).length, LOG_CAP);
   assert.equal(addEvents(many, fresh)[0].at, at, 'الحدث الجديد في أول السجل');
+});
+
+test('3.14: دمج التنبيه بحدثه يخص الجهاز نفسه فقط', () => {
+  const at = 1_800_000_500_000;
+  const ev = toEvents(
+    [{ sn: 'A', title: 'انقطعت كهرباء الشبكة', kind: 'warn', at }, { sn: 'B', title: 'انقطعت كهرباء الشبكة', kind: 'warn', at }],
+    [{ sn: 'B', title: 'انقطاع كهرباء الشبكة', kind: 'grid', at }],
+  );
+  assert.equal(ev.length, 2, 'جهازان = حدثان');
+  assert.deepEqual(ev.map((e) => e.sn).sort(), ['A', 'B']);
+  assert.ok(ev.every((e) => e.title === 'انقطعت كهرباء الشبكة'));
 });
 
 // ---------- نسبة التغيّر في التقارير ----------
@@ -654,4 +686,76 @@ test('تحليل الأسبوعين والتقدير وعدّاد الشبكة',
   assert.ok(Math.abs(g.all.load - 28.5) < 1e-9 && Math.abs(g.all.chg - 14) < 1e-9);
   assert.equal(g.all.partial, 1);
   assert.equal(gridMeter(sums, T, day(-3).date).all.days, 3);
+});
+
+// ---------- 3.14 الدفعة ب: البيانات والأوضاع ----------
+import { modeText } from '../../src/model.js';
+import { ApiError, isNoRecord } from '../../src/api.js';
+
+test('أوضاع التشغيل: Bypass وأمثاله معروفة، واسم الطراز ليس وضعاً', () => {
+  for (const v of ['Bypass', 'Line Mode', 'Battery Mode', 'Standby', 'Power Saving Mode']) assert.equal(modeText(v), v);
+  for (const v of ['Master 7KW', '', null, '---', 'Off-Grid']) assert.equal(modeText(v), null, String(v));
+});
+
+const apiErr = (desc, code) => { const e = new ApiError('لا توجد بيانات', code); e.desc = desc; return e; };
+
+test('«لا توجد بيانات» تُعرف من رمز الخادم الخام، لا من الرسالة المترجمة', async () => {
+  assert.equal(isNoRecord(apiErr('ERR_NO_RECORD', 7)), true);
+  assert.equal(isNoRecord(apiErr('ERR_TIMEOUT', 7)), false);
+  const a = new WatchPowerApi();
+  a.request = async () => { throw apiErr('ERR_NO_RECORD', 7); };
+  assert.deepEqual(await a.dayHistory({ sn: 'x' }, '2026-11-01'), { titles: [], rows: [] });
+  a.request = async () => { throw new ApiError('تعذّر الاتصال بالخادم، تحقق من الإنترنت'); };
+  await assert.rejects(a.dayHistory({ sn: 'x' }, '2026-11-01'), /الإنترنت/, 'فشل الشبكة خطأ قابل لإعادة المحاولة، لا «نهاية البيانات»');
+});
+
+test('سجل اليوم بلا total يكمل الصفحات حتى صفحة ناقصة', async () => {
+  const a = new WatchPowerApi();
+  const pages = [];
+  a.request = async (act, p) => {
+    pages.push(p.page);
+    const n = p.page < 2 ? 200 : 37;
+    return { dat: { title: [{ title: 'Timestamp' }], row: Array.from({ length: n }, () => ({ field: ['x'] })) } };
+  };
+  const r = await a.dayHistory({ sn: 'x' }, '2026-11-01');
+  assert.equal(r.rows.length, 437);
+  assert.deepEqual(pages, [0, 1, 2]);
+});
+
+test('اكتشاف الأجهزة: كل محطة تُفحص مجمّعاتها وإن وُجد جهاز في محطة سابقة', async () => {
+  const a = new WatchPowerApi();
+  a.request = async (act, p) => {
+    if (act === 'queryPlants') return { dat: { plant: [{ pid: 1 }, { pid: 2 }] } };
+    if (act === 'webQueryDeviceEs') return { dat: { device: p.pid === 1 ? [{ pn: 'P1', sn: 'S1', devcode: 1 }] : [] } };
+    if (act === 'webQueryCollectorsEs') return { dat: { collector: p.pid === 2 ? [{ pn: 'P2' }] : [] } };
+    if (act === 'queryCollectorDevices') return { dat: { dev: [{ sn: 'S2', devcode: 2 }] } };
+    return { dat: {} };
+  };
+  const list = await a.listDevices();
+  assert.deepEqual(list.map((d) => d.sn), ['S1', 'S2']);
+  assert.equal(list[1].pid, 2);
+});
+
+import { shiftToDay } from '../../src/data.js';
+test('حدود اليوم: قراءة نقلها تصحيح الساعة بعد منتصف الليل تذهب لليوم الصحيح', () => {
+  const at = (s) => new Date(s).getTime();
+  const off = 30 * 60000;
+  const mk = () => [{ ts: at('2026-11-19T23:50:00') }, { ts: at('2026-11-20T00:10:00') }, { ts: at('2026-11-20T23:40:00') }];
+  assert.deepEqual(shiftToDay(mk(), off, '2026-11-20').map((x) => x.ts), [at('2026-11-20T00:20:00'), at('2026-11-20T00:40:00')]);
+  assert.deepEqual(shiftToDay(mk(), off, '2026-11-21').map((x) => x.ts), [at('2026-11-21T00:10:00')]);
+  assert.equal(shiftToDay(mk(), 0, '2026-11-20').length, 2);
+});
+
+import { costOf, costText, curCode, fmtMoney } from '../../src/money.js';
+test('3.14: الكلفة بعملة المستخدم وسعر الصرف، بلا سعر افتراضي', () => {
+  assert.equal(costOf(10, {}), null, 'لا سعر ← لا مال');
+  const u = costOf(10, { price: 0.12, currency: 'USD', exRate: 13000 });
+  assert.ok(Math.abs(u.v - 1.2) < 1e-9 && u.alt.code === 'SYP' && Math.round(u.alt.v) === 15600);
+  assert.equal(costText(u), '1.20 $ (≈ 15,600 ل.س)');
+  const s = costOf(10, { price: 1500, currency: 'SYP', exRate: 15000 });
+  assert.equal(costText(s), '15,000 ل.س (≈ 1.00 $)');
+  assert.equal(costText(costOf(10, { price: 1500, currency: 'ل.س' })), '15,000 ل.س');
+  assert.equal(curCode({ currency: '$' }), 'USD');
+  assert.equal(curCode({ currency: 'EUR' }), 'OTHER');
+  assert.equal(fmtMoney(0.115, 'USD'), '0.12');
 });

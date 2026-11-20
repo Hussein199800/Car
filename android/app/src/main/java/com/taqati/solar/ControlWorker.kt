@@ -39,6 +39,9 @@ class ControlWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params
             val api = object : CtlApi {
                 override fun readMode(): String? = ControlStore.match(client.ctrlValue(dev, cfg.fieldId), cfg)
                 override fun send(key: String) { client.setCtrl(dev, cfg.fieldId, key) }
+                // الإعداد يُقرأ من جديد: إن حُفظ إعداد آخر أو أُوقف التحكم أو خرج المستخدم أثناء الفحص فلا أمر
+                override fun stillAllowed(): Boolean =
+                    ControlStore.prefs(ctx).getString(ControlStore.CONFIG, null) == cfgJson && SecureStore.get(ctx, "session") != null
                 override fun snapshot(): Pair<Snapshot, Long>? {
                     val points = client.lastData(dev)
                     if (points.isEmpty()) return null
@@ -53,6 +56,8 @@ class ControlWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params
             } finally {
                 if (client.sessionChanged) SecureStore.put(ctx, "session", client.session.toJson())
             }
+            // إعداد جديد حُفظ أثناء الفحص: حالته بدأت من جديد، فلا نكتب فوقها نتيجة إعداد قديم
+            if (p.getString(ControlStore.CONFIG, null) != cfgJson) return Result.success()
             p.edit().putString(ControlStore.STATE, res.state.toJson().toString()).apply()
             if (cfg.mode == "smart") {
                 val r = res.reading

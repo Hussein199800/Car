@@ -1088,3 +1088,18 @@ table.cmp tr.part { opacity: .55; }
 #replayScene .replay-scene { margin-top: 8px; }
 #replayEvents h3 { font-size: calc(14px * var(--fs, 1)); margin: 12px 0 4px; }
 #replayEvents .link { display: block; text-align: start; }
+
+/* 3.14: تقرير لفترة تختارها */
+.per-pick { display: grid; gap: 10px; }
+.per-presets { grid-auto-flow: row; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.per-dates { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.per-dates label { display: grid; gap: 4px; color: var(--mute); font-size: calc(12.5px * var(--fs, 1)); font-weight: 600; }
+.per-dates input { font: inherit; font-size: calc(15px * var(--fs, 1)); padding: 9px 10px; min-height: 44px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--input); color: var(--txt); width: 100%; min-width: 0; }
+.per-pick .hint { margin: 0; }
+.per-sum .wn li { line-height: 1.9; }
+.per-t .tr { grid-template-columns: 1.3fr 1fr 1fr 1fr 1fr; }
+.per-t .tr span.muted { opacity: .55; }
+.sv-cur { grid-auto-columns: 1fr; }
+@media (min-width: 600px) { .per-presets { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.stat .alt-cur { display: block; font-style: normal; font-size: calc(12px * var(--fs, 1)); color: var(--mute); margin-top: 2px; }
+.per-t .tr > span:first-child { white-space: nowrap; }

@@ -806,6 +806,31 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       check('نمط واحد فعّال: تفعيل الذكية أوقف الجدولة', (await text(page, '.ctl-now')).includes('الإدارة الذكية: تجربة دون أوامر') && !(await text(page, '.ctl-now')).includes('الجدولة'));
       await page.click('[data-mode="manual"]'); await page.click('#ctlSave'); await page.click('.modal [data-v="1"]'); await page.waitForTimeout(300);
       check('العودة للتحكم اليدوي توقف التلقائي', (await page.evaluate(() => JSON.parse(localStorage.getItem('taqati.ctlNative')).mode)) === 'manual' && !(await page.$('.ctl-now')));
+      // 3.14: رفض أندرويد للإعداد لا يُعرض نجاحاً ولا يُحفظ
+      await page.evaluate(() => localStorage.setItem('taqati.devCtlReject', 'true'));
+      await page.click('[data-mode="schedule"]'); await page.waitForTimeout(150);
+      await page.click('#ctlSave'); await page.click('.modal [data-v="1"]'); await page.waitForTimeout(300);
+      {
+        const last = await page.$$eval('.toast', (a) => a.map((e) => e.textContent).pop() || '');
+        const st = await page.evaluate(() => ({ n: JSON.parse(localStorage.getItem('taqati.ctlNative')).mode, s: Object.entries(localStorage).filter(([k]) => k.startsWith('taqati.ctlcfg.')).map(([, v]) => JSON.parse(v).mode) }));
+        check('رفض الهاتف للإعداد: رسالة رفض، لا «تم»، ولا يتغيّر المحفوظ', last.includes('لم يُحفظ') && !last.includes('تم') && st.n === 'manual' && st.s.every((m) => m === 'manual') && !!(await page.$('#ctlSave')), last + JSON.stringify(st));
+      }
+      await page.evaluate(() => localStorage.removeItem('taqati.devCtlReject'));
+      // جهاز آخر عليه التحكم: تحذير، وتفعيله هنا يوقفه هناك
+      await page.evaluate(() => { localStorage.setItem('taqati.ctlNative', JSON.stringify({ mode: 'schedule', device: { sn: 'OTHER-SN' } })); localStorage.setItem('taqati.ctlcfg.OTHER-SN', JSON.stringify({ mode: 'schedule', slots: [] })); window.__state.ctl.native = null; window.__state.ctl.nativeAt = 0; window.__render(); });
+      await page.waitForSelector('.ctl-other', { timeout: 3000 }).catch(() => null);
+      check('يظهر أن التحكم يعمل على جهاز آخر', (await text(page, '.ctl-other')).includes('OTHER-SN'));
+      await page.click('#ctlSave'); await page.waitForTimeout(150);
+      check('التأكيد ينبّه إلى إيقاف الجهاز الآخر', (await text(page, '.modal')).includes('سيتوقف التحكم التلقائي على الجهاز الآخر'));
+      await page.click('.modal [data-v="1"]'); await page.waitForTimeout(300);
+      {
+        const st = await page.evaluate(() => ({ n: JSON.parse(localStorage.getItem('taqati.ctlNative')), o: JSON.parse(localStorage.getItem('taqati.ctlcfg.OTHER-SN')).mode }));
+        check('جهاز تحكم فعّال واحد: انتقل التحكم لهذا الجهاز وأُوقف الآخر', st.n.mode === 'schedule' && st.n.device.sn !== 'OTHER-SN' && st.o === 'manual' && !(await page.$('.ctl-other')) && (await text(page, '.ctl-now')).includes('الجدولة فعّالة'), JSON.stringify(st));
+      }
+      // إعداد محفوظ لكن أندرويد على يدوي (مثلاً بعد خروج): لا يُعرض «فعّالاً»
+      await page.evaluate(() => { localStorage.setItem('taqati.ctlNative', JSON.stringify({ mode: 'manual' })); window.__state.ctl.native = null; window.__state.ctl.nativeAt = 0; window.__state.ctl.edit = null; window.__render(); });
+      await page.waitForSelector('.ctl-off', { timeout: 3000 }).catch(() => null);
+      check('إعداد غير مفعّل في الهاتف لا يظهر «فعّالاً»', !!(await page.$('.ctl-off')) && !(await page.$('.ctl-now')));
       check('بلا أخطاء JavaScript (التحكم)', page.errors.length === 0, page.errors.join(' | '));
       await page.context().close();
 
@@ -826,6 +851,64 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       check('عدّاد الشبكة موسوم بأنه تقدير ويعرض بداية السجل', gt.includes('تقدير محسوب، لا عدّاد من الجهاز') && gt.includes('بداية السجل المتاح') && (await d.$$('.stats .stat')).length === 4);
       check('بلا تمرير أفقي في الصفحات الجديدة', await noHScroll(d));
       check('بلا أخطاء JavaScript (التقدير والعدّاد)', d.errors.length === 0, d.errors.join(' | '));
+      // 3.14: تقرير لفترة تختارها، والكلفة بعملة المستخدم وسعر الصرف
+      await d.evaluate(() => { Object.assign(window.__state.prefs, { price: 0.12, currency: 'USD', exRate: 13000 }); window.__nav('reports', null); });
+      await d.waitForTimeout(200);
+      check('«تقرير لفترة تختارها» أول التقارير', (await d.$eval('.lcard', (e) => e.dataset.page)) === 'period');
+      await d.evaluate(() => window.__nav('reports', 'period'));
+      await d.waitForSelector('.per-key', { timeout: 60000 }).catch(() => null);
+      {
+        const keys = await d.$$eval('.per-key .stat small', (a) => a.map((e) => e.textContent.trim()));
+        check('أرقام الفترة الأهم أولاً: الإنتاج والاستهلاك وسحب الشبكة وكلفته والتوفير', ['الإنتاج', 'الاستهلاك', 'سحب الشبكة (تقدير)', 'كلفة الشبكة', 'توفير الألواح'].every((k) => keys.some((x) => x.startsWith(k))), keys.join('|'));
+        const cost = await text(d, '.per-key .stat.c-pink');
+        check('الكلفة بالدولار مع ما يعادلها بالليرة', cost.includes('$') && cost.includes('ل.س'), cost);
+        const top = await d.$eval('.per-key', (e) => e.getBoundingClientRect().top);
+        check('الأرقام الأهم ظاهرة دون تمرير على الهاتف', top < 600, String(top));
+        check('7 أيام افتراضياً، والجدول بالأيام', (await d.$$('.per-t button.tr')).length === 7 && (await text(d, '.per-sum')).includes('سُحب من الشبكة'), await text(d, '.per-sum'));
+      }
+      await d.screenshot({ path: path.join(OUT, 'period.png'), fullPage: true });
+      await d.click('[data-preset="30"]');
+      await d.waitForFunction(() => document.querySelectorAll('.per-t button.tr').length === 30, null, { timeout: 60000 }).catch(() => null);
+      check('آخر 30 يوماً', (await d.$$('.per-t button.tr')).length === 30);
+      // من تاريخ إلى تاريخ يختاره المستخدم (والمعكوس يُصحَّح)
+      const [f, t] = await d.evaluate(() => { const k = (n) => { const x = new Date(); x.setDate(x.getDate() - n); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; }; return [k(3), k(12)]; });
+      await d.fill('#perFrom', f); await d.$eval('#perFrom', (e) => e.dispatchEvent(new Event('change')));
+      await d.waitForTimeout(100);
+      await d.fill('#perTo', t); await d.$eval('#perTo', (e) => e.dispatchEvent(new Event('change')));
+      await d.waitForFunction(() => document.querySelectorAll('.per-t button.tr').length === 10, null, { timeout: 60000 }).catch(() => null);
+      check('فترة مخصصة من تاريخ إلى تاريخ (10 أيام، والترتيب المعكوس يُصحَّح)', (await d.$$('.per-t button.tr')).length === 10 && (await d.inputValue('#perFrom')) === t && (await d.inputValue('#perTo')) === f, `${await d.inputValue('#perFrom')} ${await d.inputValue('#perTo')}`);
+      check('بلا تمرير أفقي في تقرير الفترة', await noHScroll(d));
+      // مشاركة PDF: ملف PDF صالح بصفحات A4 (في المتصفح يُحمَّل، وفي أندرويد يفتح نافذة المشاركة)
+      {
+        const [dl] = await Promise.all([d.waitForEvent('download', { timeout: 30000 }).catch(() => null), d.click('#pdfPer')]);
+        const fp = dl ? path.join(OUT, 'period.pdf') : null;
+        if (dl) await dl.saveAs(fp);
+        const buf = fp ? fs.readFileSync(fp) : Buffer.alloc(0);
+        let pages = 0;
+        try { pages = Number((require('child_process').execFileSync('pdfinfo', [fp]).toString().match(/Pages:\s+(\d+)/) || [])[1]); } catch { pages = (buf.toString('latin1').match(/\/Type \/Page\b/g) || []).length; }
+        check('PDF الفترة: ملف صالح باسم الفترة وصفحاته A4', !!dl && /^taqati-.*\.pdf$/.test(dl.suggestedFilename()) && buf.slice(0, 5).toString() === '%PDF-' && pages >= 1 && buf.toString('latin1').includes('595.28'), `${dl?.suggestedFilename()} ${buf.length} ${pages}`);
+        try { require('child_process').execFileSync('pdftoppm', ['-png', '-r', '50', '-f', '1', '-l', '1', fp, path.join(OUT, 'period-pdf')]); } catch { /* أداة المعاينة اختيارية */ }
+      }
+      // واجهة السعر: العملة وسعر الصرف
+      await d.evaluate(() => window.__nav('more', 'calc')); await d.waitForTimeout(200);
+      await d.evaluate(() => { const b = [...document.querySelectorAll('.seg button')].find((x) => /التوفير/.test(x.textContent)); b?.click(); }); await d.waitForTimeout(200);
+      if (await d.$('.sv-cur')) {
+        check('اختيار العملة: دولار مفعّل وحقل سعر الصرف ظاهر', (await text(d, '.sv-cur .on')).includes('دولار') && !!(await d.$('#svRate')));
+        await d.click('[data-cur="SYP"]'); await d.waitForTimeout(150);
+        check('تبديل العملة يمسح السعر القديم بدل تفسيره خطأً', (await d.evaluate(() => window.__state.prefs.price)) === null && (await d.evaluate(() => window.__state.prefs.currency)) === 'SYP');
+      } else check('واجهة العملة ظاهرة في التوفير', false, (await text(d, '#view')).slice(0, 200));
+      // PDF التقرير اليومي
+      await d.evaluate(() => window.__nav('reports', 'day'));
+      await d.waitForSelector('#pdfDay', { timeout: 30000 }).catch(() => null);
+      {
+        const [dl] = await Promise.all([d.waitForEvent('download', { timeout: 30000 }).catch(() => null), d.click('#pdfDay')]);
+        const fp = dl ? path.join(OUT, 'day.pdf') : null;
+        if (dl) await dl.saveAs(fp);
+        const buf = fp ? fs.readFileSync(fp) : Buffer.alloc(0);
+        check('PDF اليوم: ملف صالح', !!dl && buf.slice(0, 5).toString() === '%PDF-' && buf.length > 20000, String(buf.length));
+        try { require('child_process').execFileSync('pdftoppm', ['-png', '-r', '50', fp, path.join(OUT, 'day-pdf')]); } catch { /* اختياري */ }
+      }
+      check('بلا أخطاء JavaScript (تقرير الفترة)', d.errors.length === 0, d.errors.join(' | '));
       await d.context().close();
     }
 

@@ -75,6 +75,7 @@ const VALUES = {
   'fault mode': 'وضع العطل',
   'power on mode': 'وضع بدء التشغيل',
   'bypass mode': 'وضع التمرير',
+  bypass: 'وضع التمرير',
   'power saving mode': 'وضع توفير الطاقة',
   'shutdown mode': 'وضع الإيقاف',
   'off grid': 'منفصل عن الشبكة',

@@ -13,7 +13,7 @@ import { WatchPowerApi, ApiError, errorAr } from './api.js';
 import { normalize, rowsToSamples, fmt, latinDigits, LOC, countAr, DAY, parseTs, setClock12, revalidate, gridPresent } from './model.js';
 import { trTitle, trValue, trUnit, isEmptyVal, warnAr } from './i18n.js';
 import {
-  store, today, addDays, dayKey, recordSample, localDay, summarize, cachedSummary, cacheSummary, toCsv, shareFile,
+  store, SUMMARY_V, today, addDays, dayKey, shiftToDay, recordSample, localDay, summarize, cachedSummary, cacheSummary, toCsv, shareFile,
 } from './data.js';
 import { demoPoints, demoHistory } from './demo.js';
 import { icons } from './icons.js';
@@ -26,6 +26,8 @@ import { scenePhoto, photoFor, batLook, photoIsDark } from './scenePhoto.js';
 import { sceneClassic } from './sceneClassic.js';
 import { analyze, capacityKwh } from './advisor.js';
 import { findField, isOutputPriority, isChargerPriority, orderOf, matchItem, changeAndVerify, addLog, SYRIA_OFFSET_MIN, DAY_NAMES, DAY_SHORT, localDay as sLocalDay, weekday, dateOf, hm, toMin, activeSlot, nextSwitch, overlap } from './control.js';
+import { costOf, costText, fmtMoney } from './money.js';
+import { buildPdf } from './pdf.js';
 import { analyzeTwoWeeks, rememberForecast, accuracy, gridMeter } from './forecast.js';
 import { CATS, catOf, levelOf, toEvents, migrateLog, addEvents } from './log.js';
 import { trendDates, change } from './trend.js';
@@ -44,7 +46,7 @@ Chart.register({ id: 'replayCursor', afterDraw(chart) {
 } });
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '3.13.1';
+const VERSION = '3.14.0';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -339,6 +341,11 @@ function logout() {
   ['devices', 'devSn', 'demo'].forEach(store.del);
   secure.del('session');
   monitor.configure({ enabled: false }).catch(() => {});
+  // لا يبقى عامل في الخلفية يرسل أوامر بجلسة خرج منها المستخدم
+  control.configure({ mode: 'manual' }).catch(() => {});
+  monitor.widget({ clear: true }).catch(() => {});
+  state.widgetTs = null;
+  state.ctl = null;
   Object.assign(state, { session: null, demo: false, devices: [], model: null, fields: null, tab: 'home', page: null, plant: undefined, collector: undefined });
   state.rep = { ...state.rep, day: null, week: null, month: null, adv: null };
   api = new WatchPowerApi();
@@ -542,6 +549,9 @@ function switchDevice(snv) {
   state.fields = null;
   state.plant = undefined;
   state.collector = undefined;
+  state.ctl = null; // حقول التحكم ووضعه ونتائجه تخص الجهاز السابق
+  state.widgetTs = null;
+  monitor.widget({ clear: true }).catch(() => {});
   resetAlertState();
   state.rep = { ...state.rep, day: null, week: null, month: null, adv: null, year: null, srv: null };
   loadCache();
@@ -568,7 +578,7 @@ function banner() {
 const PAGE_TITLES = {
   load: 'الحمل', battery: 'البطارية', solar: 'الألواح الشمسية', grid: 'كهرباء الشبكة',
   day: 'التقرير اليومي', week: 'التقرير الأسبوعي', month: 'التقرير الشهري', year: 'التقرير السنوي', srvlog: 'سجل الإنفرتر في الخادم', 
-  rules: 'شروط التنبيه', advisor: 'ملاحظات على منظومتك', device: 'الإنفرتر', update: 'التحديثات', edit: 'إعدادات الإنفرتر', power: 'أولوية مصدر الطاقة', forecast: 'تقدير الأسبوعين القادمين', gridmeter: 'كهرباء الشبكة', setup: 'ربط الجهاز والحساب',
+  period: 'تقرير لفترة', rules: 'شروط التنبيه', advisor: 'ملاحظات على منظومتك', device: 'الإنفرتر', update: 'التحديثات', edit: 'إعدادات الإنفرتر', power: 'أولوية مصدر الطاقة', forecast: 'تقدير الأسبوعين القادمين', gridmeter: 'كهرباء الشبكة', setup: 'ربط الجهاز والحساب',
   tips: 'النصائح', ...Object.fromEntries(TIP_SECTIONS.map((t) => [t.id, t.title])),
   settings: 'الإعدادات', calc: 'حاسبة الأحمال', about: 'حول التطبيق',
 };
@@ -647,7 +657,8 @@ function loadCache() {
 function pushWidget(m) {
   if (state.demo || !m || `${m.ts}:${m.stale}` === state.widgetTs) return;
   state.widgetTs = `${m.ts}:${m.stale}`;
-  monitor.widget({ soc: m.soc, batW: m.batW, loadW: m.outW, pvW: m.pvW, stale: !!m.stale, at: m.ts || Date.now() }).catch(() => {});
+  // وقت مجهول يبقى 0 (لا «الآن»): الأداة تكتب «وقت القراءة غير معروف» وتعدّ القراءة غير حية
+  monitor.widget({ soc: m.soc, batW: m.batW, loadW: m.outW, pvW: m.pvW, stale: !!m.stale || !m.ts, at: m.ts || 0 }).catch(() => {});
 }
 
 async function refresh(manual = false) {
@@ -1343,13 +1354,14 @@ function independenceCard() {
 }
 
 function viewReports() {
-  const pages = { day: pageDay, week: () => pageRange('week'), month: () => pageRange('month'), year: pageYear, advisor: pageAdvisor, forecast: pageForecast, gridmeter: pageGridMeter };
+  const pages = { period: pagePeriod, day: pageDay, week: () => pageRange('week'), month: () => pageRange('month'), year: pageYear, advisor: pageAdvisor, forecast: pageForecast, gridmeter: pageGridMeter };
   if (state.page && pages[state.page]) return pages[state.page]();
   const urgent = urgentCount();
   return `
   ${independenceCard()}
   <section class="intro"><h2>التقارير${infoBtn('report')}</h2></section>
   ${listCards([
+    { page: 'period', title: 'تقرير لفترة تختارها', sub: 'من تاريخ إلى تاريخ: الإنتاج والاستهلاك وسحب الشبكة وكلفتها في صفحة واحدة', icon: icons.calendar, color: 'c-green' },
     { page: 'advisor', title: 'ملاحظات على منظومتك', sub: 'ما يحتاج انتباهك الآن، واستخدام البطارية وتوصيات آخر 7 أيام', icon: icons.bulb, color: urgent ? 'c-pink' : 'c-green', badge: urgent ? `${urgent} مهم` : '' },
     { page: 'forecast', title: 'تقدير الأسبوعين القادمين', sub: 'مقارنة آخر أسبوعين، والعجز المتوقع، واقتراح احتياطي البطارية', icon: icons.chart, color: 'c-sky' },
     { page: 'gridmeter', title: 'كهرباء الشبكة', sub: 'ما سحبته من الشبكة يومياً وأسبوعياً وشهرياً (تقدير)', icon: icons.grid, color: 'c-violet' },
@@ -1362,7 +1374,8 @@ function viewReports() {
 
 // ================= التقرير السنوي (من عدّادات الخادم مباشرة، بلا تحميل قراءات الأيام) =================
 const MONTHS = ['كانون الثاني', 'شباط', 'آذار', 'نيسان', 'أيار', 'حزيران', 'تموز', 'آب', 'أيلول', 'تشرين الأول', 'تشرين الثاني', 'كانون الأول'];
-const money = (v) => (v == null || !Number.isFinite(v) ? '—' : Math.round(v).toLocaleString('en-US'));
+// مبلغ بعملة المستخدم: [القيمة، الرمز] لبطاقة الإحصاء (الرمز يذكر التحويل إن أُدخل سعر الصرف)
+const moneyStat = (kwh) => { const c = costOf(kwh, state.prefs); return c ? [fmtMoney(c.v, c.code), c.sym + (c.alt ? ` · ≈ ${fmtMoney(c.alt.v, c.alt.code)} ${c.alt.sym}` : '')] : null; };
 
 async function loadYear() {
   const y = state.rep.yearY || new Date().getFullYear();
@@ -1410,7 +1423,7 @@ function pageYear() {
     ${stat('أفضل شهر', best ? MONTHS[best.month - 1] : '—', best ? `${fmt.kwh(best.kwh)} ك.و.س` : '', 'c-green')}
     ${stat('متوسط الشهر', fmt.kwh(sum / used.length), 'ك.و.س', 'c-sky')}
     ${r.total != null ? stat('منذ أول قراءة', fmt.kwh(r.total), 'كيلوواط ساعة', 'c-violet', '', 'year') : ''}
-    ${price ? stat('توفير السنة', money(sum * price), state.prefs.currency || '', 'c-green', '', 'savings') : ''}
+    ${price ? stat('توفير السنة', ...moneyStat(sum), 'c-green', '', 'savings') : ''}
   </div>
   ${price ? '' : '<button class="link pad" data-goto="more:calc">احسب توفيرك بالمال من الحاسبة</button>'}
   <section class="card">${cardH('الإنتاج الشهري', '', '<small class="muted">كيلوواط ساعة</small>')}<div class="chart-box"><canvas id="cYear"></canvas></div></section>`;
@@ -1439,11 +1452,18 @@ async function daySamples(date, d = device()) {
   let err;
   if (serverHistFails < 3) {
     try {
-      const s = rowsToSamples(await api.dayHistory(d, date));
-      serverHistFails = 0;
-      // سجل الخادم بتوقيته هو؛ نطبّق فرق التوقيت المكتشف كما في القراءة الحية والسجل المحلي
       const off = store.get('tz.' + d.sn, 0);
-      if (off) s.forEach((x) => { x.ts += off; });
+      const s = shiftToDay(rowsToSamples(await api.dayHistory(d, date)), off, date);
+      serverHistFails = 0;
+      // فرق التوقيت ينقل قراءات طرف اليوم لليوم المجاور: نكمل من يوم الخادم المجاور (اختياري)
+      if (s.length && Math.abs(off) >= 60000) {
+        try {
+          const nb = shiftToDay(rowsToSamples(await api.dayHistory(d, addDays(date, off > 0 ? -1 : 1))), off, date);
+          const seen = new Set(s.map((x) => x.ts));
+          nb.forEach((x) => { if (!seen.has(x.ts)) s.push(x); });
+          s.sort((x, y) => x.ts - y.ts);
+        } catch { /* اليوم المجاور غير متاح: يبقى ما لدينا */ }
+      }
       if (s.length) return { samples: s, source: 'server' };
     } catch (e) {
       err = e;
@@ -1554,14 +1574,15 @@ function pageDay() {
     ${stat('توفر الكهرباء', numAr(s.gridH, 1), 'ساعة', 'c-violet', '', 'gridHours')}
     ${stat('العمل على البطارية', numAr(s.batH, 1), 'ساعة', 'c-slate')}
     ${pvKwp() && s.pvKwh != null ? stat('إنتاج كل كيلوواط ألواح', (s.pvKwh / pvKwp()).toFixed(2), 'ك.و.س', 'c-amber', '', 'yieldKwp') : ''}
-    ${state.prefs.price && s.pvKwh != null ? stat('التوفير', money(s.pvKwh * state.prefs.price), state.prefs.currency || '', 'c-green', '', 'savings') : ''}
+    ${state.prefs.price && s.pvKwh != null ? stat('التوفير', ...moneyStat(s.pvKwh), 'c-green', '', 'savings') : ''}
   </div>
   <p class="hint">${SRC[r.source]} · ${countAr(r.samples.length, READINGS)} · ${numAr(s.coveredH, 1)} ساعة مغطّاة${infoBtn('report')}</p>
   <section class="card"><div class="card-h"><h2>القدرة خلال اليوم</h2></div><div class="chart-box"><canvas id="cPower"></canvas></div></section>
   <section class="card"><div class="card-h"><h2>نسبة شحن البطارية</h2></div><div class="chart-box sm"><canvas id="cSoc"></canvas></div></section>
   <section class="card"><div class="card-h"><h2>جهد البطارية</h2></div><div class="chart-box sm"><canvas id="cBatV"></canvas></div></section>
   <section class="card"><div class="card-h"><h2>جهد كهرباء الشبكة</h2></div><div class="chart-box sm"><canvas id="cGrid"></canvas></div></section>
-  <button class="btn ghost wide" id="expDay">${icons.download} تصدير قراءات هذا اليوم</button>`;
+  ${pdfBtn('pdfDay')}
+  <button class="btn ghost wide" id="expDay">${icons.download} تصدير قراءات هذا اليوم (CSV)</button>`;
 }
 AFTER.day = () => {
   $('.day-nav').onclick = (e) => {
@@ -1584,6 +1605,7 @@ AFTER.day = () => {
   lineChart('cBatV', t, [{ label: 'فولت', data: r.samples.map((x) => x.batV), color: '#8b5cf6' }]);
   lineChart('cGrid', t, [{ label: 'فولت', data: r.samples.map((x) => x.gridV), color: '#ec4899' }], { y: { beginAtZero: true } });
   $('#expDay').onclick = () => exportSamples(state.rep.dayDate, r.samples);
+  $('#pdfDay').onclick = () => sharePdf(state.rep.dayDate, dayPdfSpec(state.rep.dayDate, r));
 };
 
 function rangeDates(kind, off) {
@@ -1636,8 +1658,14 @@ function totals(sums) {
   const ind = ok.filter((s) => s.independence != null && s.loadKwh > 0);
   const indLoad = ind.reduce((a, s) => a + s.loadKwh, 0);
   const independence = indLoad > 0 ? ind.reduce((a, s) => a + s.independence * s.loadKwh, 0) / indLoad : null;
+  // سحب الشبكة من الأيام التي يُعرف فيها فقط (تقدير)، مع عدد الأيام الناقصة
+  const g = ok.filter((s) => s.gridKwh != null);
+  const socs = ok.filter((s) => s.socMin != null);
   return { days: ok.length, pv, load, avgPv: avgOf('pvKwh'), avgLoad: avgOf('loadKwh'), gridH: add('gridH'), batH: add('batH'), best,
-    solarChg: add('solarChgKwh'), gridChg: add('gridChgKwh'), independence };
+    solarChg: add('solarChgKwh'), gridChg: add('gridChgKwh'), independence,
+    grid: g.length ? g.reduce((a, s) => a + s.gridKwh, 0) : null, gridDays: g.length,
+    gridPartial: g.filter((s) => s.gridBasis === 'partial' && s.date < today()).length,
+    socMin: socs.length ? socs.reduce((m, s) => (s.socMin < m.socMin ? s : m)) : null };
 }
 
 async function loadRange(kind) {
@@ -1707,7 +1735,8 @@ function pageRange(kind) {
     <div class="table"><div class="tr th"><span>اليوم</span><span>الإنتاج</span><span>الاستهلاك</span><span>البطارية</span></div>
     ${r.sums.slice().reverse().map((s) => `<button class="tr" data-dayopen="${s.date}"><span>${esc(dayName(s.date))}</span><span>${s.count > 1 ? fmt.kwh(s.pvKwh) : '—'}</span><span>${s.count > 1 ? fmt.kwh(s.loadKwh) : '—'}</span><span>${s.socMin != null ? `${s.socMin}–${s.socMax}%` : '—'}</span></button>`).join('')}
     </div></section>
-  <button class="btn ghost wide" id="expRange">${icons.download} تصدير ملخص الفترة</button>`;
+  ${pdfBtn('pdfRange')}
+  <button class="btn ghost wide" id="expRange">${icons.download} تصدير ملخص الفترة (CSV)</button>`;
 }
 
 function bindRange(kind) {
@@ -1729,9 +1758,132 @@ function bindRange(kind) {
     b.onclick = () => { state.rep.dayDate = b.dataset.dayopen; state.rep.day = null; navigate('reports', 'day'); };
   });
   $('#expRange').onclick = () => exportSummaries(`${kind}-${r.dates[0]}`, r.sums);
+  $('#pdfRange').onclick = () => sharePdf(`${kind}-${r.dates[0]}`, sumsPdfSpec(kind === 'week' ? 'التقرير الأسبوعي' : 'التقرير الشهري', `${fmt.day(r.dates[0], { day: 'numeric', month: 'long' })} — ${fmt.day(r.dates[r.dates.length - 1], { day: 'numeric', month: 'long', year: 'numeric' })}`, r.sums));
 }
 AFTER.week = () => bindRange('week');
 AFTER.month = () => bindRange('month');
+
+// ================= تقرير لفترة يختارها المستخدم (من تاريخ إلى تاريخ) =================
+const PERIOD_MAX = 92;
+const PRESETS = [
+  ['7', 'آخر 7 أيام', () => [today(-6), today()]],
+  ['30', 'آخر 30 يوماً', () => [today(-29), today()]],
+  ['m', 'هذا الشهر', () => [today().slice(0, 8) + '01', today()]],
+  ['pm', 'الشهر الماضي', () => { const d = new Date(today().slice(0, 8) + '01T12:00:00'); d.setDate(0); const e = dayKey(d.getTime()); return [e.slice(0, 8) + '01', e]; }],
+];
+function periodRange() {
+  const p = store.get('repPeriod', null);
+  let [from, to] = p && p.from && p.to ? [p.from, p.to] : PRESETS[0][2]();
+  if (to > today()) to = today();
+  if (from > to) from = to;
+  return { from, to };
+}
+function periodDates(from, to) {
+  const out = [];
+  for (let d = from; d <= to && out.length < PERIOD_MAX; d = addDays(d, 1)) out.push(d);
+  return out;
+}
+// 92 يوماً حداً أعلى: كل يوم جديد يُحمَّل من الخادم، والأيام المكتملة تُحفظ فتظهر فوراً لاحقاً
+async function loadPeriod() {
+  const { from, to } = periodRange();
+  const dates = periodDates(from, to);
+  const token = Symbol('per');
+  serverHistFails = 0;
+  state.rep.per = { loading: true, token, done: 0, total: dates.length, from, to };
+  render();
+  const sums = await loadSummaries(dates, (done, total) => {
+    if (state.rep.per?.token !== token) return;
+    state.rep.per.done = done;
+    const p = $('#perProg');
+    if (p) { p.style.width = (done / total) * 100 + '%'; $('#perTxt').textContent = `${done} من ${countAr(total, DAY)}`; }
+  });
+  if (state.rep.per?.token !== token) return;
+  state.rep.per = { from, to, dates, sums, at: Date.now() };
+  if (state.page === 'period') render();
+}
+
+function pagePeriod() {
+  const { from, to } = periodRange();
+  const r = state.rep.per;
+  const n = periodDates(from, to).length;
+  const preset = PRESETS.find(([, , f]) => { const [a, b] = f(); return a === from && b === to; })?.[0];
+  const head = `<section class="card per-pick">
+    <div class="seg per-presets">${PRESETS.map(([k, l]) => `<button class="${preset === k ? 'on' : ''}" data-preset="${k}">${l}</button>`).join('')}</div>
+    <div class="per-dates"><label>من<input type="date" id="perFrom" value="${from}" max="${today()}"></label><label>إلى<input type="date" id="perTo" value="${to}" max="${today()}"></label></div>
+    <small class="hint">${countAr(n, DAY)}${n >= PERIOD_MAX ? ` (الحد الأعلى ${PERIOD_MAX} يوماً)` : ''}</small>
+  </section>`;
+  if (!r || r.loading || r.from !== from || r.to !== to) {
+    return head + `<div class="card"><p class="center">جارٍ تجميع بيانات الأيام…</p><div class="bar"><i id="perProg" style="width:${r?.total ? (r.done / r.total) * 100 : 0}%"></i></div><p class="hint center" id="perTxt"></p>
+      <p class="hint center">الأيام المكتملة تُحفظ في الهاتف، فتظهر فوراً في المرة القادمة.</p></div>`;
+  }
+  const t = totals(r.sums);
+  if (!t.days) return head + '<div class="empty">لا توجد بيانات لهذه الفترة.</div>';
+  const p = state.prefs;
+  const gridCost = t.grid != null ? costOf(t.grid, p) : null;
+  const saved = costOf(t.pv, p);
+  const cover = t.load > 0 && t.grid != null ? Math.max(0, Math.min(100, (1 - t.grid / t.load) * 100)) : null;
+  const gridDay = r.sums.filter((s) => s.gridKwh != null).reduce((b, s) => (!b || s.gridKwh > b.gridKwh ? s : b), null);
+  const lowDay = t.socMin;
+  // جمل قصيرة بلغة عادية: ما يهم المستخدم من الأرقام
+  const lines = [
+    `أنتجت الألواح <b><bdi>${fmt.kwh(t.pv)}</bdi> ك.و.س</b> واستهلك البيت <b><bdi>${fmt.kwh(t.load)}</bdi> ك.و.س</b>.`,
+    t.grid != null ? `سُحب من الشبكة نحو <b><bdi>${fmt.kwh(t.grid)}</bdi> ك.و.س</b>${gridCost ? ` بكلفة <b><bdi>${esc(costText(gridCost))}</bdi></b>` : ''}${cover != null ? `، فغطّت منظومتك نحو <b><bdi>${Math.round(cover)}%</bdi></b> من الاستهلاك` : ''}.` : 'لا يمكن حساب سحب الشبكة لهذه الفترة (وضع التشغيل غير معروف).',
+    gridDay && gridDay.gridKwh > 0.05 ? `أكثر يوم سحباً من الشبكة: ${esc(dayName(gridDay.date))} (<bdi>${fmt.kwh(gridDay.gridKwh)}</bdi> ك.و.س).` : null,
+    t.best ? `أفضل يوم إنتاج: ${esc(dayName(t.best.date))} (<bdi>${fmt.kwh(t.best.pvKwh)}</bdi> ك.و.س).` : null,
+    lowDay ? `أدنى نسبة للبطارية: <bdi>${lowDay.socMin}%</bdi> يوم ${esc(dayName(lowDay.date))}${lowDay.socMinAt ? ` الساعة ${esc(fmt.time(lowDay.socMinAt))}` : ''}.` : null,
+  ].filter(Boolean);
+  const missing = r.sums.length - t.days;
+  return head + `
+  <div class="stats per-key">
+    ${stat('الإنتاج', fmt.kwh(t.pv), 'ك.و.س', 'c-amber')}
+    ${stat('الاستهلاك', fmt.kwh(t.load), 'ك.و.س', 'c-sky')}
+    ${stat('سحب الشبكة (تقدير)', t.grid == null ? '—' : fmt.kwh(t.grid), 'ك.و.س', 'c-violet', t.gridPartial ? `<em class="trend">${countAr(t.gridPartial, DAY)} ناقصة</em>` : '', 'gridEst')}
+    ${gridCost ? stat('كلفة الشبكة', fmtMoney(gridCost.v, gridCost.code), gridCost.sym, 'c-pink', gridCost.alt ? `<em class="alt-cur">≈ <bdi>${fmtMoney(gridCost.alt.v, gridCost.alt.code)}</bdi> ${esc(gridCost.alt.sym)}</em>` : '') : ''}
+    ${saved ? stat('توفير الألواح', fmtMoney(saved.v, saved.code), saved.sym, 'c-green', '', 'savings') : ''}
+    ${stat('الاستقلالية عن الشبكة', t.independence == null ? '—' : Math.round(t.independence) + '%', 'من الاستهلاك', 'c-slate')}
+  </div>
+  ${p.price ? '' : '<button class="link pad" data-goto="more:calc">أدخل سعر الكيلوواط (دولار أو ليرة) لتظهر الكلفة والتوفير</button>'}
+  <section class="card per-sum"><div class="card-h"><h2>الخلاصة</h2></div><ul class="wn">${lines.map((l) => `<li>${l}</li>`).join('')}</ul>
+    <p class="hint">أيام فيها بيانات: ${t.days} من ${r.sums.length}${missing ? ' — مجموع الفترة أقل من الحقيقي بقدر الأيام الناقصة' : ''}. سحب الشبكة تقدير لأن الجهاز لا يرسل عدّاد استيراد.</p></section>
+  <section class="card"><div class="card-h"><h2>يوماً بيوم</h2><small class="muted">كيلوواط ساعة</small></div><div class="chart-box"><canvas id="cPer"></canvas></div></section>
+  <section class="card"><div class="card-h"><h2>التفاصيل</h2></div>
+    <div class="table per-t"><div class="tr th"><span>اليوم</span><span>الإنتاج</span><span>الاستهلاك</span><span>الشبكة</span><span>البطارية</span></div>
+    ${r.sums.slice().reverse().map((s) => `<button class="tr" data-dayopen="${s.date}"><span>${esc(fmt.day(s.date, { weekday: 'short', day: 'numeric', month: 'numeric' }).replace('،', ''))}</span><span>${s.count > 1 ? fmt.kwh(s.pvKwh) : '—'}</span><span>${s.count > 1 ? fmt.kwh(s.loadKwh) : '—'}</span><span class="${s.gridBasis === 'partial' ? 'muted' : ''}">${s.gridKwh != null ? fmt.kwh(s.gridKwh) : '—'}</span><span>${s.socMin != null ? `${s.socMin}–${s.socMax}%` : '—'}</span></button>`).join('')}
+    </div><p class="hint">اضغط يوماً لفتح تقريره. الأرقام الباهتة في عمود الشبكة أيام ناقصة التغطية.</p></section>
+  ${pdfBtn('pdfPer')}
+  <button class="btn ghost wide" id="expPer">${icons.download} تصدير الفترة (CSV)</button>`;
+}
+
+AFTER.period = () => {
+  bindGoto();
+  const set = (from, to) => {
+    if (!from || !to) return;
+    if (to > today()) to = today();
+    if (from > to) [from, to] = [to, from];
+    const dates = periodDates(from, to);
+    if (dates[dates.length - 1] !== to) { to = dates[dates.length - 1]; toast(`الحد الأعلى ${PERIOD_MAX} يوماً؛ عُدّلت النهاية`, 'warn'); }
+    store.set('repPeriod', { from, to });
+    loadPeriod();
+  };
+  document.querySelectorAll('[data-preset]').forEach((b) => { b.onclick = () => set(...PRESETS.find((x) => x[0] === b.dataset.preset)[2]()); });
+  const f = $('#perFrom'), t = $('#perTo');
+  if (f) f.onchange = () => set(f.value, t.value);
+  if (t) t.onchange = () => set(f.value, t.value);
+  const { from, to } = periodRange();
+  const r = state.rep.per;
+  if (!r || (!r.loading && (r.from !== from || r.to !== to || Date.now() - r.at > 30 * 60000))) { loadPeriod(); return; }
+  if (r.loading || !r.sums) return;
+  barChart('cPer', r.sums.map((s) => dayName(s.date)), [
+    { label: 'الإنتاج', data: r.sums.map((s) => (s.count > 1 ? +(s.pvKwh ?? 0).toFixed(2) : null)), color: '#f59e0b' },
+    { label: 'الاستهلاك', data: r.sums.map((s) => (s.count > 1 ? +(s.loadKwh ?? 0).toFixed(2) : null)), color: '#0ea5e9' },
+    { label: 'الشبكة', data: r.sums.map((s) => (s.gridKwh != null ? +s.gridKwh.toFixed(2) : null)), color: '#8b5cf6' },
+  ], { y: { beginAtZero: true } });
+  document.querySelectorAll('[data-dayopen]').forEach((b) => {
+    b.onclick = () => { state.rep.dayDate = b.dataset.dayopen; state.rep.day = null; navigate('reports', 'day'); };
+  });
+  $('#expPer').onclick = () => exportSummaries(`${from}_${to}`, r.sums);
+  $('#pdfPer').onclick = () => sharePdf(`${from}_${to}`, sumsPdfSpec('تقرير الفترة', `${fmt.day(from, { day: 'numeric', month: 'long' })} — ${fmt.day(to, { day: 'numeric', month: 'long', year: 'numeric' })}`, r.sums));
+};
 
 // ================= مستشار الطاقة =================
 // يحلل آخر 7 أيام كاملة + اليوم من السجل الفعلي، ولا يعرض إلا ما يمكن حسابه من القراءات
@@ -1803,11 +1955,100 @@ async function exportSamples(date, samples) {
   ));
 }
 
+// ================= تقرير PDF للمشاركة =================
+const pdfMeta = () => [`الجهاز: ${device()?.alias || device()?.sn || '—'}${state.demo ? ' (بيانات تجريبية)' : ''}`, `أُنشئ: ${fmt.dateTime(Date.now())}`];
+const kwhS = (v) => (v == null ? '—' : fmt.kwh(v));
+
+// ملخص أيام (فترة أو أسبوع أو شهر) → مواصفات PDF
+function sumsPdfSpec(title, subtitle, sums) {
+  const t = totals(sums);
+  const p = state.prefs;
+  const gc = t.grid != null ? costOf(t.grid, p) : null;
+  const sv = costOf(t.pv, p);
+  const cover = t.load > 0 && t.grid != null ? Math.max(0, Math.min(100, (1 - t.grid / t.load) * 100)) : null;
+  const short = (d) => fmt.day(d, { day: 'numeric', month: 'numeric' });
+  return {
+    title, subtitle, meta: pdfMeta(),
+    stats: [
+      { label: 'الإنتاج', value: kwhS(t.pv), unit: 'ك.و.س', color: 'c-amber' },
+      { label: 'الاستهلاك', value: kwhS(t.load), unit: 'ك.و.س', color: 'c-sky' },
+      { label: 'سحب الشبكة (تقدير)', value: kwhS(t.grid), unit: 'ك.و.س', sub: t.gridPartial ? `${t.gridPartial} أيام ناقصة` : '', color: 'c-violet' },
+      gc ? { label: 'كلفة الشبكة', value: fmtMoney(gc.v, gc.code), unit: gc.sym, sub: gc.alt ? `≈ ${fmtMoney(gc.alt.v, gc.alt.code)} ${gc.alt.sym}` : '', color: 'c-pink' } : null,
+      sv ? { label: 'توفير الألواح', value: fmtMoney(sv.v, sv.code), unit: sv.sym, color: 'c-green' } : null,
+      { label: 'الاستقلالية عن الشبكة', value: t.independence == null ? '—' : Math.round(t.independence) + '%', unit: 'من الاستهلاك', color: 'c-slate' },
+      { label: 'متوسط الإنتاج اليومي', value: kwhS(t.avgPv), unit: 'ك.و.س / يوم', color: 'c-amber' },
+      { label: 'شحن من الألواح', value: kwhS(t.solarChg), unit: 'ك.و.س', color: 'c-green' },
+      { label: 'شحن من الشبكة', value: kwhS(t.gridChg), unit: 'ك.و.س', color: 'c-violet' },
+    ],
+    lines: [
+      `أنتجت الألواح ${kwhS(t.pv)} ك.و.س واستهلك البيت ${kwhS(t.load)} ك.و.س.`,
+      t.grid != null ? `سُحب من الشبكة نحو ${kwhS(t.grid)} ك.و.س${gc ? ` بكلفة ${costText(gc)}` : ''}${cover != null ? `، فغطّت المنظومة نحو ${Math.round(cover)}% من الاستهلاك` : ''}.` : null,
+      t.best ? `أفضل يوم إنتاج: ${dayName(t.best.date)} (${kwhS(t.best.pvKwh)} ك.و.س).` : null,
+      t.socMin ? `أدنى نسبة للبطارية: ${t.socMin.socMin}% يوم ${dayName(t.socMin.date)}${t.socMin.socMinAt ? ` الساعة ${fmt.time(t.socMin.socMinAt)}` : ''}.` : null,
+    ].filter(Boolean),
+    charts: [{ title: 'يوماً بيوم (كيلوواط ساعة)', type: 'bar', labels: sums.map((x) => short(x.date)), series: [
+      { label: 'الإنتاج', data: sums.map((x) => (x.count > 1 ? +(x.pvKwh ?? 0).toFixed(2) : null)), color: '#f59e0b' },
+      { label: 'الاستهلاك', data: sums.map((x) => (x.count > 1 ? +(x.loadKwh ?? 0).toFixed(2) : null)), color: '#0ea5e9' },
+      { label: 'الشبكة', data: sums.map((x) => (x.gridKwh != null ? +x.gridKwh.toFixed(2) : null)), color: '#8b5cf6' },
+    ] }],
+    table: { title: 'التفاصيل (كيلوواط ساعة)', head: ['اليوم', 'الإنتاج', 'الاستهلاك', 'الشبكة', 'البطارية'],
+      rows: sums.map((x) => [dayName(x.date), x.count > 1 ? fmt.kwh(x.pvKwh) : '—', x.count > 1 ? fmt.kwh(x.loadKwh) : '—', x.gridKwh != null ? fmt.kwh(x.gridKwh) : '—', x.socMin != null ? `${x.socMin}–${x.socMax}%` : '—']),
+      dim: sums.map((x) => x.gridBasis === 'partial') },
+    notes: [`أيام فيها بيانات: ${t.days} من ${sums.length}. سحب الشبكة تقدير لأن الجهاز لا يرسل عدّاد استيراد؛ الأرقام الباهتة أيام ناقصة القراءات.`],
+    footer: 'طاقتي — تقرير منظومة الطاقة الشمسية',
+  };
+}
+
+function dayPdfSpec(date, r) {
+  const s = r.sum;
+  const sv = costOf(s.pvKwh, state.prefs);
+  const t = r.samples.map((x) => x.ts);
+  const pts = (k) => r.samples.map((x) => ({ x: x.ts, y: x[k] ?? null }));
+  const line = (title, series) => ({ title, type: 'line', time: true, labels: t, min: t[0], max: t[t.length - 1], tick: (v) => fmt.time(v), series });
+  return {
+    title: 'التقرير اليومي', subtitle: fmt.day(date, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }), meta: pdfMeta(),
+    stats: [
+      { label: 'إنتاج الألواح', value: kwhS(s.pvKwh), unit: 'ك.و.س', color: 'c-amber' },
+      { label: 'استهلاك المنزل', value: kwhS(s.loadKwh), unit: 'ك.و.س', color: 'c-sky' },
+      { label: 'سحب الشبكة (تقدير)', value: kwhS(s.gridKwh), unit: 'ك.و.س', sub: s.gridBasis === 'partial' ? 'جزئي' : '', color: 'c-violet' },
+      { label: 'أدنى نسبة للبطارية', value: s.socMin == null ? '—' : `${s.socMin}%`, unit: s.socMinAt ? 'الساعة ' + fmt.time(s.socMinAt) : '', color: 'c-pink' },
+      { label: 'أعلى نسبة للبطارية', value: s.socMax == null ? '—' : `${s.socMax}%`, unit: s.fullAt ? 'امتلأت ' + fmt.time(s.fullAt) : '', color: 'c-green' },
+      { label: 'ذروة الحمل', value: fmt.w(s.peakW), color: 'c-pink' },
+      { label: 'شحن من الألواح', value: kwhS(s.solarChgKwh), unit: 'ك.و.س', color: 'c-amber' },
+      { label: 'شحن من الشبكة', value: kwhS(s.gridChgKwh), unit: 'ك.و.س', color: 'c-violet' },
+      sv ? { label: 'التوفير', value: fmtMoney(sv.v, sv.code), unit: sv.sym, color: 'c-green' } : { label: 'توفر الكهرباء', value: numAr(s.gridH, 1), unit: 'ساعة', color: 'c-violet' },
+    ],
+    charts: [
+      line('القدرة خلال اليوم (واط)', [{ label: 'الألواح', data: pts('pvW'), color: '#f59e0b' }, { label: 'الحمل', data: pts('outW'), color: '#0ea5e9' }]),
+      { ...line('نسبة شحن البطارية (%)', [{ label: '%', data: pts('soc'), color: '#10b981' }]), yMax: 100 },
+    ],
+    notes: [`المصدر: ${SRC[r.source] || ''} · ${r.samples.length} قراءة. سحب الشبكة تقدير لأن الجهاز لا يرسل عدّاد استيراد.`],
+    footer: 'طاقتي — تقرير منظومة الطاقة الشمسية',
+  };
+}
+
+let pdfBusy = false;
+async function sharePdf(name, spec) {
+  if (pdfBusy) return;
+  pdfBusy = true;
+  toast('جارٍ تجهيز ملف PDF…');
+  try {
+    const bytes = await buildPdf(spec, { font: state.prefs.fontFamily || 'Cairo' });
+    await shareFile(`taqati-${name}.pdf`, bytes, { mime: 'application/pdf', dialog: 'مشاركة تقرير PDF' });
+  } catch (e) {
+    // إلغاء نافذة المشاركة ليس خطأً
+    if (!/cancel/i.test(e?.message || '')) toast(`تعذّر إنشاء PDF: ${e.message || e}`, 'bad');
+  } finally { pdfBusy = false; }
+}
+const pdfBtn = (id) => `<button class="btn primary wide" id="${id}">${icons.download} مشاركة التقرير PDF</button>`;
+
 async function exportSummaries(name, sums) {
   await shareFile(`taqati-${name}.csv`, toCsv(
-    ['التاريخ', 'الإنتاج (ك.و.س)', 'الاستهلاك (ك.و.س)', 'أدنى شحن %', 'أعلى شحن %', 'ذروة الحمل (واط)', 'ساعات الكهرباء', 'ساعات البطارية', 'شحن من الألواح (ك.و.س)', 'شحن من الكهرباء (ك.و.س)', 'الاستقلالية %', 'عدد القراءات', 'المصدر'],
+    ['التاريخ', 'الإنتاج (ك.و.س)', 'الاستهلاك (ك.و.س)', 'أدنى شحن %', 'أعلى شحن %', 'ذروة الحمل (واط)', 'ساعات الكهرباء', 'ساعات البطارية', 'شحن من الألواح (ك.و.س)', 'شحن من الكهرباء (ك.و.س)', 'سحب الشبكة تقديراً (ك.و.س)', 'رقم الشبكة', `كلفة الشبكة (${costOf(1, state.prefs)?.sym || '—'})`, 'الاستقلالية %', 'عدد القراءات', 'المصدر'],
     sums.map((s) => [s.date, s.pvKwh?.toFixed(2) ?? '', s.loadKwh?.toFixed(2) ?? '', s.socMin ?? '', s.socMax ?? '', s.peakW ?? '', s.gridH?.toFixed(1) ?? '', s.batH?.toFixed(1) ?? '',
-      s.solarChgKwh?.toFixed(2) ?? '', s.gridChgKwh?.toFixed(2) ?? '', s.independence == null ? '' : Math.round(s.independence), s.count, SRC[s.source] || '']),
+      s.solarChgKwh?.toFixed(2) ?? '', s.gridChgKwh?.toFixed(2) ?? '', s.gridKwh?.toFixed(2) ?? '', { estimated: 'تقديري', partial: 'تقديري جزئي' }[s.gridBasis] || '',
+      s.gridKwh != null && costOf(s.gridKwh, state.prefs) ? costOf(s.gridKwh, state.prefs).v.toFixed(2) : '',
+      s.independence == null ? '' : Math.round(s.independence), s.count, SRC[s.source] || '']),
   ));
 }
 
@@ -2227,8 +2468,11 @@ async function loadPower(force = false) {
   if (c.loading || (!force && c.field)) return;
   c.loading = true; c.error = null;
   if (leaf() === 'power') render();
+  const forSn = sn();
+  const stale = () => state.ctl !== c || sn() !== forSn; // بُدّل الجهاز أو خرج المستخدم أثناء القراءة
   try {
     if (!state.fields) state.fields = await api.ctrlFields(device());
+    if (stale()) return;
     c.field = findField(state.fields, isOutputPriority);
     c.chgField = findField(state.fields, isChargerPriority);
     if (!c.field) throw new Error('هذا الجهاز لا يتيح تغيير أولوية مصدر الخرج عن بُعد.');
@@ -2236,7 +2480,8 @@ async function loadPower(force = false) {
     c.curAt = Date.now();
     c.chgCur = null;
     if (c.chgField) { try { c.chgCur = matchItem(c.chgField.item, await readFresh(c.chgField)); } catch { /* للعرض فقط */ } }
-  } catch (e) { c.error = e.message; }
+  } catch (e) { if (stale()) return; c.error = e.message; }
+  if (stale()) return;
   c.loading = false;
   if (leaf() === 'power') render();
 }
@@ -2289,7 +2534,7 @@ AFTER.power = () => {
   bindGoto();
   if (c.edit?.mode === 'smart' && !state.rep.fc && !state.demo) loadTwoWeeks();
   // حالة الجدولة والإدارة الذكية وسجلهما من أندرويد
-  if (c.field && !c.nativeAt) { c.nativeAt = Date.now(); control.status().then((ns) => { c.native = ns; if (leaf() === 'power') render(); }).catch(() => {}); }
+  if (c.field && !c.nativeAt) { c.nativeAt = Date.now(); control.status().then((ns) => { if (state.ctl !== c) return; c.native = ns; if (leaf() === 'power') render(); }).catch(() => {}); }
   if (!state.demo && !state.model?.stale && !c.field && !c.error && !c.loading) loadPower();
   const retry = $('#ctlRetry') || $('#ctlRead');
   if (retry) retry.onclick = () => { c.result = null; loadPower(true); };
@@ -2306,6 +2551,7 @@ AFTER.power = () => {
       if ((ctlCfg()?.mode || 'manual') !== 'manual') control.manualOverride().catch(() => {});
       const field = c.field;
       const res = await changeAndVerify({ read: () => readFresh(field), send: (key) => api.setCtrl(device(), field.id, key), items: field.item, key: it.key, delayMs: isNative ? 4000 : store.get('devCtlDelayMs', 4000) });
+      if (state.ctl !== c) return; // بُدّل الجهاز أثناء التحقق
       c.busy = null; c.result = res;
       if (res.after) { c.cur = res.after; c.curAt = Date.now(); }
       if (res.status !== 'same') {
@@ -2375,7 +2621,12 @@ function smartSuggestion() {
 
 function ctlSection(c) {
   const items = c.field.item;
-  const saved = ctlCfg() || ctlDefaults(items);
+  const stored = ctlCfg() || ctlDefaults(items);
+  // أندرويد هو المرجع لما يُنفَّذ فعلاً: إعداد محفوظ هنا لا يُعرض «فعّالاً» إن لم يكن هو ما يعمل
+  const act = c.native?.active;
+  const offHere = act && stored.mode !== 'manual' && (act.mode === 'manual' || String(act.sn) !== String(sn()));
+  const saved = offHere ? { ...stored, mode: 'manual' } : stored;
+  const otherActive = act && act.mode !== 'manual' && act.sn && String(act.sn) !== String(sn()) ? act : null;
   const e = c.edit || (c.edit = JSON.parse(JSON.stringify(saved)));
   const opt = (sel) => items.map((it) => `<option value="${esc(it.key)}" ${String(it.key) === String(sel) ? 'selected' : ''}>${esc(optionAr(it.val))}</option>`).join('');
   const ns = c.native || {};
@@ -2446,6 +2697,8 @@ function ctlSection(c) {
   return `
   <h3 class="sec-h">نمط التحكم</h3>
   <div class="seg ctl-mode">${CTL_MODES.map(([k, l]) => `<button class="${e.mode === k ? 'on' : ''}" data-mode="${k}">${l}</button>`).join('')}</div>
+  ${otherActive ? `<p class="note warn ctl-other">${icons.warn}<span>التحكم التلقائي يعمل الآن على جهاز آخر (<bdi>${esc(otherActive.sn)}</bdi>). يعمل التحكم على جهاز واحد فقط، وتفعيله هنا يوقفه هناك.</span></p>` : ''}
+  ${offHere && !otherActive ? `<p class="note warn ctl-off">${icons.warn}<span>إعداد ${esc(CTL_MODES.find((m) => m[0] === stored.mode)?.[1] || '')} محفوظ لهذا الجهاز لكنه غير مفعّل في الهاتف. احفظه من جديد لتفعيله.</span></p>` : ''}
   ${status}${perms}
   ${e.mode === 'smart' ? `<section class="card"><label><input id="ctlDryRun" type="checkbox" ${e.dryRun !== false ? 'checked' : ''}> وضع تجربة: تسجيل القرارات وأسبابها دون إرسال أوامر</label><p class="hint">لا تُرسل أوامر في هذا الوضع حتى عند إغلاق التطبيق. يُحفظ كل فحص بوقته وسببه وقراءته (آخر 200 فحص، والفحوص المتطابقة المتتالية تُجمع في سطر مع عددها) في «سجل الفحوص» أدناه. إلغاء التجربة والحفظ يسمح بالتنفيذ الحقيقي، ويبدأ عدّ القراءات المتتالية من جديد.</p></section>` : ''}
   ${editSchedule}${editSmart}
@@ -2503,6 +2756,8 @@ function bindCtl(c) {
   if (bt) bt.onclick = () => control.openBatterySettings();
   const save = $('#ctlSave');
   if (save) save.onclick = async () => {
+    // نعرف أولاً ما يعمل في الهاتف الآن (قد يكون جهازاً آخر)
+    if (!c.native?.active) { try { c.native = await control.status(); } catch { /* يُرفض الحفظ لاحقاً إن تعذّر */ } }
     let summary;
     if (e.mode === 'schedule') {
       if (!e.slots.length) return toast('أضف قاعدة واحدة على الأقل', 'bad');
@@ -2519,14 +2774,41 @@ function bindCtl(c) {
       if (e.gapMin < 15 || e.gapMin > 360) return toast('مدة الانتظار بين 15 و360 دقيقة', 'bad');
       summary = `${e.dryRun !== false ? 'تجربة دون أوامر: القرار المقترح' : 'يتحول تلقائياً'} إلى <b>${esc(itemLabel(items, e.gridKey))}</b> عند ${e.low}% أو أقل (والشبكة موجودة والألواح لا تغطي الحمل)، ويعود إلى <b>${esc(itemLabel(items, e.solarKey))}</b> عند ${e.target}%، وبين تحويلين ${e.gapMin} دقيقة على الأقل.`;
     } else summary = 'يتوقف التحويل التلقائي، وتبقى على الوضع الحالي حتى تغيّره بنفسك.';
+    const act = c.native?.active;
+    const other = e.mode !== 'manual' && act && act.mode !== 'manual' && act.sn && String(act.sn) !== String(sn()) ? act.sn : null;
+    if (other) summary += `<br><b>سيتوقف التحكم التلقائي على الجهاز الآخر (<bdi>${esc(other)}</bdi>)</b>، لأن التحكم يعمل على جهاز واحد فقط.`;
     if (!(await confirmDialog(e.mode === 'manual' ? 'إيقاف التحكم التلقائي' : 'تفعيل ' + CTL_MODES.find((m) => m[0] === e.mode)[1], summary + (e.mode === 'manual' ? '' : '<br>التحويل اليدوي يوقف الجدولة حتى موعدها التالي، والإدارة الذكية ساعتين.')))) return;
+    if (state.ctl !== c) return; // بُدّل الجهاز أثناء نافذة التأكيد
     const cfg = JSON.parse(JSON.stringify(e));
     delete cfg.tuned;
-    store.set('ctlcfg.' + sn(), cfg);
-    try { c.native = await control.configure(nativeCtlConfig(cfg)); } catch (err) { toast(err.message, 'bad'); }
+    const mySn = sn();
+    // إيقاف جهاز لا يعمل عليه التحكم أصلاً لا يجوز أن يوقف جهازاً آخر
+    const nativeCfg = cfg.mode === 'manual' && act && String(act.sn) !== String(mySn) && act.mode !== 'manual' ? null : nativeCtlConfig(cfg);
+    save.disabled = true;
+    let ns;
+    try {
+      ns = nativeCfg ? await control.configure(nativeCfg) : c.native;
+    } catch (err) {
+      // لا رسالة نجاح ولا حفظ: ما يُعرض يبقى مطابقاً لما ينفّذه الهاتف
+      if (state.ctl === c) { save.disabled = false; }
+      toast(`لم يُحفظ: ${err.message || 'رفض الهاتف الإعداد'}`, 'bad');
+      return;
+    }
+    // التأكد من أن ما يعمل في الهاتف هو ما طلبناه
+    const a = ns?.active;
+    if (nativeCfg && a && (a.mode !== cfg.mode || (cfg.mode !== 'manual' && String(a.sn) !== String(mySn)))) {
+      if (state.ctl === c) save.disabled = false;
+      toast('لم يؤكد الهاتف الإعداد الجديد، فلم يُعتمد', 'bad');
+      return;
+    }
+    store.set('ctlcfg.' + mySn, cfg);
+    // الجهاز الآخر لم يعد فعّالاً: يُحفظ عنده يدوي حتى لا يظهر «فعّالاً» وهو ليس كذلك
+    if (other) { const o = store.get('ctlcfg.' + other, null); if (o) store.set('ctlcfg.' + other, { ...o, mode: 'manual' }); }
+    if (state.ctl !== c) return;
+    c.native = ns;
     c.edit = null;
     logEvent('set', 'info', 'نمط التحكم', CTL_MODES.find((m) => m[0] === cfg.mode)[1]);
-    toast(cfg.mode === 'manual' ? 'أُوقف التحكم التلقائي' : 'تم التفعيل', 'ok');
+    toast(cfg.mode === 'manual' ? 'أُوقف التحكم التلقائي' : 'تم التفعيل وأكّده الهاتف', 'ok');
     redraw();
   };
 }
@@ -2626,7 +2908,7 @@ AFTER.forecast = () => {
 // الجهاز لا يرسل قدرة السحب من الشبكة ولا عدّاداً لها، فنحسبها من وضع الشبكة: حمل البيت + الشحن الزائد عن الألواح.
 function allCachedSums() {
   const s = sn();
-  return store.keys(`sum.${s}.`).map((k) => store.get(k, null)).filter((x) => x && x.v === 2);
+  return store.keys(`sum.${s}.`).map((k) => store.get(k, null)).filter((x) => x && x.v === SUMMARY_V);
 }
 
 async function loadGridMeter(days = 30) {
@@ -2654,12 +2936,12 @@ async function loadGridMeter(days = 30) {
 
 function pageGridMeter() {
   const g = state.rep.gm;
-  const note = '<div class="banner info">' + icons.info + '<span><b>تقدير محسوب، لا عدّاد من الجهاز</b>إنفرترك لا يرسل قدرة السحب من الشبكة. نحسبها حين يكون في وضع الشبكة: حمل البيت + ما شحن البطارية زيادةً عن الألواح، دون فواقد الإنفرتر.</span></div>';
+  const note = '<div class="banner info">' + icons.info + '<span><b>تقدير محسوب، لا عدّاد من الجهاز</b>إنفرترك لا يرسل قدرة السحب من الشبكة. نحسبها حين يكون في وضع الشبكة: حمل البيت + ما شحن البطارية زيادةً عن الألواح، دون فواقد الإنفرتر. إن لم يرسل الجهاز وضع التشغيل يُستنتج من جهد الشبكة وتيار البطارية والألواح.</span></div>';
   if (!g || g.loading) return `${note}<div class="card"><p class="center">جارٍ جمع سجل الأيام…</p><div class="bar"><i id="gmProg" style="width:${g?.pct || 0}%"></i></div></div>`;
   const r = gridMeter(g.sums, today(), g.from);
   if (!r.start) return `${note}<div class="empty">لا توجد أيام يُعرف فيها وضع التشغيل بما يكفي لحساب استيراد الشبكة.</div>`;
   const all = gridMeter(g.sums, today());
-  const cell = (t, title) => stat(title, fmt.kwh(t.load + t.chg), 'ك.و.س', 'c-violet', t.days ? `${countAr(t.days, DAY)}${t.partial ? ` · ${t.partial} ناقصة` : ''}` : 'لا بيانات');
+  const cell = (t, title) => { const c = costOf(t.load + t.chg, state.prefs); return stat(title, fmt.kwh(t.load + t.chg), 'ك.و.س', 'c-violet', t.days ? `${countAr(t.days, DAY)}${t.partial ? ` · ${t.partial} ناقصة` : ''}${c ? ` · ${costText(c)}` : ''}` : 'لا بيانات'); };
   return `${note}
   <div class="stats">${cell(r.today, 'اليوم')}${cell(r.week, 'آخر 7 أيام')}${cell(r.month, 'آخر 30 يوماً')}${cell(r.all, g.from ? 'منذ التاريخ المختار' : 'منذ بدء السجل')}</div>
   <section class="card"><div class="card-h"><h2>التفصيل منذ ${esc(fmt.day(r.start, { day: 'numeric', month: 'long', year: 'numeric' }))}</h2></div>
@@ -2667,17 +2949,20 @@ function pageGridMeter() {
       ['تغذية البيت من الشبكة', kwhU(r.all.load)],
       ['شحن البطارية من الشبكة', kwhU(r.all.chg)],
       ['المجموع', kwhU(r.all.load + r.all.chg)],
+      state.prefs.price ? ['الكلفة بسعرك', `<bdi>${esc(costText(costOf(r.all.load + r.all.chg, state.prefs)))}</bdi>`] : null,
+      r.all.inferred ? ['أيام استُنتج فيها وضع الشبكة', `<bdi>${r.all.inferred}</bdi> <small>الجهاز لم يرسل وضع التشغيل</small>`] : null,
       ['ساعات القراءات المحسوبة', `<bdi>${Math.round(r.all.coveredH)}</bdi> <small>من ${r.all.days * 24} ساعة</small>`],
       r.all.partial ? ['أيام ناقصة التغطية', `<bdi>${r.all.partial}</bdi> <small>مجموعها أقل من الحقيقي</small>`] : null,
     ])}
     <p class="hint">بداية السجل المتاح: <b>${esc(fmt.day(all.start, { day: 'numeric', month: 'long', year: 'numeric' }))}</b>. فترات انقطاع القراءات لا تُحسب صفراً ولا تُقدَّر، بل تُستثنى.</p>
     <label class="num-row"><span>اعرض واجمع ابتداءً من</span><input type="date" id="gmFrom" min="${all.start}" max="${today()}" value="${g.from || all.start}"></label>
     ${g.from ? '<button class="link" id="gmAll">العودة لكل السجل</button>' : ''}
+    ${state.prefs.price ? '' : '<button class="link" data-goto="more:calc">أدخل سعر الكيلوواط لتظهر الكلفة</button>'}
     ${g.end ? '<p class="hint">الخادم لا يحتفظ ببيانات أقدم من ذلك.</p>' : `<button class="btn ghost wide" id="gmMore">تحميل 30 يوماً أقدم</button>`}
   </section>
   <section class="card"><div class="card-h"><h2>يوماً بيوم</h2></div>
     <table class="cmp gm"><thead><tr><th>اليوم</th><th>البيت</th><th>الشحن</th><th>المجموع</th></tr></thead><tbody>
-    ${r.perDay.slice().reverse().slice(0, 62).map((d) => `<tr class="${d.coveredH < 18 && d.date < today() ? 'part' : ''}"><th>${esc(fmt.day(d.date, { weekday: 'short', day: 'numeric', month: 'numeric' }))}</th><td><bdi>${fmt.kwh(d.load)}</bdi></td><td><bdi>${fmt.kwh(d.chg)}</bdi></td><td><b><bdi>${fmt.kwh(d.load + d.chg)}</bdi></b></td></tr>`).join('')}
+    ${r.perDay.slice().reverse().slice(0, 62).map((d) => `<tr class="${d.basis === 'partial' && d.date < today() ? 'part' : ''}"><th>${esc(fmt.day(d.date, { weekday: 'short', day: 'numeric', month: 'numeric' }))}</th><td><bdi>${fmt.kwh(d.load)}</bdi></td><td><bdi>${fmt.kwh(d.chg)}</bdi></td><td><b><bdi>${fmt.kwh(d.load + d.chg)}</bdi></b></td></tr>`).join('')}
     </tbody></table><p class="hint">بالكيلوواط ساعة. الصفوف الباهتة أيام ناقصة التغطية.</p></section>`;
 }
 AFTER.gridmeter = () => {
@@ -2689,6 +2974,7 @@ AFTER.gridmeter = () => {
   if (a) a.onclick = () => { state.rep.gm.from = null; render(); };
   const more = $('#gmMore');
   if (more) more.onclick = () => loadGridMeter((state.rep.gm.back || 30) + 30);
+  bindGoto();
 };
 
 // ================= تبويب النصائح =================

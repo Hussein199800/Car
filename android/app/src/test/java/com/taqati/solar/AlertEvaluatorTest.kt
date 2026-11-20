@@ -160,4 +160,12 @@ class AlertEvaluatorTest {
         assertEquals(true, again.flags.get("hotInv"))
         assertTrue(AlertEvaluator.evaluate(s, cfg.copy(alertTemp = false), JSONObject(), now).alerts.isEmpty())
     }
+
+    @Test
+    fun knownModesIncludeBypassButNotModelName() {
+        org.junit.Assert.assertEquals("Bypass", AlertEvaluator.modeText("Bypass"))
+        org.junit.Assert.assertEquals("Line Mode", AlertEvaluator.modeText(" Line Mode "))
+        org.junit.Assert.assertNull(AlertEvaluator.modeText("Master 7KW"))
+        org.junit.Assert.assertNull(AlertEvaluator.modeText(""))
+    }
 }

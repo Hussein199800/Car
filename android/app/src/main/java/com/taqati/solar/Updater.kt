@@ -32,8 +32,9 @@ object UpdateRules {
         pkg == null -> "الملف المحمّل ليس تطبيقاً صالحاً"
         pkg != expectedPkg -> "الملف المحمّل ليس تطبيق طاقتي"
         newCode <= curCode -> "النسخة المحمّلة ليست أحدث من المثبّتة"
-        // إن تعذّرت قراءة التوقيع يتكفّل مثبّت أندرويد برفض أي توقيع مختلف
-        newSigs != null && curSigs != null && newSigs.isNotEmpty() && newSigs != curSigs -> "توقيع التحديث لا يطابق التطبيق المثبّت"
+        // الرفض عند الشك: توقيع غير مقروء أو فارغ لا يُقبل
+        newSigs.isNullOrEmpty() || curSigs.isNullOrEmpty() -> "تعذّر التحقق من توقيع التحديث، فلم يُثبَّت"
+        newSigs != curSigs -> "توقيع التحديث لا يطابق التطبيق المثبّت"
         else -> null
     }
 }

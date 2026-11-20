@@ -63,6 +63,11 @@ data class Event(val title: String, val body: String, val kind: String) {
 data class Outcome(val alerts: List<Event>, val faults: List<Event>, val flags: JSONObject)
 
 object AlertEvaluator {
+    /** كما modeText في model.js: Bypass وأمثاله أوضاع معروفة، واسم الطراز ليس وضعاً */
+    private val KNOWN_MODE = Regex("^(power on|standby|bypass|line|battery|fault|power saving|eco|charging|shutdown)( mode)?$", RegexOption.IGNORE_CASE)
+    private val HAS_MODE = Regex("\\bmode\\b", RegexOption.IGNORE_CASE)
+    fun modeText(v: String?): String? = v?.trim()?.takeIf { it.isNotEmpty() && (KNOWN_MODE.matches(it) || HAS_MODE.containsMatchIn(it)) }
+
     private fun num(v: String?): Double? {
         if (v == null || v.isBlank() || v.trim().all { it == '-' }) return null
         return v.replace(Regex("[^0-9.\\-]"), "").toDoubleOrNull()
@@ -107,7 +112,7 @@ object AlertEvaluator {
                 num(find(points, Regex("^pv2 charging power"), Regex("^pv2 .*power"))),
             ).filterNotNull().takeIf { it.isNotEmpty() }?.sum(),
             batW = if (batV != null && (chg != null || dis != null)) batV * ((chg ?: 0.0) - (dis ?: 0.0)) else null,
-            mode = modeRaw?.takeIf { it.contains("mode", ignoreCase = true) },
+            mode = modeText(modeRaw),
             fault = fault?.takeUnless { it.isBlank() || it.trim().all { c -> c == '-' } || it.trim().all { c -> c == '0' } },
             batTemp = temps.filter { it.first }.maxOfOrNull { it.second },
             invTemp = temps.filter { !it.first }.maxOfOrNull { it.second },
