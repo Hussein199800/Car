@@ -27,6 +27,7 @@ import { sceneClassic } from './sceneClassic.js';
 import { analyze, capacityKwh } from './advisor.js';
 import { findField, isOutputPriority, isChargerPriority, orderOf, matchItem, changeAndVerify, addLog, SYRIA_OFFSET_MIN, DAY_NAMES, DAY_SHORT, localDay as sLocalDay, weekday, dateOf, hm, toMin, activeSlot, nextSwitch, overlap } from './control.js';
 import { costOf, costText, fmtMoney } from './money.js';
+import { buildPdf } from './pdf.js';
 import { analyzeTwoWeeks, rememberForecast, accuracy, gridMeter } from './forecast.js';
 import { CATS, catOf, levelOf, toEvents, migrateLog, addEvents } from './log.js';
 import { trendDates, change } from './trend.js';
@@ -1580,7 +1581,8 @@ function pageDay() {
   <section class="card"><div class="card-h"><h2>نسبة شحن البطارية</h2></div><div class="chart-box sm"><canvas id="cSoc"></canvas></div></section>
   <section class="card"><div class="card-h"><h2>جهد البطارية</h2></div><div class="chart-box sm"><canvas id="cBatV"></canvas></div></section>
   <section class="card"><div class="card-h"><h2>جهد كهرباء الشبكة</h2></div><div class="chart-box sm"><canvas id="cGrid"></canvas></div></section>
-  <button class="btn ghost wide" id="expDay">${icons.download} تصدير قراءات هذا اليوم</button>`;
+  ${pdfBtn('pdfDay')}
+  <button class="btn ghost wide" id="expDay">${icons.download} تصدير قراءات هذا اليوم (CSV)</button>`;
 }
 AFTER.day = () => {
   $('.day-nav').onclick = (e) => {
@@ -1603,6 +1605,7 @@ AFTER.day = () => {
   lineChart('cBatV', t, [{ label: 'فولت', data: r.samples.map((x) => x.batV), color: '#8b5cf6' }]);
   lineChart('cGrid', t, [{ label: 'فولت', data: r.samples.map((x) => x.gridV), color: '#ec4899' }], { y: { beginAtZero: true } });
   $('#expDay').onclick = () => exportSamples(state.rep.dayDate, r.samples);
+  $('#pdfDay').onclick = () => sharePdf(state.rep.dayDate, dayPdfSpec(state.rep.dayDate, r));
 };
 
 function rangeDates(kind, off) {
@@ -1732,7 +1735,8 @@ function pageRange(kind) {
     <div class="table"><div class="tr th"><span>اليوم</span><span>الإنتاج</span><span>الاستهلاك</span><span>البطارية</span></div>
     ${r.sums.slice().reverse().map((s) => `<button class="tr" data-dayopen="${s.date}"><span>${esc(dayName(s.date))}</span><span>${s.count > 1 ? fmt.kwh(s.pvKwh) : '—'}</span><span>${s.count > 1 ? fmt.kwh(s.loadKwh) : '—'}</span><span>${s.socMin != null ? `${s.socMin}–${s.socMax}%` : '—'}</span></button>`).join('')}
     </div></section>
-  <button class="btn ghost wide" id="expRange">${icons.download} تصدير ملخص الفترة</button>`;
+  ${pdfBtn('pdfRange')}
+  <button class="btn ghost wide" id="expRange">${icons.download} تصدير ملخص الفترة (CSV)</button>`;
 }
 
 function bindRange(kind) {
@@ -1754,6 +1758,7 @@ function bindRange(kind) {
     b.onclick = () => { state.rep.dayDate = b.dataset.dayopen; state.rep.day = null; navigate('reports', 'day'); };
   });
   $('#expRange').onclick = () => exportSummaries(`${kind}-${r.dates[0]}`, r.sums);
+  $('#pdfRange').onclick = () => sharePdf(`${kind}-${r.dates[0]}`, sumsPdfSpec(kind === 'week' ? 'التقرير الأسبوعي' : 'التقرير الشهري', `${fmt.day(r.dates[0], { day: 'numeric', month: 'long' })} — ${fmt.day(r.dates[r.dates.length - 1], { day: 'numeric', month: 'long', year: 'numeric' })}`, r.sums));
 }
 AFTER.week = () => bindRange('week');
 AFTER.month = () => bindRange('month');
@@ -1845,6 +1850,7 @@ function pagePeriod() {
     <div class="table per-t"><div class="tr th"><span>اليوم</span><span>الإنتاج</span><span>الاستهلاك</span><span>الشبكة</span><span>البطارية</span></div>
     ${r.sums.slice().reverse().map((s) => `<button class="tr" data-dayopen="${s.date}"><span>${esc(fmt.day(s.date, { weekday: 'short', day: 'numeric', month: 'numeric' }).replace('،', ''))}</span><span>${s.count > 1 ? fmt.kwh(s.pvKwh) : '—'}</span><span>${s.count > 1 ? fmt.kwh(s.loadKwh) : '—'}</span><span class="${s.gridBasis === 'partial' ? 'muted' : ''}">${s.gridKwh != null ? fmt.kwh(s.gridKwh) : '—'}</span><span>${s.socMin != null ? `${s.socMin}–${s.socMax}%` : '—'}</span></button>`).join('')}
     </div><p class="hint">اضغط يوماً لفتح تقريره. الأرقام الباهتة في عمود الشبكة أيام ناقصة التغطية.</p></section>
+  ${pdfBtn('pdfPer')}
   <button class="btn ghost wide" id="expPer">${icons.download} تصدير الفترة (CSV)</button>`;
 }
 
@@ -1876,6 +1882,7 @@ AFTER.period = () => {
     b.onclick = () => { state.rep.dayDate = b.dataset.dayopen; state.rep.day = null; navigate('reports', 'day'); };
   });
   $('#expPer').onclick = () => exportSummaries(`${from}_${to}`, r.sums);
+  $('#pdfPer').onclick = () => sharePdf(`${from}_${to}`, sumsPdfSpec('تقرير الفترة', `${fmt.day(from, { day: 'numeric', month: 'long' })} — ${fmt.day(to, { day: 'numeric', month: 'long', year: 'numeric' })}`, r.sums));
 };
 
 // ================= مستشار الطاقة =================
@@ -1947,6 +1954,93 @@ async function exportSamples(date, samples) {
     samples.map((s) => [fmt.iso(s.ts), s.mode ? trValue(s.mode) : '', s.pvW, s.outW, s.soc, s.batV, s.batW, s.gridV]),
   ));
 }
+
+// ================= تقرير PDF للمشاركة =================
+const pdfMeta = () => [`الجهاز: ${device()?.alias || device()?.sn || '—'}${state.demo ? ' (بيانات تجريبية)' : ''}`, `أُنشئ: ${fmt.dateTime(Date.now())}`];
+const kwhS = (v) => (v == null ? '—' : fmt.kwh(v));
+
+// ملخص أيام (فترة أو أسبوع أو شهر) → مواصفات PDF
+function sumsPdfSpec(title, subtitle, sums) {
+  const t = totals(sums);
+  const p = state.prefs;
+  const gc = t.grid != null ? costOf(t.grid, p) : null;
+  const sv = costOf(t.pv, p);
+  const cover = t.load > 0 && t.grid != null ? Math.max(0, Math.min(100, (1 - t.grid / t.load) * 100)) : null;
+  const short = (d) => fmt.day(d, { day: 'numeric', month: 'numeric' });
+  return {
+    title, subtitle, meta: pdfMeta(),
+    stats: [
+      { label: 'الإنتاج', value: kwhS(t.pv), unit: 'ك.و.س', color: 'c-amber' },
+      { label: 'الاستهلاك', value: kwhS(t.load), unit: 'ك.و.س', color: 'c-sky' },
+      { label: 'سحب الشبكة (تقدير)', value: kwhS(t.grid), unit: 'ك.و.س', sub: t.gridPartial ? `${t.gridPartial} أيام ناقصة` : '', color: 'c-violet' },
+      gc ? { label: 'كلفة الشبكة', value: fmtMoney(gc.v, gc.code), unit: gc.sym, sub: gc.alt ? `≈ ${fmtMoney(gc.alt.v, gc.alt.code)} ${gc.alt.sym}` : '', color: 'c-pink' } : null,
+      sv ? { label: 'توفير الألواح', value: fmtMoney(sv.v, sv.code), unit: sv.sym, color: 'c-green' } : null,
+      { label: 'الاستقلالية عن الشبكة', value: t.independence == null ? '—' : Math.round(t.independence) + '%', unit: 'من الاستهلاك', color: 'c-slate' },
+      { label: 'متوسط الإنتاج اليومي', value: kwhS(t.avgPv), unit: 'ك.و.س / يوم', color: 'c-amber' },
+      { label: 'شحن من الألواح', value: kwhS(t.solarChg), unit: 'ك.و.س', color: 'c-green' },
+      { label: 'شحن من الشبكة', value: kwhS(t.gridChg), unit: 'ك.و.س', color: 'c-violet' },
+    ],
+    lines: [
+      `أنتجت الألواح ${kwhS(t.pv)} ك.و.س واستهلك البيت ${kwhS(t.load)} ك.و.س.`,
+      t.grid != null ? `سُحب من الشبكة نحو ${kwhS(t.grid)} ك.و.س${gc ? ` بكلفة ${costText(gc)}` : ''}${cover != null ? `، فغطّت المنظومة نحو ${Math.round(cover)}% من الاستهلاك` : ''}.` : null,
+      t.best ? `أفضل يوم إنتاج: ${dayName(t.best.date)} (${kwhS(t.best.pvKwh)} ك.و.س).` : null,
+      t.socMin ? `أدنى نسبة للبطارية: ${t.socMin.socMin}% يوم ${dayName(t.socMin.date)}${t.socMin.socMinAt ? ` الساعة ${fmt.time(t.socMin.socMinAt)}` : ''}.` : null,
+    ].filter(Boolean),
+    charts: [{ title: 'يوماً بيوم (كيلوواط ساعة)', type: 'bar', labels: sums.map((x) => short(x.date)), series: [
+      { label: 'الإنتاج', data: sums.map((x) => (x.count > 1 ? +(x.pvKwh ?? 0).toFixed(2) : null)), color: '#f59e0b' },
+      { label: 'الاستهلاك', data: sums.map((x) => (x.count > 1 ? +(x.loadKwh ?? 0).toFixed(2) : null)), color: '#0ea5e9' },
+      { label: 'الشبكة', data: sums.map((x) => (x.gridKwh != null ? +x.gridKwh.toFixed(2) : null)), color: '#8b5cf6' },
+    ] }],
+    table: { title: 'التفاصيل (كيلوواط ساعة)', head: ['اليوم', 'الإنتاج', 'الاستهلاك', 'الشبكة', 'البطارية'],
+      rows: sums.map((x) => [dayName(x.date), x.count > 1 ? fmt.kwh(x.pvKwh) : '—', x.count > 1 ? fmt.kwh(x.loadKwh) : '—', x.gridKwh != null ? fmt.kwh(x.gridKwh) : '—', x.socMin != null ? `${x.socMin}–${x.socMax}%` : '—']),
+      dim: sums.map((x) => x.gridBasis === 'partial') },
+    notes: [`أيام فيها بيانات: ${t.days} من ${sums.length}. سحب الشبكة تقدير لأن الجهاز لا يرسل عدّاد استيراد؛ الأرقام الباهتة أيام ناقصة القراءات.`],
+    footer: 'طاقتي — تقرير منظومة الطاقة الشمسية',
+  };
+}
+
+function dayPdfSpec(date, r) {
+  const s = r.sum;
+  const sv = costOf(s.pvKwh, state.prefs);
+  const t = r.samples.map((x) => x.ts);
+  const pts = (k) => r.samples.map((x) => ({ x: x.ts, y: x[k] ?? null }));
+  const line = (title, series) => ({ title, type: 'line', time: true, labels: t, min: t[0], max: t[t.length - 1], tick: (v) => fmt.time(v), series });
+  return {
+    title: 'التقرير اليومي', subtitle: fmt.day(date, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }), meta: pdfMeta(),
+    stats: [
+      { label: 'إنتاج الألواح', value: kwhS(s.pvKwh), unit: 'ك.و.س', color: 'c-amber' },
+      { label: 'استهلاك المنزل', value: kwhS(s.loadKwh), unit: 'ك.و.س', color: 'c-sky' },
+      { label: 'سحب الشبكة (تقدير)', value: kwhS(s.gridKwh), unit: 'ك.و.س', sub: s.gridBasis === 'partial' ? 'جزئي' : '', color: 'c-violet' },
+      { label: 'أدنى نسبة للبطارية', value: s.socMin == null ? '—' : `${s.socMin}%`, unit: s.socMinAt ? 'الساعة ' + fmt.time(s.socMinAt) : '', color: 'c-pink' },
+      { label: 'أعلى نسبة للبطارية', value: s.socMax == null ? '—' : `${s.socMax}%`, unit: s.fullAt ? 'امتلأت ' + fmt.time(s.fullAt) : '', color: 'c-green' },
+      { label: 'ذروة الحمل', value: fmt.w(s.peakW), color: 'c-pink' },
+      { label: 'شحن من الألواح', value: kwhS(s.solarChgKwh), unit: 'ك.و.س', color: 'c-amber' },
+      { label: 'شحن من الشبكة', value: kwhS(s.gridChgKwh), unit: 'ك.و.س', color: 'c-violet' },
+      sv ? { label: 'التوفير', value: fmtMoney(sv.v, sv.code), unit: sv.sym, color: 'c-green' } : { label: 'توفر الكهرباء', value: numAr(s.gridH, 1), unit: 'ساعة', color: 'c-violet' },
+    ],
+    charts: [
+      line('القدرة خلال اليوم (واط)', [{ label: 'الألواح', data: pts('pvW'), color: '#f59e0b' }, { label: 'الحمل', data: pts('outW'), color: '#0ea5e9' }]),
+      { ...line('نسبة شحن البطارية (%)', [{ label: '%', data: pts('soc'), color: '#10b981' }]), yMax: 100 },
+    ],
+    notes: [`المصدر: ${SRC[r.source] || ''} · ${r.samples.length} قراءة. سحب الشبكة تقدير لأن الجهاز لا يرسل عدّاد استيراد.`],
+    footer: 'طاقتي — تقرير منظومة الطاقة الشمسية',
+  };
+}
+
+let pdfBusy = false;
+async function sharePdf(name, spec) {
+  if (pdfBusy) return;
+  pdfBusy = true;
+  toast('جارٍ تجهيز ملف PDF…');
+  try {
+    const bytes = await buildPdf(spec, { font: state.prefs.fontFamily || 'Cairo' });
+    await shareFile(`taqati-${name}.pdf`, bytes, { mime: 'application/pdf', dialog: 'مشاركة تقرير PDF' });
+  } catch (e) {
+    // إلغاء نافذة المشاركة ليس خطأً
+    if (!/cancel/i.test(e?.message || '')) toast(`تعذّر إنشاء PDF: ${e.message || e}`, 'bad');
+  } finally { pdfBusy = false; }
+}
+const pdfBtn = (id) => `<button class="btn primary wide" id="${id}">${icons.download} مشاركة التقرير PDF</button>`;
 
 async function exportSummaries(name, sums) {
   await shareFile(`taqati-${name}.csv`, toCsv(

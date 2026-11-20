@@ -878,6 +878,17 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await d.waitForFunction(() => document.querySelectorAll('.per-t button.tr').length === 10, null, { timeout: 60000 }).catch(() => null);
       check('فترة مخصصة من تاريخ إلى تاريخ (10 أيام، والترتيب المعكوس يُصحَّح)', (await d.$$('.per-t button.tr')).length === 10 && (await d.inputValue('#perFrom')) === t && (await d.inputValue('#perTo')) === f, `${await d.inputValue('#perFrom')} ${await d.inputValue('#perTo')}`);
       check('بلا تمرير أفقي في تقرير الفترة', await noHScroll(d));
+      // مشاركة PDF: ملف PDF صالح بصفحات A4 (في المتصفح يُحمَّل، وفي أندرويد يفتح نافذة المشاركة)
+      {
+        const [dl] = await Promise.all([d.waitForEvent('download', { timeout: 30000 }).catch(() => null), d.click('#pdfPer')]);
+        const fp = dl ? path.join(OUT, 'period.pdf') : null;
+        if (dl) await dl.saveAs(fp);
+        const buf = fp ? fs.readFileSync(fp) : Buffer.alloc(0);
+        let pages = 0;
+        try { pages = Number((require('child_process').execFileSync('pdfinfo', [fp]).toString().match(/Pages:\s+(\d+)/) || [])[1]); } catch { pages = (buf.toString('latin1').match(/\/Type \/Page\b/g) || []).length; }
+        check('PDF الفترة: ملف صالح باسم الفترة وصفحاته A4', !!dl && /^taqati-.*\.pdf$/.test(dl.suggestedFilename()) && buf.slice(0, 5).toString() === '%PDF-' && pages >= 1 && buf.toString('latin1').includes('595.28'), `${dl?.suggestedFilename()} ${buf.length} ${pages}`);
+        try { require('child_process').execFileSync('pdftoppm', ['-png', '-r', '50', '-f', '1', '-l', '1', fp, path.join(OUT, 'period-pdf')]); } catch { /* أداة المعاينة اختيارية */ }
+      }
       // واجهة السعر: العملة وسعر الصرف
       await d.evaluate(() => window.__nav('more', 'calc')); await d.waitForTimeout(200);
       await d.evaluate(() => { const b = [...document.querySelectorAll('.seg button')].find((x) => /التوفير/.test(x.textContent)); b?.click(); }); await d.waitForTimeout(200);
@@ -886,6 +897,17 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
         await d.click('[data-cur="SYP"]'); await d.waitForTimeout(150);
         check('تبديل العملة يمسح السعر القديم بدل تفسيره خطأً', (await d.evaluate(() => window.__state.prefs.price)) === null && (await d.evaluate(() => window.__state.prefs.currency)) === 'SYP');
       } else check('واجهة العملة ظاهرة في التوفير', false, (await text(d, '#view')).slice(0, 200));
+      // PDF التقرير اليومي
+      await d.evaluate(() => window.__nav('reports', 'day'));
+      await d.waitForSelector('#pdfDay', { timeout: 30000 }).catch(() => null);
+      {
+        const [dl] = await Promise.all([d.waitForEvent('download', { timeout: 30000 }).catch(() => null), d.click('#pdfDay')]);
+        const fp = dl ? path.join(OUT, 'day.pdf') : null;
+        if (dl) await dl.saveAs(fp);
+        const buf = fp ? fs.readFileSync(fp) : Buffer.alloc(0);
+        check('PDF اليوم: ملف صالح', !!dl && buf.slice(0, 5).toString() === '%PDF-' && buf.length > 20000, String(buf.length));
+        try { require('child_process').execFileSync('pdftoppm', ['-png', '-r', '50', fp, path.join(OUT, 'day-pdf')]); } catch { /* اختياري */ }
+      }
       check('بلا أخطاء JavaScript (تقرير الفترة)', d.errors.length === 0, d.errors.join(' | '));
       await d.context().close();
     }

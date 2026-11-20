@@ -200,9 +200,13 @@ export function toCsv(header, rows) {
   return '﻿' + [header, ...rows].map((r) => r.map(q).join(',')).join('\r\n');
 }
 
+// text: نص (CSV) أو Uint8Array (PDF). الملف الثنائي يُكتب بترميز base64 دون Encoding
 export async function shareFile(name, text, { mime = 'text/csv;charset=utf-8', dialog = 'مشاركة التقرير' } = {}) {
+  const bin = text instanceof Uint8Array;
   if (Capacitor.isNativePlatform()) {
-    const res = await Filesystem.writeFile({ path: name, data: text, directory: Directory.Cache, encoding: Encoding.UTF8 });
+    let data = text;
+    if (bin) { let s = ''; for (let i = 0; i < text.length; i += 0x8000) s += String.fromCharCode(...text.subarray(i, i + 0x8000)); data = btoa(s); }
+    const res = await Filesystem.writeFile({ path: name, data, directory: Directory.Cache, ...(bin ? {} : { encoding: Encoding.UTF8 }) });
     await Share.share({ title: name, url: res.uri, dialogTitle: dialog });
     return;
   }
