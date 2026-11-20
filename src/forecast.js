@@ -131,13 +131,14 @@ export function gridMeter(sums, todayKey, from = null) {
     days: list.length,
     coveredH: list.reduce((a, s) => a + (s.coveredH || 0), 0),
     // أيام ناقصة التغطية: المجموع فيها أقل من الحقيقي
-    partial: list.filter((s) => s.date < todayKey && s.coveredH < 18).length,
+    partial: list.filter((s) => s.date < todayKey && (s.gridBasis === 'partial' || s.coveredH < 18)).length,
+    inferred: list.filter((s) => (s.inferredPct || 0) >= 50).length,
   });
   const since = (n) => days.filter((s) => s.date > addDays(todayKey, -n));
   return {
     start: days[0]?.date || null,
     today: tot(days.filter((s) => s.date === todayKey)),
     week: tot(since(7)), month: tot(since(30)), all: tot(days),
-    perDay: days.map((s) => ({ date: s.date, load: s.gridLoadKwh, chg: s.gridChgKwh || 0, coveredH: s.coveredH })),
+    perDay: days.map((s) => ({ date: s.date, load: s.gridLoadKwh, chg: s.gridChgKwh || 0, coveredH: s.coveredH, basis: s.gridBasis || (s.coveredH < 18 ? 'partial' : 'estimated') })),
   };
 }

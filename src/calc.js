@@ -1,3 +1,4 @@
+import { costOf, curCode, curSym, fmtMoney } from './money.js';
 // حاسبة الأحمال: تحويل أمبير الكهرباء إلى واط وإلى أمبير البطارية، وقائمة أجهزة البيت
 // مع الحمل الكلي وتيار الإقلاع والمدة على البطارية واقتراح الألواح والبطاريات.
 import { store } from './data.js';
@@ -152,20 +153,21 @@ function viewSavings(h) {
   const { state, esc } = h;
   const p = state.prefs;
   const m = state.model;
-  const cur = p.currency || '';
-  const money = (v) => (v == null ? '—' : Math.round(v).toLocaleString('en-US'));
+  const code = curCode(p);
   const today = m?.todayWh != null ? m.todayWh / 1000 : null;
   const life = m?.totalWh != null ? m.totalWh / 1000 : null;
   const avg = h.avgPv?.();
-  const row = (label, kwh, info = '') => `<div class="sv-row"><span>${esc(label)}${info}</span><b><bdi>${money(savingsOf(kwh, p.price))}</bdi> <small>${esc(cur)}</small></b><small class="muted">${kwh == null ? 'لا توجد بيانات' : `${kwh.toFixed(kwh >= 100 ? 0 : 1)} ك.و.س`}</small></div>`;
+  const row = (label, kwh, info = '') => { const c = costOf(kwh, p); return `<div class="sv-row"><span>${esc(label)}${info}</span><b><bdi>${c ? fmtMoney(c.v, c.code) : '—'}</bdi> <small>${esc(c?.sym || '')}</small></b><small class="muted">${kwh == null ? 'لا توجد بيانات' : `${kwh.toFixed(kwh >= 100 ? 0 : 1)} ك.و.س`}${c?.alt ? ` · ≈ <bdi>${fmtMoney(c.alt.v, c.alt.code)}</bdi> ${esc(c.alt.sym)}` : ''}</small></div>`; };
   return `
   <section class="card">
     <div class="card-h"><h2>سعر الكهرباء${h.infoBtn('savings')}</h2></div>
     <div class="form">
-      <label class="num-row"><span>سعر الكيلوواط ساعة</span><span class="num-in"><input type="text" inputmode="decimal" autocomplete="off" id="svPrice" value="${esc(p.price ?? '')}" placeholder="مثال: 1500"></span></label>
-      <label class="num-row"><span>العملة</span><span class="num-in"><input type="text" autocomplete="off" id="svCur" maxlength="8" value="${esc(cur)}" placeholder="ل.س"></span></label>
+      <div class="num-row"><span>العملة</span><div class="seg sv-cur">${[['USD', 'دولار $'], ['SYP', 'ليرة سورية'], ['OTHER', 'أخرى']].map(([k, l]) => `<button class="${code === k ? 'on' : ''}" data-cur="${k}">${l}</button>`).join('')}</div></div>
+      ${code === 'OTHER' ? `<label class="num-row"><span>اسم العملة</span><span class="num-in"><input type="text" autocomplete="off" id="svCur" maxlength="8" value="${esc(curSym(code, p))}" placeholder="مثال: €"></span></label>` : ''}
+      <label class="num-row"><span>سعر الكيلوواط ساعة</span><span class="num-in"><input type="text" inputmode="decimal" autocomplete="off" id="svPrice" value="${esc(p.price ?? '')}" placeholder="${code === 'USD' ? 'مثال: 0.12' : 'مثال: 1500'}"><small>${esc(curSym(code, p))}</small></span></label>
+      ${code !== 'OTHER' ? `<label class="num-row"><span>سعر الصرف (اختياري)</span><span class="num-in"><input type="text" inputmode="decimal" autocomplete="off" id="svRate" value="${esc(p.exRate ?? '')}" placeholder="ليرة لكل دولار"><small>ل.س/$</small></span></label>` : ''}
     </div>
-    <p class="hint">اكتب ما كنت ستدفعه للكيلوواط ساعة: سعر كهرباء الشبكة، أو اشتراك المولدة مقسوماً على ما يعطيك.</p>
+    <p class="hint">اكتب ما تدفعه للكيلوواط ساعة: سعر كهرباء الشبكة، أو اشتراك المولدة مقسوماً على ما يعطيك. مع سعر الصرف تظهر الكلفة بالعملتين. يُستخدم السعر نفسه للتوفير ولكلفة سحب الشبكة في التقارير.</p>
   </section>
   ${p.price ? `<section class="card sv">
     ${row('اليوم', today)}
@@ -287,7 +289,16 @@ export function bindCalc(h) {
     };
   }
   const curEl = $('#svCur');
-  if (curEl) curEl.onchange = () => { state.prefs.currency = curEl.value.trim().slice(0, 8); h.savePrefs(); h.render(); };
+  if (curEl) curEl.onchange = () => { state.prefs.currency = curEl.value.trim().slice(0, 8) || 'OTHER'; h.savePrefs(); h.render(); };
+  document.querySelectorAll('[data-cur]').forEach((b) => { b.onclick = () => {
+    const k = b.dataset.cur;
+    // عملة جديدة: السعر القديم بعملة أخرى لا يصلح، فيُمسح بدل أن يُفسَّر خطأً
+    if (k !== curCode(state.prefs)) state.prefs.price = null;
+    state.prefs.currency = k;
+    h.savePrefs(); h.render();
+  }; });
+  const rate = $('#svRate');
+  if (rate) rate.onchange = () => { const v = numOf(rate.value); state.prefs.exRate = Number.isFinite(v) && v > 0 ? v : null; h.savePrefs(); h.render(); };
 
   document.querySelectorAll('[data-add]').forEach((b) => {
     b.onclick = () => {

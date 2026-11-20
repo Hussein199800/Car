@@ -11,6 +11,9 @@ export const PROFILES = {
 
 const APP = { client: 'web', id: 'taqati-solar', version: '1.0.0' };
 
+// «لا توجد بيانات» من الرمز الخام للخادم، لا من الرسالة المترجمة
+export const isNoRecord = (e) => e?.code === 12 || /NO_RECORD/.test(String(e?.desc || ''));
+
 export class ApiError extends Error {
   constructor(message, code) {
     super(message);
@@ -182,11 +185,12 @@ export class WatchPowerApi {
     }
 
     for (const plant of plants) {
+      const before = devices.length; // لكل محطة: إن لم تُعد أجهزتها مباشرة نجرب مجمّعاتها
       try {
         const r = await this.request('webQueryDeviceEs', { pid: plant.pid, page: 0, pagesize: 50 });
         (r.dat?.device || []).forEach(add);
       } catch (e) { /* نجرب طريقة المجمّعات */ }
-      if (devices.length) continue;
+      if (devices.length > before) continue;
       try {
         const r = await this.request('webQueryCollectorsEs', { pid: plant.pid, page: 0, pagesize: 50 });
         for (const c of r.dat?.collector || []) {
@@ -229,14 +233,15 @@ export class WatchPowerApi {
           ...this.devParams(dev), date, page, pagesize: 200, i18n: 'en_US',
         });
       } catch (e) {
-        if (e.code === 12 || /NO_RECORD/.test(e.message)) break;
+        if (isNoRecord(e)) break;
         throw e;
       }
       const dat = r.dat || {};
       if (!titles.length) (dat.title || []).forEach((t) => titles.push(t.title));
       const batch = dat.row || [];
       batch.forEach((row) => rows.push(row.field || []));
-      if (!batch.length || rows.length >= (dat.total || 0)) break;
+      // بلا total نكمل حتى صفحة ناقصة؛ معه نتوقف عند بلوغه
+      if (batch.length < 200 || (dat.total != null && rows.length >= Number(dat.total))) break;
     }
     return { titles, rows };
   }
@@ -272,12 +277,12 @@ export class WatchPowerApi {
       try {
         r = await this.request('queryDeviceWarning', { ...this.devParams(dev), sdate, edate, i18n: 'en_US', page, pagesize: 50 });
       } catch (e) {
-        if (e.code === 12 || /NO_RECORD/.test(e.message)) break;
+        if (isNoRecord(e)) break;
         throw e;
       }
       const list = r.dat?.warning || [];
       out.push(...list);
-      if (list.length < 50 || out.length >= (r.dat?.total || 0)) break;
+      if (list.length < 50 || (r.dat?.total != null && out.length >= Number(r.dat.total))) break;
     }
     return out;
   }

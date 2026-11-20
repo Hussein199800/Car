@@ -23,6 +23,13 @@ export function reader(map) {
   return { find, n: (...re) => num(find(...re)) };
 }
 
+// أوضاع التشغيل المعروفة (Bypass بلا كلمة Mode). اسم طراز أو قيمة غامضة لا يُعدّ وضعاً
+export const KNOWN_MODE = /^(power on|standby|bypass|line|battery|fault|power saving|eco|charging|shutdown)( mode)?$/i;
+export function modeText(v) {
+  const s = v == null ? '' : String(v).trim();
+  return s && (KNOWN_MODE.test(s) || /\bmode\b/i.test(s)) ? s : null;
+}
+
 const MODE_TITLES = [/^working state$/, /^work mode$/, /^operating mode$/, /^mode$/, /^model$/];
 
 export function extract(map) {
@@ -34,7 +41,7 @@ export function extract(map) {
   const chgA = n(/^battery charging current/);
   const disA = n(/^battery discharg.* current/);
   const modeRaw = find(...MODE_TITLES);
-  const mode = modeRaw && /mode/i.test(String(modeRaw)) ? String(modeRaw) : null;
+  const mode = modeText(modeRaw);
   const fault = find(/^inverter fault/, /^fault code/, /^fault$/);
   // الحرارة: بعض الأجهزة ترسلها (حرارة المشتت أو البطارية) وبعضها لا يرسلها أبداً.
   // نتجاهل الصفر والقيم غير المنطقية لأنها تعني غالباً حساساً غير موجود

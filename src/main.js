@@ -13,7 +13,7 @@ import { WatchPowerApi, ApiError, errorAr } from './api.js';
 import { normalize, rowsToSamples, fmt, latinDigits, LOC, countAr, DAY, parseTs, setClock12, revalidate, gridPresent } from './model.js';
 import { trTitle, trValue, trUnit, isEmptyVal, warnAr } from './i18n.js';
 import {
-  store, today, addDays, dayKey, recordSample, localDay, summarize, cachedSummary, cacheSummary, toCsv, shareFile,
+  store, SUMMARY_V, today, addDays, dayKey, shiftToDay, recordSample, localDay, summarize, cachedSummary, cacheSummary, toCsv, shareFile,
 } from './data.js';
 import { demoPoints, demoHistory } from './demo.js';
 import { icons } from './icons.js';
@@ -26,6 +26,7 @@ import { scenePhoto, photoFor, batLook, photoIsDark } from './scenePhoto.js';
 import { sceneClassic } from './sceneClassic.js';
 import { analyze, capacityKwh } from './advisor.js';
 import { findField, isOutputPriority, isChargerPriority, orderOf, matchItem, changeAndVerify, addLog, SYRIA_OFFSET_MIN, DAY_NAMES, DAY_SHORT, localDay as sLocalDay, weekday, dateOf, hm, toMin, activeSlot, nextSwitch, overlap } from './control.js';
+import { costOf, costText, fmtMoney } from './money.js';
 import { analyzeTwoWeeks, rememberForecast, accuracy, gridMeter } from './forecast.js';
 import { CATS, catOf, levelOf, toEvents, migrateLog, addEvents } from './log.js';
 import { trendDates, change } from './trend.js';
@@ -1371,7 +1372,8 @@ function viewReports() {
 
 // ================= التقرير السنوي (من عدّادات الخادم مباشرة، بلا تحميل قراءات الأيام) =================
 const MONTHS = ['كانون الثاني', 'شباط', 'آذار', 'نيسان', 'أيار', 'حزيران', 'تموز', 'آب', 'أيلول', 'تشرين الأول', 'تشرين الثاني', 'كانون الأول'];
-const money = (v) => (v == null || !Number.isFinite(v) ? '—' : Math.round(v).toLocaleString('en-US'));
+// مبلغ بعملة المستخدم: [القيمة، الرمز] لبطاقة الإحصاء (الرمز يذكر التحويل إن أُدخل سعر الصرف)
+const moneyStat = (kwh) => { const c = costOf(kwh, state.prefs); return c ? [fmtMoney(c.v, c.code), c.sym + (c.alt ? ` · ≈ ${fmtMoney(c.alt.v, c.alt.code)} ${c.alt.sym}` : '')] : null; };
 
 async function loadYear() {
   const y = state.rep.yearY || new Date().getFullYear();
@@ -1419,7 +1421,7 @@ function pageYear() {
     ${stat('أفضل شهر', best ? MONTHS[best.month - 1] : '—', best ? `${fmt.kwh(best.kwh)} ك.و.س` : '', 'c-green')}
     ${stat('متوسط الشهر', fmt.kwh(sum / used.length), 'ك.و.س', 'c-sky')}
     ${r.total != null ? stat('منذ أول قراءة', fmt.kwh(r.total), 'كيلوواط ساعة', 'c-violet', '', 'year') : ''}
-    ${price ? stat('توفير السنة', money(sum * price), state.prefs.currency || '', 'c-green', '', 'savings') : ''}
+    ${price ? stat('توفير السنة', ...moneyStat(sum), 'c-green', '', 'savings') : ''}
   </div>
   ${price ? '' : '<button class="link pad" data-goto="more:calc">احسب توفيرك بالمال من الحاسبة</button>'}
   <section class="card">${cardH('الإنتاج الشهري', '', '<small class="muted">كيلوواط ساعة</small>')}<div class="chart-box"><canvas id="cYear"></canvas></div></section>`;
@@ -1448,11 +1450,18 @@ async function daySamples(date, d = device()) {
   let err;
   if (serverHistFails < 3) {
     try {
-      const s = rowsToSamples(await api.dayHistory(d, date));
-      serverHistFails = 0;
-      // سجل الخادم بتوقيته هو؛ نطبّق فرق التوقيت المكتشف كما في القراءة الحية والسجل المحلي
       const off = store.get('tz.' + d.sn, 0);
-      if (off) s.forEach((x) => { x.ts += off; });
+      const s = shiftToDay(rowsToSamples(await api.dayHistory(d, date)), off, date);
+      serverHistFails = 0;
+      // فرق التوقيت ينقل قراءات طرف اليوم لليوم المجاور: نكمل من يوم الخادم المجاور (اختياري)
+      if (s.length && Math.abs(off) >= 60000) {
+        try {
+          const nb = shiftToDay(rowsToSamples(await api.dayHistory(d, addDays(date, off > 0 ? -1 : 1))), off, date);
+          const seen = new Set(s.map((x) => x.ts));
+          nb.forEach((x) => { if (!seen.has(x.ts)) s.push(x); });
+          s.sort((x, y) => x.ts - y.ts);
+        } catch { /* اليوم المجاور غير متاح: يبقى ما لدينا */ }
+      }
       if (s.length) return { samples: s, source: 'server' };
     } catch (e) {
       err = e;
@@ -1563,7 +1572,7 @@ function pageDay() {
     ${stat('توفر الكهرباء', numAr(s.gridH, 1), 'ساعة', 'c-violet', '', 'gridHours')}
     ${stat('العمل على البطارية', numAr(s.batH, 1), 'ساعة', 'c-slate')}
     ${pvKwp() && s.pvKwh != null ? stat('إنتاج كل كيلوواط ألواح', (s.pvKwh / pvKwp()).toFixed(2), 'ك.و.س', 'c-amber', '', 'yieldKwp') : ''}
-    ${state.prefs.price && s.pvKwh != null ? stat('التوفير', money(s.pvKwh * state.prefs.price), state.prefs.currency || '', 'c-green', '', 'savings') : ''}
+    ${state.prefs.price && s.pvKwh != null ? stat('التوفير', ...moneyStat(s.pvKwh), 'c-green', '', 'savings') : ''}
   </div>
   <p class="hint">${SRC[r.source]} · ${countAr(r.samples.length, READINGS)} · ${numAr(s.coveredH, 1)} ساعة مغطّاة${infoBtn('report')}</p>
   <section class="card"><div class="card-h"><h2>القدرة خلال اليوم</h2></div><div class="chart-box"><canvas id="cPower"></canvas></div></section>
@@ -2676,7 +2685,7 @@ AFTER.forecast = () => {
 // الجهاز لا يرسل قدرة السحب من الشبكة ولا عدّاداً لها، فنحسبها من وضع الشبكة: حمل البيت + الشحن الزائد عن الألواح.
 function allCachedSums() {
   const s = sn();
-  return store.keys(`sum.${s}.`).map((k) => store.get(k, null)).filter((x) => x && x.v === 2);
+  return store.keys(`sum.${s}.`).map((k) => store.get(k, null)).filter((x) => x && x.v === SUMMARY_V);
 }
 
 async function loadGridMeter(days = 30) {
@@ -2704,12 +2713,12 @@ async function loadGridMeter(days = 30) {
 
 function pageGridMeter() {
   const g = state.rep.gm;
-  const note = '<div class="banner info">' + icons.info + '<span><b>تقدير محسوب، لا عدّاد من الجهاز</b>إنفرترك لا يرسل قدرة السحب من الشبكة. نحسبها حين يكون في وضع الشبكة: حمل البيت + ما شحن البطارية زيادةً عن الألواح، دون فواقد الإنفرتر.</span></div>';
+  const note = '<div class="banner info">' + icons.info + '<span><b>تقدير محسوب، لا عدّاد من الجهاز</b>إنفرترك لا يرسل قدرة السحب من الشبكة. نحسبها حين يكون في وضع الشبكة: حمل البيت + ما شحن البطارية زيادةً عن الألواح، دون فواقد الإنفرتر. إن لم يرسل الجهاز وضع التشغيل يُستنتج من جهد الشبكة وتيار البطارية والألواح.</span></div>';
   if (!g || g.loading) return `${note}<div class="card"><p class="center">جارٍ جمع سجل الأيام…</p><div class="bar"><i id="gmProg" style="width:${g?.pct || 0}%"></i></div></div>`;
   const r = gridMeter(g.sums, today(), g.from);
   if (!r.start) return `${note}<div class="empty">لا توجد أيام يُعرف فيها وضع التشغيل بما يكفي لحساب استيراد الشبكة.</div>`;
   const all = gridMeter(g.sums, today());
-  const cell = (t, title) => stat(title, fmt.kwh(t.load + t.chg), 'ك.و.س', 'c-violet', t.days ? `${countAr(t.days, DAY)}${t.partial ? ` · ${t.partial} ناقصة` : ''}` : 'لا بيانات');
+  const cell = (t, title) => { const c = costOf(t.load + t.chg, state.prefs); return stat(title, fmt.kwh(t.load + t.chg), 'ك.و.س', 'c-violet', t.days ? `${countAr(t.days, DAY)}${t.partial ? ` · ${t.partial} ناقصة` : ''}${c ? ` · ${costText(c)}` : ''}` : 'لا بيانات'); };
   return `${note}
   <div class="stats">${cell(r.today, 'اليوم')}${cell(r.week, 'آخر 7 أيام')}${cell(r.month, 'آخر 30 يوماً')}${cell(r.all, g.from ? 'منذ التاريخ المختار' : 'منذ بدء السجل')}</div>
   <section class="card"><div class="card-h"><h2>التفصيل منذ ${esc(fmt.day(r.start, { day: 'numeric', month: 'long', year: 'numeric' }))}</h2></div>
@@ -2717,17 +2726,20 @@ function pageGridMeter() {
       ['تغذية البيت من الشبكة', kwhU(r.all.load)],
       ['شحن البطارية من الشبكة', kwhU(r.all.chg)],
       ['المجموع', kwhU(r.all.load + r.all.chg)],
+      state.prefs.price ? ['الكلفة بسعرك', `<bdi>${esc(costText(costOf(r.all.load + r.all.chg, state.prefs)))}</bdi>`] : null,
+      r.all.inferred ? ['أيام استُنتج فيها وضع الشبكة', `<bdi>${r.all.inferred}</bdi> <small>الجهاز لم يرسل وضع التشغيل</small>`] : null,
       ['ساعات القراءات المحسوبة', `<bdi>${Math.round(r.all.coveredH)}</bdi> <small>من ${r.all.days * 24} ساعة</small>`],
       r.all.partial ? ['أيام ناقصة التغطية', `<bdi>${r.all.partial}</bdi> <small>مجموعها أقل من الحقيقي</small>`] : null,
     ])}
     <p class="hint">بداية السجل المتاح: <b>${esc(fmt.day(all.start, { day: 'numeric', month: 'long', year: 'numeric' }))}</b>. فترات انقطاع القراءات لا تُحسب صفراً ولا تُقدَّر، بل تُستثنى.</p>
     <label class="num-row"><span>اعرض واجمع ابتداءً من</span><input type="date" id="gmFrom" min="${all.start}" max="${today()}" value="${g.from || all.start}"></label>
     ${g.from ? '<button class="link" id="gmAll">العودة لكل السجل</button>' : ''}
+    ${state.prefs.price ? '' : '<button class="link" data-goto="more:calc">أدخل سعر الكيلوواط لتظهر الكلفة</button>'}
     ${g.end ? '<p class="hint">الخادم لا يحتفظ ببيانات أقدم من ذلك.</p>' : `<button class="btn ghost wide" id="gmMore">تحميل 30 يوماً أقدم</button>`}
   </section>
   <section class="card"><div class="card-h"><h2>يوماً بيوم</h2></div>
     <table class="cmp gm"><thead><tr><th>اليوم</th><th>البيت</th><th>الشحن</th><th>المجموع</th></tr></thead><tbody>
-    ${r.perDay.slice().reverse().slice(0, 62).map((d) => `<tr class="${d.coveredH < 18 && d.date < today() ? 'part' : ''}"><th>${esc(fmt.day(d.date, { weekday: 'short', day: 'numeric', month: 'numeric' }))}</th><td><bdi>${fmt.kwh(d.load)}</bdi></td><td><bdi>${fmt.kwh(d.chg)}</bdi></td><td><b><bdi>${fmt.kwh(d.load + d.chg)}</bdi></b></td></tr>`).join('')}
+    ${r.perDay.slice().reverse().slice(0, 62).map((d) => `<tr class="${d.basis === 'partial' && d.date < today() ? 'part' : ''}"><th>${esc(fmt.day(d.date, { weekday: 'short', day: 'numeric', month: 'numeric' }))}</th><td><bdi>${fmt.kwh(d.load)}</bdi></td><td><bdi>${fmt.kwh(d.chg)}</bdi></td><td><b><bdi>${fmt.kwh(d.load + d.chg)}</bdi></b></td></tr>`).join('')}
     </tbody></table><p class="hint">بالكيلوواط ساعة. الصفوف الباهتة أيام ناقصة التغطية.</p></section>`;
 }
 AFTER.gridmeter = () => {
@@ -2739,6 +2751,7 @@ AFTER.gridmeter = () => {
   if (a) a.onclick = () => { state.rep.gm.from = null; render(); };
   const more = $('#gmMore');
   if (more) more.onclick = () => loadGridMeter((state.rep.gm.back || 30) + 30);
+  bindGoto();
 };
 
 // ================= تبويب النصائح =================
