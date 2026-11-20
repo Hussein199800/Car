@@ -851,6 +851,42 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       check('عدّاد الشبكة موسوم بأنه تقدير ويعرض بداية السجل', gt.includes('تقدير محسوب، لا عدّاد من الجهاز') && gt.includes('بداية السجل المتاح') && (await d.$$('.stats .stat')).length === 4);
       check('بلا تمرير أفقي في الصفحات الجديدة', await noHScroll(d));
       check('بلا أخطاء JavaScript (التقدير والعدّاد)', d.errors.length === 0, d.errors.join(' | '));
+      // 3.14: تقرير لفترة تختارها، والكلفة بعملة المستخدم وسعر الصرف
+      await d.evaluate(() => { Object.assign(window.__state.prefs, { price: 0.12, currency: 'USD', exRate: 13000 }); window.__nav('reports', null); });
+      await d.waitForTimeout(200);
+      check('«تقرير لفترة تختارها» أول التقارير', (await d.$eval('.lcard', (e) => e.dataset.page)) === 'period');
+      await d.evaluate(() => window.__nav('reports', 'period'));
+      await d.waitForSelector('.per-key', { timeout: 60000 }).catch(() => null);
+      {
+        const keys = await d.$$eval('.per-key .stat small', (a) => a.map((e) => e.textContent.trim()));
+        check('أرقام الفترة الأهم أولاً: الإنتاج والاستهلاك وسحب الشبكة وكلفته والتوفير', ['الإنتاج', 'الاستهلاك', 'سحب الشبكة (تقدير)', 'كلفة الشبكة', 'توفير الألواح'].every((k) => keys.some((x) => x.startsWith(k))), keys.join('|'));
+        const cost = await text(d, '.per-key .stat.c-pink');
+        check('الكلفة بالدولار مع ما يعادلها بالليرة', cost.includes('$') && cost.includes('ل.س'), cost);
+        const top = await d.$eval('.per-key', (e) => e.getBoundingClientRect().top);
+        check('الأرقام الأهم ظاهرة دون تمرير على الهاتف', top < 600, String(top));
+        check('7 أيام افتراضياً، والجدول بالأيام', (await d.$$('.per-t button.tr')).length === 7 && (await text(d, '.per-sum')).includes('سُحب من الشبكة'), await text(d, '.per-sum'));
+      }
+      await d.screenshot({ path: path.join(OUT, 'period.png'), fullPage: true });
+      await d.click('[data-preset="30"]');
+      await d.waitForFunction(() => document.querySelectorAll('.per-t button.tr').length === 30, null, { timeout: 60000 }).catch(() => null);
+      check('آخر 30 يوماً', (await d.$$('.per-t button.tr')).length === 30);
+      // من تاريخ إلى تاريخ يختاره المستخدم (والمعكوس يُصحَّح)
+      const [f, t] = await d.evaluate(() => { const k = (n) => { const x = new Date(); x.setDate(x.getDate() - n); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; }; return [k(3), k(12)]; });
+      await d.fill('#perFrom', f); await d.$eval('#perFrom', (e) => e.dispatchEvent(new Event('change')));
+      await d.waitForTimeout(100);
+      await d.fill('#perTo', t); await d.$eval('#perTo', (e) => e.dispatchEvent(new Event('change')));
+      await d.waitForFunction(() => document.querySelectorAll('.per-t button.tr').length === 10, null, { timeout: 60000 }).catch(() => null);
+      check('فترة مخصصة من تاريخ إلى تاريخ (10 أيام، والترتيب المعكوس يُصحَّح)', (await d.$$('.per-t button.tr')).length === 10 && (await d.inputValue('#perFrom')) === t && (await d.inputValue('#perTo')) === f, `${await d.inputValue('#perFrom')} ${await d.inputValue('#perTo')}`);
+      check('بلا تمرير أفقي في تقرير الفترة', await noHScroll(d));
+      // واجهة السعر: العملة وسعر الصرف
+      await d.evaluate(() => window.__nav('more', 'calc')); await d.waitForTimeout(200);
+      await d.evaluate(() => { const b = [...document.querySelectorAll('.seg button')].find((x) => /التوفير/.test(x.textContent)); b?.click(); }); await d.waitForTimeout(200);
+      if (await d.$('.sv-cur')) {
+        check('اختيار العملة: دولار مفعّل وحقل سعر الصرف ظاهر', (await text(d, '.sv-cur .on')).includes('دولار') && !!(await d.$('#svRate')));
+        await d.click('[data-cur="SYP"]'); await d.waitForTimeout(150);
+        check('تبديل العملة يمسح السعر القديم بدل تفسيره خطأً', (await d.evaluate(() => window.__state.prefs.price)) === null && (await d.evaluate(() => window.__state.prefs.currency)) === 'SYP');
+      } else check('واجهة العملة ظاهرة في التوفير', false, (await text(d, '#view')).slice(0, 200));
+      check('بلا أخطاء JavaScript (تقرير الفترة)', d.errors.length === 0, d.errors.join(' | '));
       await d.context().close();
     }
 

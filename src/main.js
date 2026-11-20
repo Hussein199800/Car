@@ -45,7 +45,7 @@ Chart.register({ id: 'replayCursor', afterDraw(chart) {
 } });
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '3.13.1';
+const VERSION = '3.14.0';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -577,7 +577,7 @@ function banner() {
 const PAGE_TITLES = {
   load: 'الحمل', battery: 'البطارية', solar: 'الألواح الشمسية', grid: 'كهرباء الشبكة',
   day: 'التقرير اليومي', week: 'التقرير الأسبوعي', month: 'التقرير الشهري', year: 'التقرير السنوي', srvlog: 'سجل الإنفرتر في الخادم', 
-  rules: 'شروط التنبيه', advisor: 'ملاحظات على منظومتك', device: 'الإنفرتر', update: 'التحديثات', edit: 'إعدادات الإنفرتر', power: 'أولوية مصدر الطاقة', forecast: 'تقدير الأسبوعين القادمين', gridmeter: 'كهرباء الشبكة', setup: 'ربط الجهاز والحساب',
+  period: 'تقرير لفترة', rules: 'شروط التنبيه', advisor: 'ملاحظات على منظومتك', device: 'الإنفرتر', update: 'التحديثات', edit: 'إعدادات الإنفرتر', power: 'أولوية مصدر الطاقة', forecast: 'تقدير الأسبوعين القادمين', gridmeter: 'كهرباء الشبكة', setup: 'ربط الجهاز والحساب',
   tips: 'النصائح', ...Object.fromEntries(TIP_SECTIONS.map((t) => [t.id, t.title])),
   settings: 'الإعدادات', calc: 'حاسبة الأحمال', about: 'حول التطبيق',
 };
@@ -1353,13 +1353,14 @@ function independenceCard() {
 }
 
 function viewReports() {
-  const pages = { day: pageDay, week: () => pageRange('week'), month: () => pageRange('month'), year: pageYear, advisor: pageAdvisor, forecast: pageForecast, gridmeter: pageGridMeter };
+  const pages = { period: pagePeriod, day: pageDay, week: () => pageRange('week'), month: () => pageRange('month'), year: pageYear, advisor: pageAdvisor, forecast: pageForecast, gridmeter: pageGridMeter };
   if (state.page && pages[state.page]) return pages[state.page]();
   const urgent = urgentCount();
   return `
   ${independenceCard()}
   <section class="intro"><h2>التقارير${infoBtn('report')}</h2></section>
   ${listCards([
+    { page: 'period', title: 'تقرير لفترة تختارها', sub: 'من تاريخ إلى تاريخ: الإنتاج والاستهلاك وسحب الشبكة وكلفتها في صفحة واحدة', icon: icons.calendar, color: 'c-green' },
     { page: 'advisor', title: 'ملاحظات على منظومتك', sub: 'ما يحتاج انتباهك الآن، واستخدام البطارية وتوصيات آخر 7 أيام', icon: icons.bulb, color: urgent ? 'c-pink' : 'c-green', badge: urgent ? `${urgent} مهم` : '' },
     { page: 'forecast', title: 'تقدير الأسبوعين القادمين', sub: 'مقارنة آخر أسبوعين، والعجز المتوقع، واقتراح احتياطي البطارية', icon: icons.chart, color: 'c-sky' },
     { page: 'gridmeter', title: 'كهرباء الشبكة', sub: 'ما سحبته من الشبكة يومياً وأسبوعياً وشهرياً (تقدير)', icon: icons.grid, color: 'c-violet' },
@@ -1654,8 +1655,14 @@ function totals(sums) {
   const ind = ok.filter((s) => s.independence != null && s.loadKwh > 0);
   const indLoad = ind.reduce((a, s) => a + s.loadKwh, 0);
   const independence = indLoad > 0 ? ind.reduce((a, s) => a + s.independence * s.loadKwh, 0) / indLoad : null;
+  // سحب الشبكة من الأيام التي يُعرف فيها فقط (تقدير)، مع عدد الأيام الناقصة
+  const g = ok.filter((s) => s.gridKwh != null);
+  const socs = ok.filter((s) => s.socMin != null);
   return { days: ok.length, pv, load, avgPv: avgOf('pvKwh'), avgLoad: avgOf('loadKwh'), gridH: add('gridH'), batH: add('batH'), best,
-    solarChg: add('solarChgKwh'), gridChg: add('gridChgKwh'), independence };
+    solarChg: add('solarChgKwh'), gridChg: add('gridChgKwh'), independence,
+    grid: g.length ? g.reduce((a, s) => a + s.gridKwh, 0) : null, gridDays: g.length,
+    gridPartial: g.filter((s) => s.gridBasis === 'partial' && s.date < today()).length,
+    socMin: socs.length ? socs.reduce((m, s) => (s.socMin < m.socMin ? s : m)) : null };
 }
 
 async function loadRange(kind) {
@@ -1751,6 +1758,126 @@ function bindRange(kind) {
 AFTER.week = () => bindRange('week');
 AFTER.month = () => bindRange('month');
 
+// ================= تقرير لفترة يختارها المستخدم (من تاريخ إلى تاريخ) =================
+const PERIOD_MAX = 92;
+const PRESETS = [
+  ['7', 'آخر 7 أيام', () => [today(-6), today()]],
+  ['30', 'آخر 30 يوماً', () => [today(-29), today()]],
+  ['m', 'هذا الشهر', () => [today().slice(0, 8) + '01', today()]],
+  ['pm', 'الشهر الماضي', () => { const d = new Date(today().slice(0, 8) + '01T12:00:00'); d.setDate(0); const e = dayKey(d.getTime()); return [e.slice(0, 8) + '01', e]; }],
+];
+function periodRange() {
+  const p = store.get('repPeriod', null);
+  let [from, to] = p && p.from && p.to ? [p.from, p.to] : PRESETS[0][2]();
+  if (to > today()) to = today();
+  if (from > to) from = to;
+  return { from, to };
+}
+function periodDates(from, to) {
+  const out = [];
+  for (let d = from; d <= to && out.length < PERIOD_MAX; d = addDays(d, 1)) out.push(d);
+  return out;
+}
+// 92 يوماً حداً أعلى: كل يوم جديد يُحمَّل من الخادم، والأيام المكتملة تُحفظ فتظهر فوراً لاحقاً
+async function loadPeriod() {
+  const { from, to } = periodRange();
+  const dates = periodDates(from, to);
+  const token = Symbol('per');
+  serverHistFails = 0;
+  state.rep.per = { loading: true, token, done: 0, total: dates.length, from, to };
+  render();
+  const sums = await loadSummaries(dates, (done, total) => {
+    if (state.rep.per?.token !== token) return;
+    state.rep.per.done = done;
+    const p = $('#perProg');
+    if (p) { p.style.width = (done / total) * 100 + '%'; $('#perTxt').textContent = `${done} من ${countAr(total, DAY)}`; }
+  });
+  if (state.rep.per?.token !== token) return;
+  state.rep.per = { from, to, dates, sums, at: Date.now() };
+  if (state.page === 'period') render();
+}
+
+function pagePeriod() {
+  const { from, to } = periodRange();
+  const r = state.rep.per;
+  const n = periodDates(from, to).length;
+  const preset = PRESETS.find(([, , f]) => { const [a, b] = f(); return a === from && b === to; })?.[0];
+  const head = `<section class="card per-pick">
+    <div class="seg per-presets">${PRESETS.map(([k, l]) => `<button class="${preset === k ? 'on' : ''}" data-preset="${k}">${l}</button>`).join('')}</div>
+    <div class="per-dates"><label>من<input type="date" id="perFrom" value="${from}" max="${today()}"></label><label>إلى<input type="date" id="perTo" value="${to}" max="${today()}"></label></div>
+    <small class="hint">${countAr(n, DAY)}${n >= PERIOD_MAX ? ` (الحد الأعلى ${PERIOD_MAX} يوماً)` : ''}</small>
+  </section>`;
+  if (!r || r.loading || r.from !== from || r.to !== to) {
+    return head + `<div class="card"><p class="center">جارٍ تجميع بيانات الأيام…</p><div class="bar"><i id="perProg" style="width:${r?.total ? (r.done / r.total) * 100 : 0}%"></i></div><p class="hint center" id="perTxt"></p>
+      <p class="hint center">الأيام المكتملة تُحفظ في الهاتف، فتظهر فوراً في المرة القادمة.</p></div>`;
+  }
+  const t = totals(r.sums);
+  if (!t.days) return head + '<div class="empty">لا توجد بيانات لهذه الفترة.</div>';
+  const p = state.prefs;
+  const gridCost = t.grid != null ? costOf(t.grid, p) : null;
+  const saved = costOf(t.pv, p);
+  const cover = t.load > 0 && t.grid != null ? Math.max(0, Math.min(100, (1 - t.grid / t.load) * 100)) : null;
+  const gridDay = r.sums.filter((s) => s.gridKwh != null).reduce((b, s) => (!b || s.gridKwh > b.gridKwh ? s : b), null);
+  const lowDay = t.socMin;
+  // جمل قصيرة بلغة عادية: ما يهم المستخدم من الأرقام
+  const lines = [
+    `أنتجت الألواح <b><bdi>${fmt.kwh(t.pv)}</bdi> ك.و.س</b> واستهلك البيت <b><bdi>${fmt.kwh(t.load)}</bdi> ك.و.س</b>.`,
+    t.grid != null ? `سُحب من الشبكة نحو <b><bdi>${fmt.kwh(t.grid)}</bdi> ك.و.س</b>${gridCost ? ` بكلفة <b><bdi>${esc(costText(gridCost))}</bdi></b>` : ''}${cover != null ? `، فغطّت منظومتك نحو <b><bdi>${Math.round(cover)}%</bdi></b> من الاستهلاك` : ''}.` : 'لا يمكن حساب سحب الشبكة لهذه الفترة (وضع التشغيل غير معروف).',
+    gridDay && gridDay.gridKwh > 0.05 ? `أكثر يوم سحباً من الشبكة: ${esc(dayName(gridDay.date))} (<bdi>${fmt.kwh(gridDay.gridKwh)}</bdi> ك.و.س).` : null,
+    t.best ? `أفضل يوم إنتاج: ${esc(dayName(t.best.date))} (<bdi>${fmt.kwh(t.best.pvKwh)}</bdi> ك.و.س).` : null,
+    lowDay ? `أدنى نسبة للبطارية: <bdi>${lowDay.socMin}%</bdi> يوم ${esc(dayName(lowDay.date))}${lowDay.socMinAt ? ` الساعة ${esc(fmt.time(lowDay.socMinAt))}` : ''}.` : null,
+  ].filter(Boolean);
+  const missing = r.sums.length - t.days;
+  return head + `
+  <div class="stats per-key">
+    ${stat('الإنتاج', fmt.kwh(t.pv), 'ك.و.س', 'c-amber')}
+    ${stat('الاستهلاك', fmt.kwh(t.load), 'ك.و.س', 'c-sky')}
+    ${stat('سحب الشبكة (تقدير)', t.grid == null ? '—' : fmt.kwh(t.grid), 'ك.و.س', 'c-violet', t.gridPartial ? `<em class="trend">${countAr(t.gridPartial, DAY)} ناقصة</em>` : '', 'gridEst')}
+    ${gridCost ? stat('كلفة الشبكة', fmtMoney(gridCost.v, gridCost.code), gridCost.sym, 'c-pink', gridCost.alt ? `<em class="alt-cur">≈ <bdi>${fmtMoney(gridCost.alt.v, gridCost.alt.code)}</bdi> ${esc(gridCost.alt.sym)}</em>` : '') : ''}
+    ${saved ? stat('توفير الألواح', fmtMoney(saved.v, saved.code), saved.sym, 'c-green', '', 'savings') : ''}
+    ${stat('الاستقلالية عن الشبكة', t.independence == null ? '—' : Math.round(t.independence) + '%', 'من الاستهلاك', 'c-slate')}
+  </div>
+  ${p.price ? '' : '<button class="link pad" data-goto="more:calc">أدخل سعر الكيلوواط (دولار أو ليرة) لتظهر الكلفة والتوفير</button>'}
+  <section class="card per-sum"><div class="card-h"><h2>الخلاصة</h2></div><ul class="wn">${lines.map((l) => `<li>${l}</li>`).join('')}</ul>
+    <p class="hint">أيام فيها بيانات: ${t.days} من ${r.sums.length}${missing ? ' — مجموع الفترة أقل من الحقيقي بقدر الأيام الناقصة' : ''}. سحب الشبكة تقدير لأن الجهاز لا يرسل عدّاد استيراد.</p></section>
+  <section class="card"><div class="card-h"><h2>يوماً بيوم</h2><small class="muted">كيلوواط ساعة</small></div><div class="chart-box"><canvas id="cPer"></canvas></div></section>
+  <section class="card"><div class="card-h"><h2>التفاصيل</h2></div>
+    <div class="table per-t"><div class="tr th"><span>اليوم</span><span>الإنتاج</span><span>الاستهلاك</span><span>الشبكة</span><span>البطارية</span></div>
+    ${r.sums.slice().reverse().map((s) => `<button class="tr" data-dayopen="${s.date}"><span>${esc(fmt.day(s.date, { weekday: 'short', day: 'numeric', month: 'numeric' }).replace('،', ''))}</span><span>${s.count > 1 ? fmt.kwh(s.pvKwh) : '—'}</span><span>${s.count > 1 ? fmt.kwh(s.loadKwh) : '—'}</span><span class="${s.gridBasis === 'partial' ? 'muted' : ''}">${s.gridKwh != null ? fmt.kwh(s.gridKwh) : '—'}</span><span>${s.socMin != null ? `${s.socMin}–${s.socMax}%` : '—'}</span></button>`).join('')}
+    </div><p class="hint">اضغط يوماً لفتح تقريره. الأرقام الباهتة في عمود الشبكة أيام ناقصة التغطية.</p></section>
+  <button class="btn ghost wide" id="expPer">${icons.download} تصدير الفترة (CSV)</button>`;
+}
+
+AFTER.period = () => {
+  bindGoto();
+  const set = (from, to) => {
+    if (!from || !to) return;
+    if (to > today()) to = today();
+    if (from > to) [from, to] = [to, from];
+    const dates = periodDates(from, to);
+    if (dates[dates.length - 1] !== to) { to = dates[dates.length - 1]; toast(`الحد الأعلى ${PERIOD_MAX} يوماً؛ عُدّلت النهاية`, 'warn'); }
+    store.set('repPeriod', { from, to });
+    loadPeriod();
+  };
+  document.querySelectorAll('[data-preset]').forEach((b) => { b.onclick = () => set(...PRESETS.find((x) => x[0] === b.dataset.preset)[2]()); });
+  const f = $('#perFrom'), t = $('#perTo');
+  if (f) f.onchange = () => set(f.value, t.value);
+  if (t) t.onchange = () => set(f.value, t.value);
+  const { from, to } = periodRange();
+  const r = state.rep.per;
+  if (!r || (!r.loading && (r.from !== from || r.to !== to || Date.now() - r.at > 30 * 60000))) { loadPeriod(); return; }
+  if (r.loading || !r.sums) return;
+  barChart('cPer', r.sums.map((s) => dayName(s.date)), [
+    { label: 'الإنتاج', data: r.sums.map((s) => (s.count > 1 ? +(s.pvKwh ?? 0).toFixed(2) : null)), color: '#f59e0b' },
+    { label: 'الاستهلاك', data: r.sums.map((s) => (s.count > 1 ? +(s.loadKwh ?? 0).toFixed(2) : null)), color: '#0ea5e9' },
+    { label: 'الشبكة', data: r.sums.map((s) => (s.gridKwh != null ? +s.gridKwh.toFixed(2) : null)), color: '#8b5cf6' },
+  ], { y: { beginAtZero: true } });
+  document.querySelectorAll('[data-dayopen]').forEach((b) => {
+    b.onclick = () => { state.rep.dayDate = b.dataset.dayopen; state.rep.day = null; navigate('reports', 'day'); };
+  });
+  $('#expPer').onclick = () => exportSummaries(`${from}_${to}`, r.sums);
+};
+
 // ================= مستشار الطاقة =================
 // يحلل آخر 7 أيام كاملة + اليوم من السجل الفعلي، ولا يعرض إلا ما يمكن حسابه من القراءات
 async function loadAdvisor() {
@@ -1823,9 +1950,11 @@ async function exportSamples(date, samples) {
 
 async function exportSummaries(name, sums) {
   await shareFile(`taqati-${name}.csv`, toCsv(
-    ['التاريخ', 'الإنتاج (ك.و.س)', 'الاستهلاك (ك.و.س)', 'أدنى شحن %', 'أعلى شحن %', 'ذروة الحمل (واط)', 'ساعات الكهرباء', 'ساعات البطارية', 'شحن من الألواح (ك.و.س)', 'شحن من الكهرباء (ك.و.س)', 'الاستقلالية %', 'عدد القراءات', 'المصدر'],
+    ['التاريخ', 'الإنتاج (ك.و.س)', 'الاستهلاك (ك.و.س)', 'أدنى شحن %', 'أعلى شحن %', 'ذروة الحمل (واط)', 'ساعات الكهرباء', 'ساعات البطارية', 'شحن من الألواح (ك.و.س)', 'شحن من الكهرباء (ك.و.س)', 'سحب الشبكة تقديراً (ك.و.س)', 'رقم الشبكة', `كلفة الشبكة (${costOf(1, state.prefs)?.sym || '—'})`, 'الاستقلالية %', 'عدد القراءات', 'المصدر'],
     sums.map((s) => [s.date, s.pvKwh?.toFixed(2) ?? '', s.loadKwh?.toFixed(2) ?? '', s.socMin ?? '', s.socMax ?? '', s.peakW ?? '', s.gridH?.toFixed(1) ?? '', s.batH?.toFixed(1) ?? '',
-      s.solarChgKwh?.toFixed(2) ?? '', s.gridChgKwh?.toFixed(2) ?? '', s.independence == null ? '' : Math.round(s.independence), s.count, SRC[s.source] || '']),
+      s.solarChgKwh?.toFixed(2) ?? '', s.gridChgKwh?.toFixed(2) ?? '', s.gridKwh?.toFixed(2) ?? '', { estimated: 'تقديري', partial: 'تقديري جزئي' }[s.gridBasis] || '',
+      s.gridKwh != null && costOf(s.gridKwh, state.prefs) ? costOf(s.gridKwh, state.prefs).v.toFixed(2) : '',
+      s.independence == null ? '' : Math.round(s.independence), s.count, SRC[s.source] || '']),
   ));
 }
 
