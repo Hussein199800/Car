@@ -339,6 +339,9 @@ function logout() {
   ['devices', 'devSn', 'demo'].forEach(store.del);
   secure.del('session');
   monitor.configure({ enabled: false }).catch(() => {});
+  // لا يبقى عامل في الخلفية يرسل أوامر بجلسة خرج منها المستخدم
+  control.configure({ mode: 'manual' }).catch(() => {});
+  state.ctl = null;
   Object.assign(state, { session: null, demo: false, devices: [], model: null, fields: null, tab: 'home', page: null, plant: undefined, collector: undefined });
   state.rep = { ...state.rep, day: null, week: null, month: null, adv: null };
   api = new WatchPowerApi();
@@ -542,6 +545,7 @@ function switchDevice(snv) {
   state.fields = null;
   state.plant = undefined;
   state.collector = undefined;
+  state.ctl = null; // حقول التحكم ووضعه ونتائجه تخص الجهاز السابق
   resetAlertState();
   state.rep = { ...state.rep, day: null, week: null, month: null, adv: null, year: null, srv: null };
   loadCache();
@@ -2227,8 +2231,11 @@ async function loadPower(force = false) {
   if (c.loading || (!force && c.field)) return;
   c.loading = true; c.error = null;
   if (leaf() === 'power') render();
+  const forSn = sn();
+  const stale = () => state.ctl !== c || sn() !== forSn; // بُدّل الجهاز أو خرج المستخدم أثناء القراءة
   try {
     if (!state.fields) state.fields = await api.ctrlFields(device());
+    if (stale()) return;
     c.field = findField(state.fields, isOutputPriority);
     c.chgField = findField(state.fields, isChargerPriority);
     if (!c.field) throw new Error('هذا الجهاز لا يتيح تغيير أولوية مصدر الخرج عن بُعد.');
@@ -2236,7 +2243,8 @@ async function loadPower(force = false) {
     c.curAt = Date.now();
     c.chgCur = null;
     if (c.chgField) { try { c.chgCur = matchItem(c.chgField.item, await readFresh(c.chgField)); } catch { /* للعرض فقط */ } }
-  } catch (e) { c.error = e.message; }
+  } catch (e) { if (stale()) return; c.error = e.message; }
+  if (stale()) return;
   c.loading = false;
   if (leaf() === 'power') render();
 }
@@ -2289,7 +2297,7 @@ AFTER.power = () => {
   bindGoto();
   if (c.edit?.mode === 'smart' && !state.rep.fc && !state.demo) loadTwoWeeks();
   // حالة الجدولة والإدارة الذكية وسجلهما من أندرويد
-  if (c.field && !c.nativeAt) { c.nativeAt = Date.now(); control.status().then((ns) => { c.native = ns; if (leaf() === 'power') render(); }).catch(() => {}); }
+  if (c.field && !c.nativeAt) { c.nativeAt = Date.now(); control.status().then((ns) => { if (state.ctl !== c) return; c.native = ns; if (leaf() === 'power') render(); }).catch(() => {}); }
   if (!state.demo && !state.model?.stale && !c.field && !c.error && !c.loading) loadPower();
   const retry = $('#ctlRetry') || $('#ctlRead');
   if (retry) retry.onclick = () => { c.result = null; loadPower(true); };
@@ -2306,6 +2314,7 @@ AFTER.power = () => {
       if ((ctlCfg()?.mode || 'manual') !== 'manual') control.manualOverride().catch(() => {});
       const field = c.field;
       const res = await changeAndVerify({ read: () => readFresh(field), send: (key) => api.setCtrl(device(), field.id, key), items: field.item, key: it.key, delayMs: isNative ? 4000 : store.get('devCtlDelayMs', 4000) });
+      if (state.ctl !== c) return; // بُدّل الجهاز أثناء التحقق
       c.busy = null; c.result = res;
       if (res.after) { c.cur = res.after; c.curAt = Date.now(); }
       if (res.status !== 'same') {
@@ -2375,7 +2384,12 @@ function smartSuggestion() {
 
 function ctlSection(c) {
   const items = c.field.item;
-  const saved = ctlCfg() || ctlDefaults(items);
+  const stored = ctlCfg() || ctlDefaults(items);
+  // أندرويد هو المرجع لما يُنفَّذ فعلاً: إعداد محفوظ هنا لا يُعرض «فعّالاً» إن لم يكن هو ما يعمل
+  const act = c.native?.active;
+  const offHere = act && stored.mode !== 'manual' && (act.mode === 'manual' || String(act.sn) !== String(sn()));
+  const saved = offHere ? { ...stored, mode: 'manual' } : stored;
+  const otherActive = act && act.mode !== 'manual' && act.sn && String(act.sn) !== String(sn()) ? act : null;
   const e = c.edit || (c.edit = JSON.parse(JSON.stringify(saved)));
   const opt = (sel) => items.map((it) => `<option value="${esc(it.key)}" ${String(it.key) === String(sel) ? 'selected' : ''}>${esc(optionAr(it.val))}</option>`).join('');
   const ns = c.native || {};
@@ -2446,6 +2460,8 @@ function ctlSection(c) {
   return `
   <h3 class="sec-h">نمط التحكم</h3>
   <div class="seg ctl-mode">${CTL_MODES.map(([k, l]) => `<button class="${e.mode === k ? 'on' : ''}" data-mode="${k}">${l}</button>`).join('')}</div>
+  ${otherActive ? `<p class="note warn ctl-other">${icons.warn}<span>التحكم التلقائي يعمل الآن على جهاز آخر (<bdi>${esc(otherActive.sn)}</bdi>). يعمل التحكم على جهاز واحد فقط، وتفعيله هنا يوقفه هناك.</span></p>` : ''}
+  ${offHere && !otherActive ? `<p class="note warn ctl-off">${icons.warn}<span>إعداد ${esc(CTL_MODES.find((m) => m[0] === stored.mode)?.[1] || '')} محفوظ لهذا الجهاز لكنه غير مفعّل في الهاتف. احفظه من جديد لتفعيله.</span></p>` : ''}
   ${status}${perms}
   ${e.mode === 'smart' ? `<section class="card"><label><input id="ctlDryRun" type="checkbox" ${e.dryRun !== false ? 'checked' : ''}> وضع تجربة: تسجيل القرارات وأسبابها دون إرسال أوامر</label><p class="hint">لا تُرسل أوامر في هذا الوضع حتى عند إغلاق التطبيق. يُحفظ كل فحص بوقته وسببه وقراءته (آخر 200 فحص، والفحوص المتطابقة المتتالية تُجمع في سطر مع عددها) في «سجل الفحوص» أدناه. إلغاء التجربة والحفظ يسمح بالتنفيذ الحقيقي، ويبدأ عدّ القراءات المتتالية من جديد.</p></section>` : ''}
   ${editSchedule}${editSmart}
@@ -2503,6 +2519,8 @@ function bindCtl(c) {
   if (bt) bt.onclick = () => control.openBatterySettings();
   const save = $('#ctlSave');
   if (save) save.onclick = async () => {
+    // نعرف أولاً ما يعمل في الهاتف الآن (قد يكون جهازاً آخر)
+    if (!c.native?.active) { try { c.native = await control.status(); } catch { /* يُرفض الحفظ لاحقاً إن تعذّر */ } }
     let summary;
     if (e.mode === 'schedule') {
       if (!e.slots.length) return toast('أضف قاعدة واحدة على الأقل', 'bad');
@@ -2519,14 +2537,41 @@ function bindCtl(c) {
       if (e.gapMin < 15 || e.gapMin > 360) return toast('مدة الانتظار بين 15 و360 دقيقة', 'bad');
       summary = `${e.dryRun !== false ? 'تجربة دون أوامر: القرار المقترح' : 'يتحول تلقائياً'} إلى <b>${esc(itemLabel(items, e.gridKey))}</b> عند ${e.low}% أو أقل (والشبكة موجودة والألواح لا تغطي الحمل)، ويعود إلى <b>${esc(itemLabel(items, e.solarKey))}</b> عند ${e.target}%، وبين تحويلين ${e.gapMin} دقيقة على الأقل.`;
     } else summary = 'يتوقف التحويل التلقائي، وتبقى على الوضع الحالي حتى تغيّره بنفسك.';
+    const act = c.native?.active;
+    const other = e.mode !== 'manual' && act && act.mode !== 'manual' && act.sn && String(act.sn) !== String(sn()) ? act.sn : null;
+    if (other) summary += `<br><b>سيتوقف التحكم التلقائي على الجهاز الآخر (<bdi>${esc(other)}</bdi>)</b>، لأن التحكم يعمل على جهاز واحد فقط.`;
     if (!(await confirmDialog(e.mode === 'manual' ? 'إيقاف التحكم التلقائي' : 'تفعيل ' + CTL_MODES.find((m) => m[0] === e.mode)[1], summary + (e.mode === 'manual' ? '' : '<br>التحويل اليدوي يوقف الجدولة حتى موعدها التالي، والإدارة الذكية ساعتين.')))) return;
+    if (state.ctl !== c) return; // بُدّل الجهاز أثناء نافذة التأكيد
     const cfg = JSON.parse(JSON.stringify(e));
     delete cfg.tuned;
-    store.set('ctlcfg.' + sn(), cfg);
-    try { c.native = await control.configure(nativeCtlConfig(cfg)); } catch (err) { toast(err.message, 'bad'); }
+    const mySn = sn();
+    // إيقاف جهاز لا يعمل عليه التحكم أصلاً لا يجوز أن يوقف جهازاً آخر
+    const nativeCfg = cfg.mode === 'manual' && act && String(act.sn) !== String(mySn) && act.mode !== 'manual' ? null : nativeCtlConfig(cfg);
+    save.disabled = true;
+    let ns;
+    try {
+      ns = nativeCfg ? await control.configure(nativeCfg) : c.native;
+    } catch (err) {
+      // لا رسالة نجاح ولا حفظ: ما يُعرض يبقى مطابقاً لما ينفّذه الهاتف
+      if (state.ctl === c) { save.disabled = false; }
+      toast(`لم يُحفظ: ${err.message || 'رفض الهاتف الإعداد'}`, 'bad');
+      return;
+    }
+    // التأكد من أن ما يعمل في الهاتف هو ما طلبناه
+    const a = ns?.active;
+    if (nativeCfg && a && (a.mode !== cfg.mode || (cfg.mode !== 'manual' && String(a.sn) !== String(mySn)))) {
+      if (state.ctl === c) save.disabled = false;
+      toast('لم يؤكد الهاتف الإعداد الجديد، فلم يُعتمد', 'bad');
+      return;
+    }
+    store.set('ctlcfg.' + mySn, cfg);
+    // الجهاز الآخر لم يعد فعّالاً: يُحفظ عنده يدوي حتى لا يظهر «فعّالاً» وهو ليس كذلك
+    if (other) { const o = store.get('ctlcfg.' + other, null); if (o) store.set('ctlcfg.' + other, { ...o, mode: 'manual' }); }
+    if (state.ctl !== c) return;
+    c.native = ns;
     c.edit = null;
     logEvent('set', 'info', 'نمط التحكم', CTL_MODES.find((m) => m[0] === cfg.mode)[1]);
-    toast(cfg.mode === 'manual' ? 'أُوقف التحكم التلقائي' : 'تم التفعيل', 'ok');
+    toast(cfg.mode === 'manual' ? 'أُوقف التحكم التلقائي' : 'تم التفعيل وأكّده الهاتف', 'ok');
     redraw();
   };
 }

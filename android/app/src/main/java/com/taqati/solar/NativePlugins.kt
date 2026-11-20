@@ -77,6 +77,8 @@ class ControlPlugin : Plugin() {
     @PluginMethod
     fun configure(call: PluginCall) {
         val config = call.getObject("config") ?: return call.reject("config مطلوب")
+        val parsed = try { CtlConfig.fromJson(config) } catch (e: Exception) { return call.reject("إعداد التحكم غير صالح") }
+        if (parsed.mode != "manual" && !parsed.valid) return call.reject("إعداد التحكم ناقص (الجهاز أو الأوضاع)، فلم يُفعَّل")
         val p = ControlStore.prefs(context)
         val old = p.getString(ControlStore.CONFIG, null)?.let { JSONObject(it) }
         val e = p.edit().putString(ControlStore.CONFIG, config.toString())
@@ -87,7 +89,8 @@ class ControlPlugin : Plugin() {
             val prev = CtlState.fromJson(p.getString(ControlStore.STATE, null))
             e.putString(ControlStore.STATE, CtlState(lastSwitchAt = prev.lastSwitchAt, pauseUntil = prev.pauseUntil).toJson().toString())
         }
-        e.apply()
+        // commit لا apply: لا نعيد «تم» قبل أن يُكتب الإعداد فعلاً
+        if (!e.commit()) return call.reject("تعذّر حفظ إعداد التحكم في الهاتف")
         MonitorWorker.ensureChannel(context)
         ControlScheduler.apply(context)
         if (config.optString("mode") != "manual") ControlScheduler.runNow(context)
@@ -142,6 +145,14 @@ class ControlPlugin : Plugin() {
             .put("nextAt", p.getLong("next_at", 0))
             .put("exact", ControlScheduler.canExact(context))
             .put("battery", ControlScheduler.ignoringBattery(context))
+            .put("active", activeOf(p.getString(ControlStore.CONFIG, null)))
+    }
+
+    /** الإعداد الذي ينفّذه أندرويد فعلاً: النمط ورقم الجهاز (مصدر الحقيقة لما يظهر «فعّالاً») */
+    private fun activeOf(json: String?): JSObject {
+        val o = try { json?.let { JSONObject(it) } } catch (e: Exception) { null } ?: return JSObject().put("mode", "manual")
+        return JSObject().put("mode", o.optString("mode", "manual")).put("sn", o.optJSONObject("device")?.optString("sn") ?: "")
+            .put("dryRun", o.optBoolean("dryRun", true))
     }
 }
 

@@ -87,15 +87,26 @@ export const updater = {
   },
 };
 
+const webStatus = () => {
+  const c = store.get('ctlNative', null);
+  return { log: [], state: {}, nextAt: 0, exact: true, battery: true, web: true,
+    active: { mode: c?.mode || 'manual', sn: c?.device?.sn || '', dryRun: c?.dryRun !== false } };
+};
+
 // الجدولة والإدارة الذكية: تُنفَّذ في أندرويد (تعمل والتطبيق مغلق). في المتصفح تُحفظ الإعدادات فقط
 export const control = {
   available: isNative,
   async configure(config) {
-    if (!isNative) { store.set('ctlNative', config); return { log: [], state: {}, nextAt: 0, exact: true, battery: true, web: true }; }
+    if (!isNative) {
+      // المتصفح: محاكاة لما يعيده أندرويد (للاختبار)، ومنها رفض الإعداد
+      if (store.get('devCtlReject', false)) throw new Error('رفض الهاتف الإعداد');
+      store.set('ctlNative', config);
+      return webStatus();
+    }
     return Control.configure({ config });
   },
   async status() {
-    if (!isNative) return { log: [], state: {}, nextAt: 0, exact: true, battery: true, web: true };
+    if (!isNative) return webStatus();
     return Control.status();
   },
   async manualOverride() { if (isNative) await Control.manualOverride(); },

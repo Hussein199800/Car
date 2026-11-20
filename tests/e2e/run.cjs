@@ -806,6 +806,31 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       check('نمط واحد فعّال: تفعيل الذكية أوقف الجدولة', (await text(page, '.ctl-now')).includes('الإدارة الذكية: تجربة دون أوامر') && !(await text(page, '.ctl-now')).includes('الجدولة'));
       await page.click('[data-mode="manual"]'); await page.click('#ctlSave'); await page.click('.modal [data-v="1"]'); await page.waitForTimeout(300);
       check('العودة للتحكم اليدوي توقف التلقائي', (await page.evaluate(() => JSON.parse(localStorage.getItem('taqati.ctlNative')).mode)) === 'manual' && !(await page.$('.ctl-now')));
+      // 3.14: رفض أندرويد للإعداد لا يُعرض نجاحاً ولا يُحفظ
+      await page.evaluate(() => localStorage.setItem('taqati.devCtlReject', 'true'));
+      await page.click('[data-mode="schedule"]'); await page.waitForTimeout(150);
+      await page.click('#ctlSave'); await page.click('.modal [data-v="1"]'); await page.waitForTimeout(300);
+      {
+        const last = await page.$$eval('.toast', (a) => a.map((e) => e.textContent).pop() || '');
+        const st = await page.evaluate(() => ({ n: JSON.parse(localStorage.getItem('taqati.ctlNative')).mode, s: Object.entries(localStorage).filter(([k]) => k.startsWith('taqati.ctlcfg.')).map(([, v]) => JSON.parse(v).mode) }));
+        check('رفض الهاتف للإعداد: رسالة رفض، لا «تم»، ولا يتغيّر المحفوظ', last.includes('لم يُحفظ') && !last.includes('تم') && st.n === 'manual' && st.s.every((m) => m === 'manual') && !!(await page.$('#ctlSave')), last + JSON.stringify(st));
+      }
+      await page.evaluate(() => localStorage.removeItem('taqati.devCtlReject'));
+      // جهاز آخر عليه التحكم: تحذير، وتفعيله هنا يوقفه هناك
+      await page.evaluate(() => { localStorage.setItem('taqati.ctlNative', JSON.stringify({ mode: 'schedule', device: { sn: 'OTHER-SN' } })); localStorage.setItem('taqati.ctlcfg.OTHER-SN', JSON.stringify({ mode: 'schedule', slots: [] })); window.__state.ctl.native = null; window.__state.ctl.nativeAt = 0; window.__render(); });
+      await page.waitForSelector('.ctl-other', { timeout: 3000 }).catch(() => null);
+      check('يظهر أن التحكم يعمل على جهاز آخر', (await text(page, '.ctl-other')).includes('OTHER-SN'));
+      await page.click('#ctlSave'); await page.waitForTimeout(150);
+      check('التأكيد ينبّه إلى إيقاف الجهاز الآخر', (await text(page, '.modal')).includes('سيتوقف التحكم التلقائي على الجهاز الآخر'));
+      await page.click('.modal [data-v="1"]'); await page.waitForTimeout(300);
+      {
+        const st = await page.evaluate(() => ({ n: JSON.parse(localStorage.getItem('taqati.ctlNative')), o: JSON.parse(localStorage.getItem('taqati.ctlcfg.OTHER-SN')).mode }));
+        check('جهاز تحكم فعّال واحد: انتقل التحكم لهذا الجهاز وأُوقف الآخر', st.n.mode === 'schedule' && st.n.device.sn !== 'OTHER-SN' && st.o === 'manual' && !(await page.$('.ctl-other')) && (await text(page, '.ctl-now')).includes('الجدولة فعّالة'), JSON.stringify(st));
+      }
+      // إعداد محفوظ لكن أندرويد على يدوي (مثلاً بعد خروج): لا يُعرض «فعّالاً»
+      await page.evaluate(() => { localStorage.setItem('taqati.ctlNative', JSON.stringify({ mode: 'manual' })); window.__state.ctl.native = null; window.__state.ctl.nativeAt = 0; window.__state.ctl.edit = null; window.__render(); });
+      await page.waitForSelector('.ctl-off', { timeout: 3000 }).catch(() => null);
+      check('إعداد غير مفعّل في الهاتف لا يظهر «فعّالاً»', !!(await page.$('.ctl-off')) && !(await page.$('.ctl-now')));
       check('بلا أخطاء JavaScript (التحكم)', page.errors.length === 0, page.errors.join(' | '));
       await page.context().close();
 
