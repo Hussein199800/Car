@@ -38,7 +38,8 @@ export function toEvents(alerts = [], faults = []) {
   for (const a of alerts.filter(Boolean)) {
     const cat = catOf(a);
     const ev = { ...(a.sn ? { sn: a.sn } : {}), cat, level: levelOf(a), title: a.title, body: a.body, at: a.at, read: a.read === true };
-    const i = events.findIndex((f) => !f.twin && f.cat === cat && Math.abs(f.at - a.at) <= TWIN_MS);
+    // التوأم من الجهاز نفسه فقط: تنبيهان لجهازين في اللحظة نفسها يبقيان حدثين
+    const i = events.findIndex((f) => !f.twin && f.cat === cat && (f.sn || '') === (a.sn || '') && Math.abs(f.at - a.at) <= TWIN_MS);
     if (i >= 0) events[i] = { ...ev, twin: true };
     else events.push(ev);
   }

@@ -214,6 +214,9 @@ test('ملخص الأيام الماضية يُخزَّن نهائياً فقط 
 
 test('تصدير CSV يقتبس الفواصل والأسطر', () => {
   assert.equal(toCsv(['a', 'b'], [['x,y', 'l1\r\nl2']]).replace(/^﻿/, ''), 'a,b\r\n"x,y","l1\r\nl2"');
+  // 3.14: علامات الصيغ تُعطَّل، والأرقام السالبة تبقى أرقاماً
+  const row = toCsv(['a'], [['=HYPERLINK("x")', ' +1+2', '\t@SUM(A1)', '-cmd', -929, '-12.5', 'Battery Mode']]).replace(/^﻿/, '').split('\r\n')[1];
+  assert.equal(row, `"'=HYPERLINK(""x"")",' +1+2,'\t@SUM(A1),'-cmd,-929,-12.5,Battery Mode`);
 });
 
 test('بطارية الاحتياط تُحسب على متوسط السحب الفعلي', () => {
@@ -400,6 +403,17 @@ test('أحداث الخلفية من Kotlin تُوحَّد عند الاستلا
   const many = Array.from({ length: LOG_CAP + 50 }, (_, i) => ({ cat: 'conn', level: 'info', title: 'x', body: '', at: i, read: true }));
   assert.equal(addEvents(many, fresh).length, LOG_CAP);
   assert.equal(addEvents(many, fresh)[0].at, at, 'الحدث الجديد في أول السجل');
+});
+
+test('3.14: دمج التنبيه بحدثه يخص الجهاز نفسه فقط', () => {
+  const at = 1_800_000_500_000;
+  const ev = toEvents(
+    [{ sn: 'A', title: 'انقطعت كهرباء الشبكة', kind: 'warn', at }, { sn: 'B', title: 'انقطعت كهرباء الشبكة', kind: 'warn', at }],
+    [{ sn: 'B', title: 'انقطاع كهرباء الشبكة', kind: 'grid', at }],
+  );
+  assert.equal(ev.length, 2, 'جهازان = حدثان');
+  assert.deepEqual(ev.map((e) => e.sn).sort(), ['A', 'B']);
+  assert.ok(ev.every((e) => e.title === 'انقطعت كهرباء الشبكة'));
 });
 
 // ---------- نسبة التغيّر في التقارير ----------

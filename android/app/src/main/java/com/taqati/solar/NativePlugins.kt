@@ -50,6 +50,7 @@ class MonitorPlugin : Plugin() {
     @PluginMethod
     fun widget(call: PluginCall) {
         fun int(k: String) = if (call.data.isNull(k)) null else call.data.optDouble(k).takeIf { !it.isNaN() }?.toInt()
+        if (call.getBoolean("clear", false) == true) { TaqatiWidget.clear(context); return call.resolve() }
         TaqatiWidget.push(context, WidgetState(int("soc"), int("batW"), int("loadW"), int("pvW"), call.getBoolean("stale", false) == true, call.data.optLong("at", System.currentTimeMillis())))
         call.resolve()
     }

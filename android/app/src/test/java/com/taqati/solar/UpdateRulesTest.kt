@@ -27,7 +27,10 @@ class UpdateRulesTest {
         assertEquals("النسخة المحمّلة ليست أحدث من المثبّتة", UpdateRules.reject(pkg, pkg, 8, 8, k, k))
         assertEquals("توقيع التحديث لا يطابق التطبيق المثبّت", UpdateRules.reject(pkg, pkg, 9, 8, setOf("aa"), k))
         assertEquals("الملف المحمّل ليس تطبيقاً صالحاً", UpdateRules.reject(null, pkg, 0, 8, null, k))
-        // توقيع غير مقروء: يبقى مثبّت أندرويد حارساً أخيراً
-        assertNull(UpdateRules.reject(pkg, pkg, 9, 8, null, k))
+        // الرفض عند الشك: توقيع غير مقروء أو فارغ (للتحديث أو للمثبّت)
+        val unread = "تعذّر التحقق من توقيع التحديث، فلم يُثبَّت"
+        assertEquals(unread, UpdateRules.reject(pkg, pkg, 9, 8, null, k))
+        assertEquals(unread, UpdateRules.reject(pkg, pkg, 9, 8, emptySet(), k))
+        assertEquals(unread, UpdateRules.reject(pkg, pkg, 9, 8, k, null))
     }
 }

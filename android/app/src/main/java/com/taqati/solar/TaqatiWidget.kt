@@ -56,8 +56,10 @@ object WidgetText {
         else -> "مستقرة"
     }
 
+    /** وقت مجهول (0 أو سالب) لا يُعرض كساعة حقيقية */
     fun time(s: WidgetState): String =
-        (if (s.stale) "غير متصل · " else "") + "آخر قراءة " + SimpleDateFormat("HH:mm", Locale.US).format(Date(s.at))
+        (if (s.stale) "غير متصل · " else "") +
+            (if (s.at <= 0) "وقت القراءة غير معروف" else "آخر قراءة " + SimpleDateFormat("HH:mm", Locale.US).format(Date(s.at)))
 }
 
 class TaqatiWidget : AppWidgetProvider() {
@@ -71,6 +73,14 @@ class TaqatiWidget : AppWidgetProvider() {
         // عزل اتجاه النسبة حتى لا تظهر «%67» في واجهة عربية
         private val LRI = Char(0x2066)
         private val PDI = Char(0x2069)
+
+        /** يمسح القراءة (خروج أو تبديل جهاز) فلا تبقى قراءة جهاز سابق على الشاشة */
+        fun clear(ctx: Context) {
+            MonitorStore.prefs(ctx).edit().remove(KEY).apply()
+            val mgr = AppWidgetManager.getInstance(ctx)
+            val ids = mgr.getAppWidgetIds(ComponentName(ctx, TaqatiWidget::class.java))
+            if (ids.isNotEmpty()) render(ctx, mgr, ids)
+        }
 
         /** يحفظ الحالة ويحدّث كل نسخ الأداة على الشاشة (إن وُجدت) */
         fun push(ctx: Context, s: WidgetState) {
@@ -86,8 +96,13 @@ class TaqatiWidget : AppWidgetProvider() {
             val s = WidgetState.fromJson(prefs.getString(KEY, null))?.revalidated(System.currentTimeMillis(), staleMin)
             val v = RemoteViews(ctx.packageName, R.layout.widget_taqati)
             if (s == null) {
+                // كل الخانات تُمسح، لا الأولى فقط
                 v.setTextViewText(R.id.w_soc, "طاقتي")
+                v.setTextViewText(R.id.w_state, "")
                 v.setTextViewText(R.id.w_bat, "افتح التطبيق مرة لتظهر القراءات هنا")
+                v.setTextViewText(R.id.w_load, "")
+                v.setTextViewText(R.id.w_pv, "")
+                v.setTextViewText(R.id.w_time, "")
             } else {
                 v.setTextViewText(R.id.w_soc, s.soc?.let { "$LRI$it%$PDI" } ?: "—")
                 v.setTextViewText(R.id.w_state, if (s.stale) "غير متصل" else "")

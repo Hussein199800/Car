@@ -341,6 +341,8 @@ function logout() {
   monitor.configure({ enabled: false }).catch(() => {});
   // لا يبقى عامل في الخلفية يرسل أوامر بجلسة خرج منها المستخدم
   control.configure({ mode: 'manual' }).catch(() => {});
+  monitor.widget({ clear: true }).catch(() => {});
+  state.widgetTs = null;
   state.ctl = null;
   Object.assign(state, { session: null, demo: false, devices: [], model: null, fields: null, tab: 'home', page: null, plant: undefined, collector: undefined });
   state.rep = { ...state.rep, day: null, week: null, month: null, adv: null };
@@ -546,6 +548,8 @@ function switchDevice(snv) {
   state.plant = undefined;
   state.collector = undefined;
   state.ctl = null; // حقول التحكم ووضعه ونتائجه تخص الجهاز السابق
+  state.widgetTs = null;
+  monitor.widget({ clear: true }).catch(() => {});
   resetAlertState();
   state.rep = { ...state.rep, day: null, week: null, month: null, adv: null, year: null, srv: null };
   loadCache();
@@ -651,7 +655,8 @@ function loadCache() {
 function pushWidget(m) {
   if (state.demo || !m || `${m.ts}:${m.stale}` === state.widgetTs) return;
   state.widgetTs = `${m.ts}:${m.stale}`;
-  monitor.widget({ soc: m.soc, batW: m.batW, loadW: m.outW, pvW: m.pvW, stale: !!m.stale, at: m.ts || Date.now() }).catch(() => {});
+  // وقت مجهول يبقى 0 (لا «الآن»): الأداة تكتب «وقت القراءة غير معروف» وتعدّ القراءة غير حية
+  monitor.widget({ soc: m.soc, batW: m.batW, loadW: m.outW, pvW: m.pvW, stale: !!m.stale || !m.ts, at: m.ts || 0 }).catch(() => {});
 }
 
 async function refresh(manual = false) {

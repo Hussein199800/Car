@@ -163,7 +163,11 @@ export function cacheSummary(sn, sum) {
 // ---------- التصدير ----------
 export function toCsv(header, rows) {
   const q = (v) => {
-    const s = v === null || v === undefined ? '' : String(v);
+    // الأرقام (ومنها السالبة كتفريغ البطارية) تبقى أرقاماً
+    if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '';
+    let s = v === null || v === undefined ? '' : String(v);
+    // نص يبدأ بعلامة صيغة (ولو بعد مسافات أو محارف ضابطة) لا يُنفَّذ في برامج الجداول
+    if (!/^-?\d+(\.\d+)?$/.test(s) && /^[\s\u0000-\u001f]*[=+\-@]/.test(s)) s = "'" + s;
     return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   return '﻿' + [header, ...rows].map((r) => r.map(q).join(',')).join('\r\n');

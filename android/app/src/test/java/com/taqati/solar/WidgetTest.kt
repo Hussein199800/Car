@@ -28,6 +28,10 @@ class WidgetTest {
         assertEquals("مستقرة", WidgetText.battery(base.copy(batW = 3)))
         assertEquals("آخر قيمة مسجّلة", WidgetText.battery(base.copy(stale = true)))
         assertTrue(WidgetText.time(base.copy(stale = true)).startsWith("غير متصل"))
+        // وقت مجهول لا يظهر كساعة (لا 1970)، ويُعدّ قراءة غير حية
+        val unknown = base.copy(at = 0)
+        assertEquals("وقت القراءة غير معروف", WidgetText.time(unknown))
+        assertTrue(unknown.revalidated(System.currentTimeMillis(), 15).stale)
     }
 
     @Test
