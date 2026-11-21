@@ -77,8 +77,8 @@ body {
 .tabbar .badge { top: 4px; }
 
 /* ---------- البطاقات والأزرار والمقاطع ---------- */
-.card, .stat, .lcard, .alert { background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow), var(--glow); backdrop-filter: none; -webkit-backdrop-filter: none; }
-:root[data-theme='dark'] .card, :root[data-theme='dark'] .stat, :root[data-theme='dark'] .lcard, :root[data-theme='dark'] .alert { background: linear-gradient(160deg, var(--card-hi), var(--surface)); }
+.card:not(.flow-card), .stat, .lcard, .alert { background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow), var(--glow); backdrop-filter: none; -webkit-backdrop-filter: none; }
+:root[data-theme='dark'] .card:not(.flow-card), :root[data-theme='dark'] .stat, :root[data-theme='dark'] .lcard, :root[data-theme='dark'] .alert { background: linear-gradient(160deg, var(--card-hi), var(--surface)); }
 .card-h h2 { font-weight: 800; }
 .sec-h { font-size: calc(19px * var(--fs, 1)); margin-top: 24px !important; }
 .btn.primary { background: var(--pri); color: var(--pri-ink); box-shadow: 0 10px 24px -10px var(--pri); }
@@ -202,13 +202,6 @@ a, .link { color: var(--pri); }
 }
 @media (max-width: 400px) { .tabbar button span { font-size: calc(10.5px * var(--fs, 1)); } }
 
-/* بطاقات التفاصيل في الرئيسية: سطح البطاقة نفسه وأيقونة ملوّنة (بدل التدرج الكامل) */
-.gcard { background: var(--card); color: var(--txt); border: 1px solid var(--line); box-shadow: var(--shadow), var(--glow); }
-:root[data-theme='dark'] .gcard { background: linear-gradient(160deg, var(--card-hi), var(--surface)); }
-.gcard .g-deco { color: var(--g2); opacity: .08; }
-.gcard .g-ic { color: #fff; background: linear-gradient(145deg, var(--g1), var(--g2)); box-shadow: 0 8px 16px -8px var(--g2); }
-.gcard small { color: var(--mute); opacity: 1; }
-.gcard .ib { color: var(--mute) !important; }
 
 /* ================= الليلي: زجاج فحمي وتوهّج خفيف (الهوية الأساسية) ================= */
 :root[data-theme='dark'] body {
@@ -223,8 +216,8 @@ a, .link { color: var(--pri); }
   --glass-line: #ffffff14;
   --sheen: inset 0 1px 0 #ffffff17, inset 0 0 0 1px #ffffff08;
 }
-:root[data-theme='dark'] .card, :root[data-theme='dark'] .stat, :root[data-theme='dark'] .lcard, :root[data-theme='dark'] .alert,
-:root[data-theme='dark'] .kpi, :root[data-theme='dark'] .gcard, :root[data-theme='dark'] .sc, :root[data-theme='dark'] .inv-hero {
+:root[data-theme='dark'] .card:not(.flow-card), :root[data-theme='dark'] .stat, :root[data-theme='dark'] .lcard, :root[data-theme='dark'] .alert,
+:root[data-theme='dark'] .sc, :root[data-theme='dark'] .inv-hero {
   background: var(--glass); border-color: var(--glass-line); box-shadow: 0 18px 36px -18px #000, var(--sheen);
 }
 :root[data-theme='dark'] .topbar { background: #050607cc; }
@@ -263,3 +256,27 @@ a, .link { color: var(--pri); }
 
 /* الحاسبة: بطاقة النتيجة الرئيسية تتوهج */
 :root[data-theme='dark'] .res-main { box-shadow: 0 0 26px -10px var(--pri), var(--sheen); }
+
+/* ================= 4.0.1: مسافات واضحة بين البطاقات ================= */
+.home-grid > * + *, .home-grid .col-a > * + *, .home-grid .col-b > * + * { margin-top: 14px; }
+html.wide .home-grid > * + * { margin-top: 0; }
+.gcards, .kpis, .stats, .lcards, .ring-row, .shortcuts { gap: 12px; }
+
+.hero-seg button { font-size: calc(13.5px * var(--fs, 1)); padding-inline: 2px; }
+.hero-day { margin-top: 10px !important; }
+.hero-day .day-label { position: relative; display: grid; place-items: center; cursor: pointer; }
+.hero-day .day-label input { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: pointer; }
+.rep-more { justify-content: space-between; font-weight: 700; padding: 14px 16px; color: var(--txt); }
+.rep-more .l-go { width: 22px; height: 22px; flex: none; color: var(--mute); }
+
+/* ================= 4.0.2: ألوان متنوعة وزاهية في الرئيسية (لكل بطاقة لونها) ================= */
+.kpi.k-solar { --g1: #fbbf24; --g2: #f97316; }
+.kpi.k-load { --g1: #38bdf8; --g2: #2563eb; }
+.kpi.k-chg, .kpi.k-bat { --g1: #34d399; --g2: #059669; }
+.kpi.k-dis { --g1: #fb923c; --g2: #e11d48; }
+.kpi, :root[data-theme='dark'] .kpi { background: linear-gradient(150deg, var(--g1), var(--g2)) !important; color: #fff; border: 0;
+  box-shadow: 0 14px 26px -14px var(--g2), inset 0 1px 0 #ffffff40 !important; }
+.kpi small, .kpi .k-u { color: #ffffffd9 !important; }
+.kpi b { color: #fff !important; }
+.kpi .k-ic { color: #fff !important; background: #ffffff33; border-radius: 12px; width: 38px; height: 38px; padding: 8px; filter: none !important; }
+.kpi.stale { filter: grayscale(.85); opacity: .8; }

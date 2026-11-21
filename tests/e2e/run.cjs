@@ -364,8 +364,8 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       // مؤشر الاستقلالية في رأس تبويب التقارير، والضغط عليه يفتح الملاحظات
       await page.click('[data-tab=reports]');
       await page.waitForSelector('#view .rep-hero .rh-big', { timeout: 30000 }).catch(() => null);
-      const order = await page.$$eval('#view > div > *', (a) => a.slice(0, 3).map((e) => e.className));
-      check('التقارير: العنوان ثم يوم/أسبوع/شهر ثم الرقم الرئيسي والرسم', order[0].includes('big-title') && order[1].includes('hero-seg') && order[2].includes('rep-hero') && !!(await page.$('#cHero')), order.join('|'));
+      const order = await page.$$eval('#view > div > *', (a) => a.slice(0, 4).map((e) => e.className));
+      check('التقارير: العنوان ثم يوم/أسبوع/شهر ثم الرقم الرئيسي والرسم', order[0].includes('big-title') && order[1].includes('hero-seg') && order[2].includes('hero-day') && !!(await page.$('.rep-hero .rh-big')) && !!(await page.$('#cHero')), order.join('|'));
       check('حلقة الاستقلالية بنسبة', /\d+%/.test(await text(page, '.ring-card.r-green .rc span')), await text(page, '.ring-card.r-green'));
       await page.click('.ring-card[data-page=advisor]');
       await page.waitForSelector('.adv-tip', { timeout: 15000 }).catch(() => null);
@@ -860,7 +860,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       // 3.14: تقرير لفترة تختارها، والكلفة بعملة المستخدم وسعر الصرف
       await d.evaluate(() => { Object.assign(window.__state.prefs, { price: 0.12, currency: 'USD', exRate: 13000 }); window.__nav('reports', null); });
       await d.waitForTimeout(200);
-      check('«تقرير لفترة تختارها» أول التقارير', (await d.$eval('.lcard', (e) => e.dataset.page)) === 'period');
+      check('أنواع التقارير الخمسة في مكان واحد: يوم، أسبوع، شهر، سنة، فترة', (await d.$$eval('[data-hk]', (b) => b.map((x) => x.dataset.hk).join()).catch(() => '')) === 'day,week,month,year,period');
       await d.evaluate(() => window.__nav('reports', 'period'));
       await d.waitForSelector('.per-key', { timeout: 60000 }).catch(() => null);
       {

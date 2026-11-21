@@ -47,7 +47,7 @@ Chart.register({ id: 'replayCursor', afterDraw(chart) {
 } });
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '4.0.0';
+const VERSION = '4.0.2';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -457,9 +457,10 @@ function openTour() {
 
 // ما الجديد في هذا الإصدار: يظهر مرة واحدة بعد التحديث
 const WHATS_NEW = [
-  'الإدارة الذكية: «قراءتان متتاليتان» صارت تعني قراءتين مختلفتين فعلاً، فلا يُرسل أمر بناءً على القراءة نفسها عند الخروج من وضع التجربة.',
-  'سجل الفحوص: كل فحص للإدارة الذكية بوقته وسببه وقراءته، حتى عندما لا يُتخذ قرار.',
-  'محاكاة الجهاز تتوقف عن عرض التقديرات لحظة تقادم القراءة، دون انتظار تحديث جديد.',
+  'تصميم جديد كلياً: عاجي وأخضر عميق نهاراً، وزجاج فحمي بتوهج خفيف ليلاً، مع شريط تنقل عائم بخمسة تبويبات.',
+  'الرئيسية: الألواح والاستهلاك وشحن البطارية أو تفريغها بنظرة واحدة تحت المشهد. المشاهد الثلاثة كما هي.',
+  'التقارير كلها في مكان واحد: يوم (بأي تاريخ) وأسبوع وشهر وسنة وفترة تختارها، مع رسم تفاعلي ومقارنة وCSV وPDF.',
+  'الحاسبة صارت تبويباً، والتنبيهات مجمّعة حسب اليوم، و«المزيد» يعرض الإنفرتر وحالته واختصارات سريعة.',
 ];
 function openWhatsNew() {
   store.set('seenVersion', VERSION);
@@ -1020,9 +1021,6 @@ function viewHome() {
   <div class="home-grid"><div class="col-a">
   ${statusBar(m, modeText, modeCls, e, live)}
   ${scene(m, live, isLine)}
-
-
-  </div>
   ${(() => {
     // بنظرة واحدة: من أين تأتي الكهرباء، وكم يسحب البيت، وهل البطارية تشحن أم تُفرّغ
     const bw = live ? m.batW : null;
@@ -1035,6 +1033,7 @@ function viewHome() {
       ${tile('battery', bw > 10 ? 'k-chg' : bw < -10 ? 'k-dis' : 'k-bat', icons.battery, bw > 10 ? 'شحن البطارية' : bw < -10 ? 'تفريغ البطارية' : 'البطارية', bw == null || Math.abs(bw) <= 10 ? (live ? 'مستقرة' : '—') : kw(bw), bw == null || Math.abs(bw) <= 10 ? '' : ku(bw))}
     </div>`;
   })()}
+  </div>
   <section class="card battery-card hg-bat ${live ? '' : 'stale'}" data-page="battery">
     <div class="ring gauge">
       <svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="52" class="ring-bg"/>
@@ -1381,23 +1380,21 @@ function viewReports() {
   const urgent = urgentCount();
   return `
   ${reportsHero()}
-  <h3 class="sec-h">تقارير مفصّلة${infoBtn('report')}</h3>
+  <h3 class="sec-h">تحليلات${infoBtn('report')}</h3>
   ${listCards([
-    { page: 'period', title: 'تقرير لفترة تختارها', sub: 'من تاريخ إلى تاريخ: الإنتاج والاستهلاك وسحب الشبكة وكلفتها في صفحة واحدة', icon: icons.calendar, color: 'c-green' },
     { page: 'advisor', title: 'ملاحظات على منظومتك', sub: 'ما يحتاج انتباهك الآن، واستخدام البطارية وتوصيات آخر 7 أيام', icon: icons.bulb, color: urgent ? 'c-pink' : 'c-green', badge: urgent ? `${urgent} مهم` : '' },
+    { page: 'gridmeter', title: 'كهرباء الشبكة', sub: 'ما سحبته من الشبكة يومياً وأسبوعياً وشهرياً وكلفته (تقدير)', icon: icons.grid, color: 'c-violet' },
     { page: 'forecast', title: 'تقدير الأسبوعين القادمين', sub: 'مقارنة آخر أسبوعين، والعجز المتوقع، واقتراح احتياطي البطارية', icon: icons.chart, color: 'c-sky' },
-    { page: 'gridmeter', title: 'كهرباء الشبكة', sub: 'ما سحبته من الشبكة يومياً وأسبوعياً وشهرياً (تقدير)', icon: icons.grid, color: 'c-violet' },
-    { page: 'day', title: 'التقرير اليومي', sub: 'رسوم القدرة والبطارية والكهرباء ليوم محدد', icon: icons.calendar, color: 'c-amber' },
-    { page: 'week', title: 'التقرير الأسبوعي', sub: 'الإنتاج والاستهلاك لكل يوم، والتغيّر عن الأسبوع السابق', icon: icons.week, color: 'c-sky' },
-    { page: 'month', title: 'التقرير الشهري', sub: 'مجموع الشهر وأفضل يوم، والتغيّر عن الشهر السابق', icon: icons.month, color: 'c-green' },
-    cap('year') === false ? null : { page: 'year', title: 'التقرير السنوي', sub: 'إنتاج كل شهر، ومجموع ما أنتجته الألواح', icon: icons.chart, color: 'c-violet' },
   ].filter(Boolean))}`;
 }
 
 // ================= واجهة التقارير: يوم / أسبوع / شهر برقم رئيسي ورسم تفاعلي ومقارنة =================
-const HERO_KINDS = [['day', 'اليوم'], ['week', 'الأسبوع'], ['month', 'الشهر']];
+const HERO_KINDS = [['day', 'يوم'], ['week', 'أسبوع'], ['month', 'شهر'], ['year', 'سنة'], ['period', 'فترة']];
+// هل نوع التقرير هذا معروض الآن (صفحة مستقلة أو داخل واجهة التقارير)؟
+const repShowing = (k) => leaf() === k || (state.tab === 'reports' && !state.page && (state.rep.heroKind || 'day') === k);
 function heroDates(kind) {
-  const n = kind === 'day' ? 1 : kind === 'week' ? 7 : 30;
+  if (kind === 'day') { const d = state.rep.heroDate || today(); return { cur: [d], prev: [addDays(d, -1)] }; }
+  const n = kind === 'week' ? 7 : 30;
   const cur = Array.from({ length: n }, (_, i) => today(i - n + 1));
   const prev = Array.from({ length: n }, (_, i) => today(i - 2 * n + 1));
   return { cur, prev };
@@ -1406,7 +1403,8 @@ async function loadHero(kind) {
   const token = Symbol('hero');
   const { cur, prev } = heroDates(kind);
   serverHistFails = 0;
-  state.rep.hero = { kind, loading: true, token, pct: 0 };
+  const date = kind === 'day' ? cur[0] : null;
+  state.rep.hero = { kind, date, loading: true, token, pct: 0 };
   render();
   const all = await loadSummaries([...cur, ...prev], (done, total) => {
     if (state.rep.hero?.token !== token) return;
@@ -1415,9 +1413,9 @@ async function loadHero(kind) {
     if (p) p.style.width = state.rep.hero.pct + '%';
   });
   let samples = null;
-  if (kind === 'day') { try { samples = (await daySamples(today())).samples; } catch { samples = []; } }
+  if (kind === 'day') { try { samples = (await daySamples(date)).samples; } catch { samples = []; } }
   if (state.rep.hero?.token !== token) return;
-  state.rep.hero = { kind, cur: all.slice(0, cur.length), prev: all.slice(cur.length), samples, at: Date.now() };
+  state.rep.hero = { kind, date, cur: all.slice(0, cur.length), prev: all.slice(cur.length), samples, at: Date.now() };
   if (state.tab === 'reports' && !state.page) render();
 }
 
@@ -1425,13 +1423,23 @@ function reportsHero() {
   const kind = state.rep.heroKind || 'day';
   const h = state.rep.hero;
   const seg = `<div class="seg hero-seg">${HERO_KINDS.map(([k, l]) => `<button data-hk="${k}" class="${kind === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
-  if (!h || h.kind !== kind || h.loading) {
-    return seg + `<section class="card rep-hero"><p class="hint center">جارٍ تجميع القراءات…</p><div class="bar"><i id="heroProg" style="width:${h?.pct || 0}%"></i></div></section>`;
+  // السنة والفترة المخصّصة: تُعرض هنا مباشرة، فلا حاجة لصفحات منفصلة
+  if (kind === 'year') return seg + pageYear();
+  if (kind === 'period') return seg + pagePeriod();
+  const hd = state.rep.heroDate || today();
+  const dayNav = kind === 'day' ? `<section class="day-nav card hero-day">
+    <button class="icon-btn" data-hd="-1" aria-label="اليوم السابق">${icons.chevR}</button>
+    <label class="day-label"><b>${esc(dateLabel(hd))}</b><input type="date" id="heroDate" value="${hd}" max="${today()}" aria-label="اختيار اليوم"></label>
+    <button class="icon-btn" data-hd="1" aria-label="اليوم التالي" ${hd >= today() ? 'disabled' : ''}>${icons.chevL}</button>
+  </section>` : '';
+  if (!h || h.kind !== kind || h.loading || (kind === 'day' && h.date !== hd)) {
+    return seg + dayNav + `<section class="card rep-hero"><p class="hint center">جارٍ تجميع القراءات…</p><div class="bar"><i id="heroProg" style="width:${h?.pct || 0}%"></i></div></section>`;
   }
   const t = totals(h.cur), p = totals(h.prev);
-  const prevName = { day: 'أمس', week: 'الأسبوع السابق', month: 'الـ30 يوماً السابقة' }[kind];
+  const prevName = { day: hd === today() ? 'أمس' : 'اليوم السابق', week: 'الأسبوع السابق', month: 'الـ30 يوماً السابقة' }[kind];
+  const isToday = kind === 'day' && hd === today();
   // اليوم لم يكتمل: لا نسبة تغيّر مضللة مقابل يوم كامل
-  const chg = (k, better) => { const c = p.days && kind !== 'day' ? change(t[k], p[k], better) : null; return c ? `<em class="trend ${c.cls}">${c.text}</em>` : ''; };
+  const chg = (k, better) => { const c = p.days && !isToday ? change(t[k], p[k], better) : null; return c ? `<em class="trend ${c.cls}">${c.text}</em>` : ''; };
   const cover = t.load > 0 ? Math.min(100, (t.pv / t.load) * 100) : null;
   // الحلقة الأولى تفتح «ملاحظات على منظومتك» (التفاصيل والتوصيات)
   const ring = (v, cls, label, sub, page = '') => {
@@ -1443,10 +1451,10 @@ function reportsHero() {
   };
   const row = (label, k, better, unit = 'ك.و.س') => `<div class="cmp-r"><span>${label}</span><b><bdi>${t[k] == null ? '—' : fmt.kwh(t[k])}</bdi> <small>${unit}</small></b><small class="muted">${prevName}: <bdi>${p[k] == null || !p.days ? '—' : fmt.kwh(p[k])}</bdi></small>${chg(k, better)}</div>`;
   const gc = t.grid != null ? costOf(t.grid, state.prefs) : null;
-  return seg + `
+  return seg + dayNav + `
   <section class="card rep-hero">
-    <small class="rh-l">إنتاج الألواح · ${kind === 'day' ? 'حتى الآن' : kind === 'week' ? 'آخر 7 أيام' : 'آخر 30 يوماً'}</small>
-    <div class="rh-big"><b><bdi>${fmt.kwh(t.pv)}</bdi></b><span>كيلوواط ساعة</span>${kind === 'day' ? '' : chg('pv', 'up')}</div>
+    <small class="rh-l">إنتاج الألواح · ${isToday ? 'حتى الآن' : kind === 'day' ? 'اليوم كاملاً' : kind === 'week' ? 'آخر 7 أيام' : 'آخر 30 يوماً'}</small>
+    <div class="rh-big"><b><bdi>${fmt.kwh(t.pv)}</bdi></b><span>كيلوواط ساعة</span>${chg('pv', 'up')}</div>
     <div class="chart-box hero-chart"><canvas id="cHero"></canvas></div>
     <small class="hint">المس الرسم لترى ${kind === 'day' ? 'الوقت' : 'اليوم'} والقيمة.</small>
   </section>
@@ -1454,18 +1462,29 @@ function reportsHero() {
   <section class="card cmp-card"><div class="card-h"><h2>مقارنة بـ${prevName}</h2></div>
     ${row('الإنتاج', 'pv', 'up')}${row('الاستهلاك', 'load', 'down')}${row('سحب الشبكة (تقدير)', 'grid', 'down')}
     ${gc ? `<div class="cmp-r"><span>كلفة الشبكة</span><b><bdi>${esc(costText(gc))}</bdi></b></div>` : ''}
-    ${kind === 'day' ? '<p class="hint">اليوم لم ينتهِ بعد، فالمقارنة مع أمس كاملاً للاطلاع فقط.</p>' : ''}
+    ${isToday ? '<p class="hint">اليوم لم ينتهِ بعد، فالمقارنة مع أمس كاملاً للاطلاع فقط.</p>' : ''}
   </section>
+  <button class="lcard rep-more" data-page="${kind}">${kind === 'day' ? 'كل رسوم اليوم: البطارية والجهد وإعادة المشاهدة' : kind === 'week' ? 'التقرير الأسبوعي المفصّل: كل يوم والتغيّر' : 'التقرير الشهري المفصّل: مجموع الشهر وأفضل يوم'}<span class="l-go">${icons.chevL}</span></button>
   <div class="rep-actions"><button class="btn soft" id="heroCsv">${icons.download} تصدير CSV</button><button class="btn primary" id="heroPdf">${icons.download} مشاركة PDF</button></div>`;
 }
 
 AFTER.reports = () => {
   bindGoto();
-  document.querySelectorAll('[data-hk]').forEach((b) => { b.onclick = () => { state.rep.heroKind = b.dataset.hk; loadHero(b.dataset.hk); }; });
+  document.querySelectorAll('[data-hk]').forEach((b) => { b.onclick = () => { state.rep.heroKind = b.dataset.hk; render(); }; });
   const kind = state.rep.heroKind || 'day';
+  if (kind === 'year') { AFTER.year(); return; }
+  if (kind === 'period') { AFTER.period(); return; }
+  const moveDay = (d) => { if (!d || d > today()) return; state.rep.heroDate = d; loadHero('day'); };
+  document.querySelectorAll('[data-hd]').forEach((b) => { b.onclick = () => moveDay(addDays(state.rep.heroDate || today(), Number(b.dataset.hd))); });
+  const hdIn = $('#heroDate');
+  if (hdIn) hdIn.onchange = () => moveDay(hdIn.value);
+  const more = $('.rep-more');
+  if (more && kind === 'day') more.addEventListener('click', () => { state.rep.dayDate = state.rep.heroDate || today(); state.rep.day = null; }, true);
   const h = state.rep.hero;
-  if (!h || (!h.loading && (h.kind !== kind || Date.now() - h.at > 10 * 60000))) { loadHero(kind); return; }
+  const hd = state.rep.heroDate || today();
+  if (!h || (!h.loading && (h.kind !== kind || (kind === 'day' && h.date !== hd) || Date.now() - h.at > 10 * 60000))) { loadHero(kind); return; }
   if (!h || h.loading) return;
+  if (h.loading) return;
   if (kind === 'day' && h.samples?.length) {
     const tt = h.samples.map((x) => x.ts);
     lineChart('cHero', tt, [
@@ -1482,7 +1501,7 @@ AFTER.reports = () => {
   $('#heroCsv').onclick = () => exportSummaries(name, h.cur);
   const title = { day: 'تقرير اليوم', week: 'تقرير آخر 7 أيام', month: 'تقرير آخر 30 يوماً' }[kind];
   $('#heroPdf').onclick = () => sharePdf(name, kind === 'day' && h.samples?.length
-    ? dayPdfSpec(today(), { sum: h.cur[0], samples: h.samples, source: h.cur[0].source })
+    ? dayPdfSpec(h.date, { sum: h.cur[0], samples: h.samples, source: h.cur[0].source })
     : sumsPdfSpec(title, `${fmt.day(h.cur[0].date, { day: 'numeric', month: 'long' })} — ${fmt.day(h.cur[h.cur.length - 1].date, { day: 'numeric', month: 'long', year: 'numeric' })}`, h.cur));
 };
 
@@ -1513,7 +1532,7 @@ async function loadYear() {
     if (device() !== d) return;
     state.rep.year = { y, error: cap('year') === false ? 'خادم WatchPower لا يتيح التقرير السنوي لحسابك.' : e.message };
   }
-  if (leaf() === 'year') render();
+  if (repShowing('year')) render();
 }
 
 function pageYear() {
@@ -1913,7 +1932,7 @@ async function loadPeriod() {
   });
   if (state.rep.per?.token !== token) return;
   state.rep.per = { from, to, dates, sums, at: Date.now() };
-  if (state.page === 'period') render();
+  if (repShowing('period')) render();
 }
 
 function pagePeriod() {
