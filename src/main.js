@@ -47,7 +47,7 @@ Chart.register({ id: 'replayCursor', afterDraw(chart) {
 } });
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '4.0.1';
+const VERSION = '4.0.2';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
