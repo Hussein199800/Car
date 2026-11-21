@@ -178,9 +178,14 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       const hr = new Date().getHours();
       const tipB = await page.$('.tip-banner');
       check('ملاحظة عاجلة من النصائح لا تظهر بلا داعٍ', !tipB || (hr >= 10 && hr <= 14 && (await text(page, '.tip-banner')).includes('وقت الظهر')), tipB ? await text(page, '.tip-banner') : '');
-      check('أربعة تبويبات فقط', (await page.$$('.tabbar button')).length === 4);
+      check('خمسة تبويبات بالترتيب: الرئيسية، التقارير، الحاسبة، التنبيهات، المزيد', (await page.$$eval('.tabbar button', (b) => b.map((x) => x.dataset.tab).join())) === 'home,reports,calc,alerts,more');
+      const kp = await page.$$eval('.kpi', (e) => e.map((x) => x.dataset.page));
+      check('بنظرة واحدة: الألواح والاستهلاك والبطارية', kp.join() === 'solar,load,battery', kp.join());
       const cards = await page.$$eval('.gcard', (e) => e.map((x) => x.dataset.page));
-      check('بطاقات الرئيسية: الحمل والألواح والكهرباء والإنفرتر (البطارية في المخطط والحلقة)', cards.join() === 'load,solar,grid,device', cards.join());
+      check('بطاقات التفاصيل: الشبكة والإنفرتر', cards.join() === 'grid,device', cards.join());
+      await page.click('.kpi[data-page=load]'); await page.waitForTimeout(250);
+      check('الضغط على قراءة يفتح تفاصيلها', (await text(page, '.page-title')) === 'الحمل');
+      await page.click('#backBtn'); await page.waitForTimeout(150);
       check('لا يوجد اختيار جهاز لحساب بجهاز واحد', !(await page.$('#devPick')));
       await page.click('.battery-card .ring'); await page.waitForTimeout(250);
       check('الضغط على حلقة البطارية يفتح صفحتها', (await text(page, '.page-title')) === 'البطارية');
@@ -327,7 +332,7 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       const about = await text(page, '#view');
       check('حول التطبيق: الإصدار والخصوصية', about.includes(VER) && about.includes('الخصوصية'));
       await page.evaluate(() => window.__nav('more', null));
-      check('اسم المطوّر ظاهر أعلى المزيد', (await text(page, '.dev-top')).includes('حسين محمد علي الطويل'));
+      check('المزيد: صورة الإنفرتر وحالته ثم الاختصارات، والمطوّر في الدعم', !!(await page.$('.inv-hero .inv-img')) && (await page.$$('.shortcuts .sc')).length === 4 && (await text(page, '#view')).includes('حسين محمد علي الطويل'));
       check('زر تسجيل الخروج أحمر ومنفصل في آخر المزيد', await page.$eval('#logoutBtn', (b) => getComputedStyle(b).backgroundColor === 'rgb(239, 68, 68)' && b.previousElementSibling?.classList.contains('lcards')));
       // نسبة التغيّر داخل التقرير الأسبوعي بدل صفحة المقارنة
       await page.evaluate(() => window.__nav('reports', 'week'));
@@ -358,16 +363,17 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       await page.click('#demoBtn'); await page.waitForSelector('.flow-card');
       // مؤشر الاستقلالية في رأس تبويب التقارير، والضغط عليه يفتح الملاحظات
       await page.click('[data-tab=reports]');
-      await page.waitForSelector('#view .adv-big', { timeout: 15000 }).catch(() => null);
-      const first = await page.$eval('#view > div > :first-child', (e) => e.className).catch(() => '');
-      check('مؤشر الاستقلالية أول ما في تبويب التقارير', first.includes('adv-ind') && /\d+%/.test(await text(page, '.adv-big b')), first);
-      await page.click('#view button.adv-ind');
+      await page.waitForSelector('#view .rep-hero .rh-big', { timeout: 30000 }).catch(() => null);
+      const order = await page.$$eval('#view > div > *', (a) => a.slice(0, 3).map((e) => e.className));
+      check('التقارير: العنوان ثم يوم/أسبوع/شهر ثم الرقم الرئيسي والرسم', order[0].includes('big-title') && order[1].includes('hero-seg') && order[2].includes('rep-hero') && !!(await page.$('#cHero')), order.join('|'));
+      check('حلقة الاستقلالية بنسبة', /\d+%/.test(await text(page, '.ring-card.r-green .rc span')), await text(page, '.ring-card.r-green'));
+      await page.click('.ring-card[data-page=advisor]');
       await page.waitForSelector('.adv-tip', { timeout: 15000 }).catch(() => null);
       const adv = await text(page, '#view');
       check('مستشار الطاقة: الضغط على المؤشر يفتح استخدام البطارية والتوصيات', (await text(page, '.page-title')) === 'ملاحظات على منظومتك' && adv.includes('استخدام البطارية') && (await page.$$('.adv-tip')).length > 0, adv.slice(0, 200));
       // شريط التبويبات بلا خانة فارغة: الهامشان على الطرفين متساويان
       const gaps = await page.evaluate(() => { const bar = document.querySelector('.tabbar').getBoundingClientRect(); const bs = [...document.querySelectorAll('.tabbar button')].map((b) => b.getBoundingClientRect()); return [Math.min(...bs.map((r) => r.left)) - bar.left, bar.right - Math.max(...bs.map((r) => r.right)), bs.length]; });
-      check('شريط التبويبات متوازن بلا مكان فارغ', Math.abs(gaps[0] - gaps[1]) < 2 && gaps[2] === 4, gaps.join(','));
+      check('شريط التبويبات متوازن بلا مكان فارغ', Math.abs(gaps[0] - gaps[1]) < 2 && gaps[2] === 5, gaps.join(','));
       check('المستشار لا يخترع حالة صحة البطارية', adv.includes('لا يرسل حالة صحة البطارية'));
       check('ملاحظات الآن وآخر 7 أيام في صفحة واحدة', adv.includes('الآن') && adv.includes('آخر 7 أيام') && (await page.$$('#view .alerts .alert')).length > 0);
       check('المؤشر لم يعد مكرراً داخل صفحة الملاحظات', !(await page.$('#view .adv-ind')));
@@ -495,9 +501,9 @@ const noHScroll = (page) => page.evaluate(() => document.documentElement.scrollW
       check('خطوط الطاقة متحركة في المشهد', arrows >= 6);
       // ⓘ داخل بطاقة: يفتح الشرح ولا يفتح البطاقة
       await page.click('[data-demo-sky=""]'); await page.waitForTimeout(500);
-      await page.click('.gcard [data-info="loadNow"]');
+      await page.click('.gcard [data-info="gridHours"]');
       await page.waitForSelector('.isheet.show', { timeout: 3000 }).catch(() => null);
-      check('زر ⓘ يفتح الشرح دون فتح البطاقة', (await text(page, '.isheet h3')) === 'الحمل' && !(await page.$('.page-title')));
+      check('زر ⓘ يفتح الشرح دون فتح البطاقة', (await text(page, '.isheet h3')).length > 0 && !(await page.$('.page-title')), await text(page, '.isheet h3'));
       await page.click('.isheet [data-close]'); await page.waitForTimeout(400);
       check('الشرح يُغلق بزر «تم»', !(await page.$('.isheet')));
       // الألواح: الإنتاج الكلي مع ⓘ وتاريخ التسجيل، وإنتاج كل كيلوواط

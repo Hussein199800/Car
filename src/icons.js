@@ -47,4 +47,7 @@ export const icons = {
   eye: s('<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
   calc: s('<rect x="5" y="2.5" width="14" height="19" rx="2.5"/><path d="M8.5 6.5h7v3h-7z"/><path d="M8.5 13h.01M12 13h.01M15.5 13h.01M8.5 16.5h.01M12 16.5h.01M15.5 16.5h.01"/>'),
   flash: s('<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>'),
+  dots: s('<circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="19" cy="12" r="1.6" fill="currentColor"/>'),
+  // شعار طاقتي: شمس تشرق فوق تلّة خضراء
+  logo: '<svg viewBox="0 0 48 32" class="brand-logo" aria-hidden="true"><g stroke="#e0a526" stroke-width="2.6" stroke-linecap="round"><path d="M24 3v4M12.5 7.5l2.8 2.8M35.5 7.5l-2.8 2.8M6 17h4M38 17h4"/></g><path d="M14 21a10 10 0 0 1 20 0z" fill="#f2b632"/><path d="M4 26c8-6 30-8 40-2" stroke="var(--pri)" stroke-width="3.2" fill="none" stroke-linecap="round"/></svg>',
 };

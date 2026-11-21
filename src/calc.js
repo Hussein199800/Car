@@ -87,10 +87,9 @@ export function viewCalc(h) {
   const c = state.calc;
   const sysV = h.sysV();
   const tab = (k, label) => `<button data-ctab="${k}" class="${c.tab === k ? 'on' : ''}">${label}</button>`;
-  const seg = `<div class="seg">${tab('conv', 'محوّل الأمبير')}${tab('list', 'أجهزة بيتي')}${tab('save', 'التوفير')}</div>`;
-  const intro = `<section class="hero c-amber calc-hero"><span class="g-deco">${icons.calc}</span><div class="h-ic">${icons.calc}</div>
-    <b class="hero-t">حاسبة الأحمال</b><span>اعرف كم واط يسحب جهازك، وكم أمبير يأخذ من بطاريتك، وهل يتحمّله الإنفرتر</span></section>`;
-  return intro + viewSimulation(h) + seg + (c.tab === 'save' ? viewSavings(h) : c.tab === 'list' ? viewList(h, c, sysV) : viewConverter(h, c, sysV));
+  const seg = `<div class="seg calc-seg">${tab('conv', 'محوّل الأمبير')}${tab('list', 'أجهزة بيتي')}${tab('save', 'التوفير')}</div>`;
+  // ترتيب الاستخدام الفعلي: اختيار القسم، ثم الجهد والحمل والنتيجة مباشرة، ثم الإضافة لقائمة البيت؛ المحاكاة بعدها
+  return seg + (c.tab === 'save' ? viewSavings(h) : c.tab === 'list' ? viewList(h, c, sysV) : viewConverter(h, c, sysV)) + (c.tab === 'save' ? '' : viewSimulation(h));
 }
 
 const chips = (name, opts, cur) => `<div class="chips-sel">${opts.map(([v, label]) => `<button data-set="${name}" data-v="${v}" class="${String(cur) === String(v) ? 'on' : ''}">${label}</button>`).join('')}</div>`;
@@ -108,7 +107,12 @@ function viewConverter(h, c, sysV) {
     const e = c.eff / 100;
     return `<div class="tr"><span>${a} أمبير</span><span>${num(w)} واط</span><span>${num(w / (48 * e), 1)}</span><span>${num(w / (24 * e), 1)}</span><span>${num(w / (12 * e), 1)}</span></div>`;
   }).join('');
+  const devV = h.state.model?.ratedV;
   return `
+  <section class="card calc-v">
+    <div class="card-h"><h2>جهد المنظومة</h2></div>
+    <div class="seg sysv">${[12, 24, 48].map((v) => `<button data-sysv="${v}" class="${v === sysV ? 'on' : ''}">${v} فولت${v === devV ? ' <small>جهازك</small>' : ''}</button>`).join('')}</div>
+  </section>
   <section class="card calc-in">
     <div class="card-h"><h2>ماذا تعرف؟</h2></div>
     ${chips('mode', [['ac', 'أمبير الكهرباء'], ['w', 'الواط'], ['dc', 'أمبير البطارية']], c.mode)}
@@ -119,7 +123,9 @@ function viewConverter(h, c, sysV) {
   <section class="calc-res">
     <div class="res-main"><small>القدرة</small><b>${num(r.watts)}</b><span>واط</span></div>
     <div class="res-main"><small>تيار الكهرباء</small><b>${num(r.acA, 2)}</b><span>أمبير على ${c.acV} فولت</span></div>
+    <div class="res-main"><small>من بطارية ${sysV} فولت</small><b>${num(r.dcSys, 1)}</b><span>أمبير</span></div>
   </section>
+  ${r.watts > 0 ? `<button class="btn soft wide" id="addToList">＋ أضف هذا الجهاز (${num(r.watts)} واط) إلى أجهزة بيتي</button>` : ''}
   <section class="card"><div class="card-h"><h2>كم يسحب من البطارية؟</h2></div><div class="bat-vs">${bats}</div>
     ${h.state.prefs.batteryAh && r.dcSys > 0 ? `<p class="hint">بطاريتك ${h.state.prefs.batteryAh} أمبير ساعة تكفي هذا الحمل نحو <b>${h.fmt.hours((h.state.prefs.batteryAh * 0.8) / r.dcSys)}</b> (بتفريغ 80%).</p>` : ''}
   </section>
@@ -300,6 +306,15 @@ export function bindCalc(h) {
   const rate = $('#svRate');
   if (rate) rate.onchange = () => { const v = numOf(rate.value); state.prefs.exRate = Number.isFinite(v) && v > 0 ? v : null; h.savePrefs(); h.render(); };
 
+  document.querySelectorAll('[data-sysv]').forEach((b) => { b.onclick = () => { c.sysVPick = Number(b.dataset.sysv); save(); }; });
+  const addL = $('#addToList');
+  if (addL) addL.onclick = () => {
+    const w = Math.round(convert(c, h.sysV()).watts);
+    c.list.push({ id: 'custom', e: '🔌', name: `جهاز ${w} واط`, w, qty: 1, hours: 4 });
+    c.tab = 'list';
+    h.toast('أُضيف إلى أجهزة بيتي، ويمكنك تعديل اسمه وساعاته', 'ok');
+    save();
+  };
   document.querySelectorAll('[data-add]').forEach((b) => {
     b.onclick = () => {
       const a = APPLIANCES.find((x) => x.id === b.dataset.add);
