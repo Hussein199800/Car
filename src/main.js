@@ -1,4 +1,5 @@
 import './styles.css';
+import './theme.css';
 import { timePoints, replayAt } from './timeline.js';
 import { viewSimulation, bindSimulation } from './simulate.js';
 import { Capacitor } from '@capacitor/core';
@@ -46,7 +47,7 @@ Chart.register({ id: 'replayCursor', afterDraw(chart) {
 } });
 Chart.defaults.font.family = 'Cairo, system-ui, sans-serif';
 
-const VERSION = '3.14.0';
+const VERSION = '4.0.0';
 
 // ================= الحالة =================
 const DEFAULT_PREFS = {
@@ -290,7 +291,7 @@ function renderLogin(msg = '') {
   $('#demoBtn').onclick = () => {
     state.demo = true;
     store.set('demo', true);
-    state.devices = [{ sn: 'DEMO', pn: 'W0000000000000', alias: 'جهاز تجريبي', devcode: 0, devaddr: 1 }];
+    state.devices = [DEMO_DEVICE];
     state.devSn = 'DEMO';
     startApp();
   };
@@ -354,12 +355,15 @@ function logout() {
 
 // ================= الهيكل والتنقل =================
 // أربعة تبويبات للاستخدام اليومي، والأدوات الأخرى داخل «المزيد»
+// خمسة تبويبات ثابتة بترتيب عربي (من اليمين): الرئيسية، التقارير، الحاسبة، التنبيهات، المزيد
 const TABS = [
-  ['home', 'الرئيسية', icons.flash],
+  ['home', 'الرئيسية', icons.home],
   ['reports', 'التقارير', icons.chart],
+  ['calc', 'الحاسبة', icons.calc],
   ['alerts', 'التنبيهات', icons.bell],
-  ['more', 'المزيد', icons.gear],
+  ['more', 'المزيد', icons.dots],
 ];
+const TAB_TITLES = { home: 'الرئيسية', reports: 'التقارير', calc: 'الحاسبة', alerts: 'التنبيهات', more: 'المزيد' };
 // الصفحة الحالية مسار مثل «tips/lithium»، والرجوع يحذف آخر جزء منه
 const leaf = () => (state.page ? state.page.split('/').pop() : null);
 
@@ -474,6 +478,9 @@ function openWhatsNew() {
 }
 
 function navigate(tab, page) {
+  // الحاسبة صارت تبويباً: الروابط القديمة «more:calc» تفتحه
+  if (tab === 'more' && page === 'calc') { tab = 'calc'; page = null; }
+  if (!TAB_TITLES[tab]) tab = 'home';
   state.tab = tab;
   state.page = page;
   state.animate = true;
@@ -513,7 +520,8 @@ function renderHeader() {
     ? `<button class="icon-btn" id="backBtn" aria-label="رجوع">${icons.arrowBack}</button>
        <div class="page-title">${esc(title)}</div>
        <span class="dot ${c.cls}" title="${esc(c.text)}"></span>`
-    : `<${multi ? 'button class="dev dev-pick" id="devPick" aria-label="اختيار الجهاز"' : 'div class="dev"'}><span class="dot ${c.cls}"></span><div>
+    : `<div class="brand">${icons.logo}<span>طاقتي</span></div>
+       <${multi ? 'button class="dev dev-pick" id="devPick" aria-label="اختيار الجهاز"' : 'div class="dev"'}><span class="dot ${c.cls}"></span><div>
          <div class="dev-name">${esc(device()?.alias || 'جهازي')}${multi ? ' <span class="dev-caret">▾</span>' : ''}</div>
          <div class="dev-sub">${esc(c.text)}</div></div></${multi ? 'button' : 'div'}>
        <button class="icon-btn ${state.loading ? 'spin' : ''}" id="refreshBtn" aria-label="تحديث">${icons.refresh}</button>`);
@@ -590,11 +598,13 @@ function render() {
   renderHeader();
   const v = $('#view');
   if (!v) return;
-  const views = { home: viewHome, reports: viewReports, alerts: viewAlerts, more: viewMore };
+  const views = { home: viewHome, reports: viewReports, calc: () => viewCalc(calcHelpers()), alerts: viewAlerts, more: viewMore };
   // التحديث الدوري يعيد رسم الصفحة نفسها: نحافظ على الأقسام التي فتحها المستخدم بدل طيّها كل 30 ثانية
   const key = state.tab + '/' + (state.page || '');
   const opened = v.dataset.key === key ? [...v.querySelectorAll('details')].map((d) => d.open) : null;
-  v.innerHTML = `<div class="${state.animate ? 'page-anim' : ''}">${views[state.tab]()}</div>`;
+  // عنوان كبير لكل تبويب (بأسلوب العناوين العريضة)، والصفحات الفرعية تكتفي بعنوان الشريط العلوي
+  const big = state.page ? '' : `<h1 class="big-title">${TAB_TITLES[state.tab]}</h1>`;
+  v.innerHTML = `<div class="${state.animate ? 'page-anim' : ''}">${big}${views[state.tab]()}</div>`;
   v.dataset.key = key;
   if (opened) v.querySelectorAll('details').forEach((d, i) => { if (i < opened.length) d.open = opened[i]; });
   state.animate = false;
@@ -607,7 +617,8 @@ const calcHelpers = () => ({
   state, esc, icons, fmt, $, toast, render, confirm: confirmDialog, infoBtn, savePrefs,
   // متوسط إنتاج الألواح اليومي من آخر 7 أيام مكتملة (إن كانت قد حُمّلت)
   avgPv: () => (state.rep.adv?.sums ? analyze(state.rep.adv.sums, { todayKey: today(), prefs: state.prefs }).avgPv : null),
-  sysV: () => state.model?.ratedV || state.calc.sysV || nominalV(state.model),
+  // اختيار المستخدم في الحاسبة أولاً، ثم جهد الجهاز المقنّن
+  sysV: () => state.calc.sysVPick || state.model?.ratedV || state.calc.sysV || nominalV(state.model),
 });
 AFTER.calc = () => {
   bindCalc(calcHelpers());
@@ -716,7 +727,7 @@ async function refresh(manual = false) {
     // نعيد الرسم فقط للصفحات التي تعرض القراءة الحية حتى لا تُفقد حالة الصفحات الأخرى
     if (state.tab === 'home' || (state.tab === 'reports' && state.page === 'advisor')) render();
     else renderHeader();
-    if (state.tab === 'more' && leaf() === 'calc') bindSimulation(calcHelpers());
+    if (state.tab === 'calc' && !state.page) bindSimulation(calcHelpers());
   }
 }
 
@@ -735,7 +746,7 @@ function startPolling() {
     if (state.tab === 'home' || (state.tab === 'reports' && state.page === 'advisor')) render();
     else {
       renderHeader();
-      if (state.tab === 'more' && leaf() === 'calc') bindSimulation(calcHelpers());
+      if (state.tab === 'calc' && !state.page) bindSimulation(calcHelpers());
     }
   }, 1000);
 }
@@ -1012,11 +1023,23 @@ function viewHome() {
 
 
   </div>
+  ${(() => {
+    // بنظرة واحدة: من أين تأتي الكهرباء، وكم يسحب البيت، وهل البطارية تشحن أم تُفرّغ
+    const bw = live ? m.batW : null;
+    const tile = (page, cls, ic, label, v, unit) => `<button class="kpi ${cls} ${live ? '' : 'stale'}" data-page="${page}"><span class="k-ic">${ic}</span><small>${label}</small><b><bdi>${v}</bdi></b><span class="k-u">${unit}</span></button>`;
+    const kw = (w) => (w == null ? '—' : Math.abs(w) >= 1000 ? numAr(Math.abs(w) / 1000, 1) : String(Math.round(Math.abs(w))));
+    const ku = (w) => (w != null && Math.abs(w) >= 1000 ? 'كيلوواط' : 'واط');
+    return `<div class="kpis">
+      ${tile('solar', 'k-solar', icons.sun, 'الألواح', kw(m.pvW), ku(m.pvW))}
+      ${tile('load', 'k-load', icons.home, 'الاستهلاك', kw(m.outW), ku(m.outW))}
+      ${tile('battery', bw > 10 ? 'k-chg' : bw < -10 ? 'k-dis' : 'k-bat', icons.battery, bw > 10 ? 'شحن البطارية' : bw < -10 ? 'تفريغ البطارية' : 'البطارية', bw == null || Math.abs(bw) <= 10 ? (live ? 'مستقرة' : '—') : kw(bw), bw == null || Math.abs(bw) <= 10 ? '' : ku(bw))}
+    </div>`;
+  })()}
   <section class="card battery-card hg-bat ${live ? '' : 'stale'}" data-page="battery">
-    <div class="ring">
+    <div class="ring gauge">
       <svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="52" class="ring-bg"/>
         <circle cx="60" cy="60" r="52" class="ring-fg" style="stroke-dasharray:${(soc / 100) * C} ${C};stroke:${soc < 25 ? 'var(--bad)' : soc < 50 ? 'var(--warn)' : 'var(--bat)'}"/></svg>
-      <div class="ring-txt"><b>${m.soc ?? '—'}%</b><small>الشحن</small></div>
+      <div class="ring-txt">${icons.battery}<b>${m.soc ?? '—'}%</b><small>الشحن</small></div>
     </div>
     <div class="bat-info">
       <div class="bat-state ${live && m.batW > 10 ? 'chg' : live && m.batW < -10 ? 'dis' : ''}">${esc(batState(m))}</div>
@@ -1028,9 +1051,7 @@ function viewHome() {
   <h3 class="sec-h">التفاصيل</h3>
   ${gridCards([
     ...[
-      { page: 'load', title: 'الحمل', info: 'loadNow', icon: icons.home, color: 'c-sky', value: fmt.w(m.outW), sub: m.loadPct !== null ? `${m.loadPct}% من قدرة الإنفرتر` : 'استهلاك المنزل' },
-      { page: 'solar', title: 'الألواح الشمسية', info: 'solarNow', icon: icons.panel, color: 'c-amber', value: fmt.w(m.pvW), sub: m.todayWh !== null ? `إنتاج اليوم ${fmt.kwh(m.todayWh / 1000)} ك.و.س` : 'الإنتاج الحالي' },
-      { page: 'grid', title: 'كهرباء الشبكة', icon: icons.grid, color: 'c-violet', value: m.gridV === null ? '—' : m.gridOn ? `${numAr(m.gridV, 1)} فولت` : 'مقطوعة', sub: m.gridOn ? (isLine ? 'تغذّي الحمل الآن' : 'متوفرة كاحتياط') : 'لا يوجد تيار' },
+      { page: 'grid', title: 'كهرباء الشبكة', info: 'gridHours', icon: icons.grid, color: 'c-violet', value: m.gridV === null ? '—' : m.gridOn ? `${numAr(m.gridV, 1)} فولت` : 'مقطوعة', sub: m.gridOn ? (isLine ? 'تغذّي الحمل الآن' : 'متوفرة كاحتياط') : 'لا يوجد تيار' },
     ].map((c) => (live ? c : { ...c, sub: 'آخر قيمة مسجّلة' })),
     // البطارية ظاهرة في المخطط والحلقة، فمكانها هنا للإنفرتر نفسه
     { page: 'device', title: 'الإنفرتر', icon: icons.inverter, color: m.stale ? 'c-slate' : m.fault ? 'c-pink' : 'c-green',
@@ -1292,7 +1313,7 @@ function lineChart(id, labels, series, opts = {}) {
     data: {
       labels,
       datasets: series.map((d) => ({
-        label: d.label, data: timePoints(labels, d.data), borderColor: d.color, borderWidth: 2, pointRadius: 1.5, tension: 0, fill: true, spanGaps: false,
+        label: d.label, data: timePoints(labels, d.data), borderColor: d.color, borderWidth: opts.smooth ? 2.5 : 2, pointRadius: opts.smooth ? 0 : 1.5, pointHoverRadius: 5, tension: opts.smooth ? 0.35 : 0, fill: true, spanGaps: false,
         backgroundColor: (ctx) => {
           const { chartArea, ctx: c } = ctx.chart;
           if (!chartArea) return 'transparent';
@@ -1323,7 +1344,8 @@ function chartOpts(legend, opts) {
     interaction: { mode: 'index', intersect: false },
     plugins: {
       legend: { display: legend, labels: { boxWidth: 10, usePointStyle: true } },
-      tooltip: { callbacks: opts.time ? { title: items => fmt.time(items[0]?.parsed.x) } : {}, rtl: true, backgroundColor: '#0f1a33ee', titleColor: '#fff', bodyColor: '#e2e8f0', padding: 10 },
+      // عند اللمس: الوقت (أو اليوم) والقيمة والوحدة
+      tooltip: { callbacks: { ...(opts.time ? { title: items => fmt.time(items[0]?.parsed.x) } : {}), ...(opts.unit ? { label: (it) => ` ${it.dataset.label}: ${it.parsed.y == null ? '—' : it.parsed.y.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${opts.unit}` } : {}) }, rtl: true, backgroundColor: '#0f1a33ee', titleColor: '#fff', bodyColor: '#e2e8f0', padding: 10 },
     },
     scales: {
       x: { ...(opts.time ? { type: 'linear' } : {}), ticks: { ...(opts.time ? { callback: v => fmt.time(v) } : {}), maxTicksLimit: 7, maxRotation: 0 }, grid: { display: false } },
@@ -1358,8 +1380,8 @@ function viewReports() {
   if (state.page && pages[state.page]) return pages[state.page]();
   const urgent = urgentCount();
   return `
-  ${independenceCard()}
-  <section class="intro"><h2>التقارير${infoBtn('report')}</h2></section>
+  ${reportsHero()}
+  <h3 class="sec-h">تقارير مفصّلة${infoBtn('report')}</h3>
   ${listCards([
     { page: 'period', title: 'تقرير لفترة تختارها', sub: 'من تاريخ إلى تاريخ: الإنتاج والاستهلاك وسحب الشبكة وكلفتها في صفحة واحدة', icon: icons.calendar, color: 'c-green' },
     { page: 'advisor', title: 'ملاحظات على منظومتك', sub: 'ما يحتاج انتباهك الآن، واستخدام البطارية وتوصيات آخر 7 أيام', icon: icons.bulb, color: urgent ? 'c-pink' : 'c-green', badge: urgent ? `${urgent} مهم` : '' },
@@ -1371,6 +1393,98 @@ function viewReports() {
     cap('year') === false ? null : { page: 'year', title: 'التقرير السنوي', sub: 'إنتاج كل شهر، ومجموع ما أنتجته الألواح', icon: icons.chart, color: 'c-violet' },
   ].filter(Boolean))}`;
 }
+
+// ================= واجهة التقارير: يوم / أسبوع / شهر برقم رئيسي ورسم تفاعلي ومقارنة =================
+const HERO_KINDS = [['day', 'اليوم'], ['week', 'الأسبوع'], ['month', 'الشهر']];
+function heroDates(kind) {
+  const n = kind === 'day' ? 1 : kind === 'week' ? 7 : 30;
+  const cur = Array.from({ length: n }, (_, i) => today(i - n + 1));
+  const prev = Array.from({ length: n }, (_, i) => today(i - 2 * n + 1));
+  return { cur, prev };
+}
+async function loadHero(kind) {
+  const token = Symbol('hero');
+  const { cur, prev } = heroDates(kind);
+  serverHistFails = 0;
+  state.rep.hero = { kind, loading: true, token, pct: 0 };
+  render();
+  const all = await loadSummaries([...cur, ...prev], (done, total) => {
+    if (state.rep.hero?.token !== token) return;
+    state.rep.hero.pct = (done / total) * 100;
+    const p = $('#heroProg');
+    if (p) p.style.width = state.rep.hero.pct + '%';
+  });
+  let samples = null;
+  if (kind === 'day') { try { samples = (await daySamples(today())).samples; } catch { samples = []; } }
+  if (state.rep.hero?.token !== token) return;
+  state.rep.hero = { kind, cur: all.slice(0, cur.length), prev: all.slice(cur.length), samples, at: Date.now() };
+  if (state.tab === 'reports' && !state.page) render();
+}
+
+function reportsHero() {
+  const kind = state.rep.heroKind || 'day';
+  const h = state.rep.hero;
+  const seg = `<div class="seg hero-seg">${HERO_KINDS.map(([k, l]) => `<button data-hk="${k}" class="${kind === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  if (!h || h.kind !== kind || h.loading) {
+    return seg + `<section class="card rep-hero"><p class="hint center">جارٍ تجميع القراءات…</p><div class="bar"><i id="heroProg" style="width:${h?.pct || 0}%"></i></div></section>`;
+  }
+  const t = totals(h.cur), p = totals(h.prev);
+  const prevName = { day: 'أمس', week: 'الأسبوع السابق', month: 'الـ30 يوماً السابقة' }[kind];
+  // اليوم لم يكتمل: لا نسبة تغيّر مضللة مقابل يوم كامل
+  const chg = (k, better) => { const c = p.days && kind !== 'day' ? change(t[k], p[k], better) : null; return c ? `<em class="trend ${c.cls}">${c.text}</em>` : ''; };
+  const cover = t.load > 0 ? Math.min(100, (t.pv / t.load) * 100) : null;
+  // الحلقة الأولى تفتح «ملاحظات على منظومتك» (التفاصيل والتوصيات)
+  const ring = (v, cls, label, sub, page = '') => {
+    const C = 2 * Math.PI * 44;
+    const tag = page ? 'button' : 'div';
+    return `<${tag} class="card ring-card ${cls}"${page ? ` data-page="${page}"` : ''}><b class="rc-t">${label}</b><small>${sub}</small><div class="rc">
+      <svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="44" class="ring-bg"/><circle cx="50" cy="50" r="44" class="ring-fg" style="stroke-dasharray:${v == null ? 0 : (v / 100) * C} ${C}"/></svg>
+      <span><bdi>${v == null ? '—' : Math.round(v) + '%'}</bdi></span></div></${tag}>`;
+  };
+  const row = (label, k, better, unit = 'ك.و.س') => `<div class="cmp-r"><span>${label}</span><b><bdi>${t[k] == null ? '—' : fmt.kwh(t[k])}</bdi> <small>${unit}</small></b><small class="muted">${prevName}: <bdi>${p[k] == null || !p.days ? '—' : fmt.kwh(p[k])}</bdi></small>${chg(k, better)}</div>`;
+  const gc = t.grid != null ? costOf(t.grid, state.prefs) : null;
+  return seg + `
+  <section class="card rep-hero">
+    <small class="rh-l">إنتاج الألواح · ${kind === 'day' ? 'حتى الآن' : kind === 'week' ? 'آخر 7 أيام' : 'آخر 30 يوماً'}</small>
+    <div class="rh-big"><b><bdi>${fmt.kwh(t.pv)}</bdi></b><span>كيلوواط ساعة</span>${kind === 'day' ? '' : chg('pv', 'up')}</div>
+    <div class="chart-box hero-chart"><canvas id="cHero"></canvas></div>
+    <small class="hint">المس الرسم لترى ${kind === 'day' ? 'الوقت' : 'اليوم'} والقيمة.</small>
+  </section>
+  <div class="ring-row">${ring(t.independence, 'r-green', 'الاستقلالية', 'من الاستهلاك بعيداً عن الشبكة', 'advisor')}${ring(cover, 'r-amber', 'تغطية الألواح', 'الإنتاج مقابل الاستهلاك')}</div>
+  <section class="card cmp-card"><div class="card-h"><h2>مقارنة بـ${prevName}</h2></div>
+    ${row('الإنتاج', 'pv', 'up')}${row('الاستهلاك', 'load', 'down')}${row('سحب الشبكة (تقدير)', 'grid', 'down')}
+    ${gc ? `<div class="cmp-r"><span>كلفة الشبكة</span><b><bdi>${esc(costText(gc))}</bdi></b></div>` : ''}
+    ${kind === 'day' ? '<p class="hint">اليوم لم ينتهِ بعد، فالمقارنة مع أمس كاملاً للاطلاع فقط.</p>' : ''}
+  </section>
+  <div class="rep-actions"><button class="btn soft" id="heroCsv">${icons.download} تصدير CSV</button><button class="btn primary" id="heroPdf">${icons.download} مشاركة PDF</button></div>`;
+}
+
+AFTER.reports = () => {
+  bindGoto();
+  document.querySelectorAll('[data-hk]').forEach((b) => { b.onclick = () => { state.rep.heroKind = b.dataset.hk; loadHero(b.dataset.hk); }; });
+  const kind = state.rep.heroKind || 'day';
+  const h = state.rep.hero;
+  if (!h || (!h.loading && (h.kind !== kind || Date.now() - h.at > 10 * 60000))) { loadHero(kind); return; }
+  if (!h || h.loading) return;
+  if (kind === 'day' && h.samples?.length) {
+    const tt = h.samples.map((x) => x.ts);
+    lineChart('cHero', tt, [
+      { label: 'الألواح', data: h.samples.map((x) => x.pvW), color: '#f5a524' },
+      { label: 'الحمل', data: h.samples.map((x) => x.outW), color: '#4aa8ff' },
+    ], { y: { beginAtZero: true }, unit: 'واط', smooth: true });
+  } else if (kind !== 'day') {
+    barChart('cHero', h.cur.map((x) => dayName(x.date)), [
+      { label: 'الإنتاج', data: h.cur.map((x) => (x.count > 1 ? +(x.pvKwh ?? 0).toFixed(2) : null)), color: '#f5a524' },
+      { label: 'الاستهلاك', data: h.cur.map((x) => (x.count > 1 ? +(x.loadKwh ?? 0).toFixed(2) : null)), color: '#4aa8ff' },
+    ], { y: { beginAtZero: true }, unit: 'ك.و.س' });
+  }
+  const name = `${kind}-${h.cur[0].date}`;
+  $('#heroCsv').onclick = () => exportSummaries(name, h.cur);
+  const title = { day: 'تقرير اليوم', week: 'تقرير آخر 7 أيام', month: 'تقرير آخر 30 يوماً' }[kind];
+  $('#heroPdf').onclick = () => sharePdf(name, kind === 'day' && h.samples?.length
+    ? dayPdfSpec(today(), { sum: h.cur[0], samples: h.samples, source: h.cur[0].source })
+    : sumsPdfSpec(title, `${fmt.day(h.cur[0].date, { day: 'numeric', month: 'long' })} — ${fmt.day(h.cur[h.cur.length - 1].date, { day: 'numeric', month: 'long', year: 'numeric' })}`, h.cur));
+};
 
 // ================= التقرير السنوي (من عدّادات الخادم مباشرة، بلا تحميل قراءات الأيام) =================
 const MONTHS = ['كانون الثاني', 'شباط', 'آذار', 'نيسان', 'أيار', 'حزيران', 'تموز', 'آب', 'أيلول', 'تشرين الأول', 'تشرين الثاني', 'كانون الأول'];
@@ -1901,11 +2015,8 @@ async function loadAdvisor() {
   });
   if (state.rep.adv?.token !== token) return;
   state.rep.adv = { sums, at: Date.now() };
-  if ((state.tab === 'reports' && (!state.page || leaf() === 'advisor')) || (leaf() === 'calc' && state.calc.tab === 'save')) render();
+  if ((state.tab === 'reports' && (!state.page || leaf() === 'advisor')) || (state.tab === 'calc' && !state.page && state.calc.tab === 'save')) render();
 }
-AFTER.reports = () => {
-  if (!state.rep.adv || (!state.rep.adv.loading && Date.now() - state.rep.adv.at > 30 * 60000)) loadAdvisor();
-};
 
 // «ملاحظات على منظومتك»: ما يحتاج انتباهك الآن من القراءة الحيّة، ثم تحليل آخر 7 أيام من السجل
 function pageAdvisor() {
@@ -2130,15 +2241,28 @@ const CAT_IC = { grid: icons.grid, conn: icons.offline, bat: icons.battery, faul
 
 function eventList(list, empty) {
   if (!list.length) return `<div class="empty">${esc(empty)}</div>`;
-  return `<ul class="alerts">${list.map((e) => {
-    const level = levelOf(e);
-    const ic = level === 'ok' && catOf(e) !== 'grid' ? icons.check : CAT_IC[catOf(e)] || icons.info;
-    return `
-    <li class="alert ${level} ${e.read === false ? 'new' : ''}">
-      <div class="a-ic">${ic}</div>
-      <div><b>${esc(e.title)}</b><p>${esc(e.body)}</p><time>${esc(fmt.dateTime(e.at))}</time></div>
-    </li>`;
-  }).join('')}</ul>`;
+  // مجمّعة حسب اليوم على خط زمني: الأيقونة واللون والنص تميّز الانقطاع والعودة والتحذير
+  const groups = [];
+  for (const e of list) {
+    const k = dayKey(e.at);
+    if (groups[groups.length - 1]?.k !== k) groups.push({ k, items: [] });
+    groups[groups.length - 1].items.push(e);
+  }
+  const label = (k) => (k === today() ? 'اليوم' : k === today(-1) ? 'أمس' : fmt.day(k, { weekday: 'long', day: 'numeric', month: 'long' }));
+  return `<div class="timeline">${groups.map((g) => `
+    <div class="tl-day"><span>${esc(label(g.k))}</span></div>
+    <ul class="alerts">${g.items.map((e) => {
+      const level = levelOf(e);
+      const cat = catOf(e);
+      const ic = level === 'ok' && cat !== 'grid' ? icons.check : CAT_IC[cat] || icons.info;
+      const kind = cat === 'grid' ? (level === 'ok' ? 'back' : 'cut') : level;
+      return `
+      <li class="alert ${level} k-${kind} ${e.read === false ? 'new' : ''}">
+        <div class="a-ic">${ic}</div>
+        <div class="a-txt"><b>${esc(e.title)}</b>${e.body ? `<p>${esc(e.body)}</p>` : ''}</div>
+        <time>${esc(fmt.time(e.at))}</time>
+      </li>`;
+    }).join('')}</ul>`).join('')}</div>`;
 }
 
 function toggle(key, label, sub = '') {
@@ -3080,27 +3204,52 @@ function renderGuideStandalone(which) {
 }
 
 // ================= تبويب المزيد =================
+// صورة الإنفرتر في «المزيد»: رسم أصلي بسيط بلونين يتكيّف مع المظهر
+const INVERTER_SVG = `<svg class="inv-img" viewBox="0 0 160 130" aria-hidden="true">
+  <defs><linearGradient id="invB" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#dfe3e8"/></linearGradient>
+  <linearGradient id="invS" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#c9ced6"/><stop offset="1" stop-color="#9aa1ab"/></linearGradient></defs>
+  <ellipse cx="80" cy="122" rx="56" ry="6" fill="#0003"/>
+  <path d="M30 18 L118 10 L134 22 L134 104 L46 112 L30 100 Z" fill="url(#invS)"/>
+  <path d="M30 18 L118 10 L118 96 L30 104 Z" fill="url(#invB)" stroke="#0000001a"/>
+  <path d="M30 84 L118 78 L118 96 L30 104 Z" fill="#8e96a1" opacity=".55"/>
+  <rect x="58" y="42" width="34" height="16" rx="4" fill="#1d2430" transform="skewY(-4)"/>
+  <circle cx="68" cy="46" r="1.8" fill="#34d399"/><circle cx="75" cy="45.5" r="1.8" fill="#34d399"/><circle cx="82" cy="45" r="1.8" fill="#34d399"/>
+  <path d="M71 30 l-3 6 h4 l-2 5 6-8 h-4 l2-3z" fill="#f2b632"/>
+  <g fill="#2a313c"><rect x="44" y="104" width="7" height="8" rx="1.5"/><rect x="58" y="103" width="7" height="8" rx="1.5"/><rect x="72" y="102" width="7" height="8" rx="1.5"/><rect x="100" y="99" width="7" height="8" rx="1.5"/></g>
+</svg>`;
+
 function viewMore() {
   if (state.page?.startsWith('tips')) return viewTips();
   const pages = { setup: () => setupGuide(true), edit: pageEdit, power: pagePower, calc: () => viewCalc(calcHelpers()), settings: pageSettings, about: pageAbout, update: pageUpdate };
   if (state.page && pages[state.page]) return pages[state.page]();
   const themeName = { auto: 'تلقائي', dark: 'ليلي', light: 'نهاري' }[state.prefs.theme];
+  const m = state.model;
+  const st = !m ? ['', 'جارٍ القراءة'] : state.demo ? ['demo', 'وضع تجريبي'] : m.stale ? ['off', `غير متصل · ${fmt.ago(m.age)}`] : m.fault ? ['bad', 'يوجد عطل'] : ['on', 'متصل'];
+  const temp = m && !m.stale && m.invTemp != null ? ` · <bdi>${Math.round(m.invTemp)}°</bdi>` : '';
+  const group = (title, items) => `<h3 class="sec-h">${title}</h3>${listCards(items.filter(Boolean))}`;
   return `
-  <section class="dev-card dev-top">
-    <div class="dev-av">${icons.user}</div>
-    <div><small>تطبيق طاقتي · من تطوير</small><b>حسين محمد علي الطويل</b></div>
-    <button class="dev-more" data-page="about" aria-label="حول التطبيق">${icons.info}</button>
-  </section>
-  ${listCards([
-    { page: 'power', title: 'أولوية مصدر الطاقة', sub: 'التبديل بين الألواح والبطارية والشبكة، مع التحقق من الجهاز', icon: icons.bolt || icons.grid, color: 'c-green' },
+  <button class="inv-hero" data-page="home:device" aria-label="تفاصيل الإنفرتر">
+    ${INVERTER_SVG}
+    <b>${esc(device()?.alias || 'الإنفرتر')}</b>
+    <span class="inv-st ${st[0]}"><i></i>${st[1]}${temp}${m?.mode && !m.stale ? ` · ${esc(trValue(m.mode))}` : ''}</span>
+  </button>
+  <div class="shortcuts">
+    ${[['power', 'أولوية الطاقة', icons.bolt, 'c-green'], ['edit', 'إعدادات الإنفرتر', icons.wrench, 'c-pink'], ['setup', 'ربط وواي فاي', icons.wifi, 'c-sky'], ['reports:period', 'تقرير ومشاركة', icons.download, 'c-amber']]
+    .map(([pg, l, ic, c]) => `<button class="sc ${c}" data-page="${pg}"><span>${ic}</span><b>${l}</b></button>`).join('')}
+  </div>
+  ${group('الجهاز', [
+    { page: 'power', title: 'أولوية مصدر الطاقة', sub: 'التبديل بين الألواح والبطارية والشبكة، والجدولة والإدارة الذكية', icon: icons.bolt, color: 'c-green' },
     { page: 'edit', title: 'إعدادات الإنفرتر', sub: 'تغيير الأولويات وتيارات الشحن عن بُعد', icon: icons.wrench, color: 'c-pink' },
-    { page: 'calc', title: 'حاسبة الأحمال', sub: 'تحويل الأمبير والواط، وهل يتحمّل الإنفرتر أجهزة بيتك', icon: icons.calc, color: 'c-green' },
-    { page: 'tips', title: 'النصائح', sub: 'استخدام الإنفرتر وبطاريات الليثيوم والتوفير والسلامة', icon: icons.bulb, color: 'c-amber' },
     { page: 'setup', title: 'ربط الجهاز والحساب', sub: 'إنشاء حساب، إعداد الواي فاي (Wi-Fi Config)، البلوتوث', icon: icons.wifi, color: 'c-sky' },
+  ])}
+  ${group('المظهر والإعدادات', [
     { page: 'settings', title: 'الإعدادات', sub: `${themeName} · ${state.prefs.batteryAh ? `البطارية ${state.prefs.batteryAh} أمبير ساعة` : 'أدخل سعة البطارية'}`, icon: icons.gauge, color: 'c-violet' },
-    { page: 'update', title: 'التحقق من التحديثات', sub: updateAvailable() ? `يتوفر الإصدار ${state.update.version}` : 'الإصدار الحالي ' + VERSION, icon: icons.upgrade, color: 'c-amber', badge: updateAvailable() ? 'جديد' : '' },
+    { page: 'tips', title: 'النصائح', sub: 'استخدام الإنفرتر وبطاريات الليثيوم والتوفير والسلامة', icon: icons.bulb, color: 'c-amber' },
     { page: 'tour', title: 'جولة في التطبيق', sub: 'كيف تستخدم طاقتي، مع أمثلة لحالات المنظومة', icon: icons.star, color: 'c-sky' },
-    { page: 'about', title: 'حول التطبيق', sub: 'طاقتي · الإصدار ' + VERSION, icon: icons.info, color: 'c-slate' },
+  ])}
+  ${group('التحديث والدعم', [
+    { page: 'update', title: 'التحقق من التحديثات', sub: updateAvailable() ? `يتوفر الإصدار ${state.update.version}` : 'الإصدار الحالي ' + VERSION, icon: icons.upgrade, color: 'c-amber', badge: updateAvailable() ? 'جديد' : '' },
+    { page: 'about', title: 'تواصل مع المطوّر', sub: 'حسين محمد علي الطويل · حول التطبيق', icon: icons.user, color: 'c-slate' },
   ])}
   <button class="btn danger wide logout-btn" id="logoutBtn">${icons.logout} ${state.demo ? 'الخروج من الوضع التجريبي' : 'تسجيل الخروج'}</button>
   <p class="foot">طاقتي · الإصدار ${VERSION}</p>`;
@@ -3393,7 +3542,10 @@ AFTER.update = () => {
 };
 
 // ================= التشغيل =================
+const DEMO_DEVICE = { sn: 'DEMO', pn: 'W0000000000000', alias: 'جهاز تجريبي', devcode: 0, devaddr: 1 };
 async function boot() {
+  // الوضع التجريبي محفوظ بعد إغلاق التطبيق، لكن جهازه لا يُحفظ: نعيده حتى لا تبقى الرئيسية على «جارٍ الجلب»
+  if (state.demo && !state.devices.length) { state.devices = [DEMO_DEVICE]; state.devSn = 'DEMO'; }
   fitScreen();
   // تدوير الجهاز أو تغيير حجم النافذة: نعيد الحساب ونعيد الرسم إن تغيّر التخطيط
   let rt;
